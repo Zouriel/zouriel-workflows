@@ -309,162 +309,195 @@ public static class Linter
                 case UnknownStep:
                     Error("unknownStepType", s.Id, $"'{s.Type}' is not a step this engine knows.");
                     break;
-                case BranchStep b:
-                    if (b.Paths.Count == 0) Error("emptyBranch", s.Id, $"'{Name(s)}' has no paths.");
-                    foreach (var p in b.Paths)
-                    {
-                        CheckId(p.Id, s.Id);
-                        if (p.When is null) Error("missingCondition", s.Id, $"Path '{p.Label}' of '{Name(s)}' needs a condition.");
-                        else CheckCondition(p.When, s.Id, env);
-                        LintSteps(p.Steps, Inside(env, s), $"{s.Id}/path:{p.Id}");
-                    }
-                    if (b.Otherwise is not null)
-                    {
-                        CheckId(b.Otherwise.Id, s.Id);
-                        LintSteps(b.Otherwise.Steps, Inside(env, s), $"{s.Id}/otherwise");
-                    }
-                    break;
-                case SwitchStep sw:
-                    CheckToken(sw.On, s.Id, env);
-                    if (sw.Cases.Count == 0) Error("emptySwitch", s.Id, $"'{Name(s)}' has no cases.");
-                    foreach (var c in sw.Cases)
-                    {
-                        CheckId(c.Id, s.Id);
-                        if (c.Values.Count == 0) Error("missingValues", s.Id, $"Case '{c.Label}' of '{Name(s)}' needs at least one value.");
-                        LintSteps(c.Steps, Inside(env, s), $"{s.Id}/case:{c.Id}");
-                    }
-                    if (sw.Otherwise is not null)
-                    {
-                        CheckId(sw.Otherwise.Id, s.Id);
-                        LintSteps(sw.Otherwise.Steps, Inside(env, s), $"{s.Id}/otherwise");
-                    }
-                    break;
-                case ParallelStep par:
-                    if (par.Paths.Count < 2) Error("parallelPaths", s.Id, $"'{Name(s)}' needs at least two paths.");
-                    if (par.Join.Type == "count" && (par.Join.Count is null || par.Join.Count < 1 || par.Join.Count > par.Paths.Count))
-                        Error("parallelJoinCount", s.Id, $"'{Name(s)}' waits for {par.Join.Count} paths but has {par.Paths.Count}.");
-                    foreach (var p in par.Paths)
-                    {
-                        CheckId(p.Id, s.Id);
-                        LintSteps(p.Steps, Inside(env, s) with { InParallelOrLoop = true, EnclosingLists = [] }, $"{s.Id}/path:{p.Id}");
-                    }
-                    break;
-                case ForEachStep fe:
-                    var collectionEntity = CollectionEntity(fe.Collection, env, s.Id);
-                    if (fe.Max is < 1 or > 500) Error("badLimit", s.Id, "For each can cover 1 to 500 items.");
-                    var loopEnv = Inside(env, s) with { ItemEntity = collectionEntity, InParallelOrLoop = true, EnclosingLists = [] };
-                    if (fe.When is not null) CheckCondition(fe.When, s.Id, loopEnv);
-                    LintSteps(fe.Steps, loopEnv, $"{s.Id}/each");
-                    break;
-                case ApprovalStep ap:
-                    LintHuman(ap, env);
-                    if (ap.Rule.Type is "count" or "percent" && (ap.Rule.Value is null || ap.Rule.Value < 1))
-                        Error("badRule", s.Id, $"'{Name(s)}' needs a number of approvals.");
-                    if (ap.Rule.Type == "percent" && ap.Rule.Value > 100) Error("badRule", s.Id, "A percentage cannot be over 100.");
-                    if (ap.Outcomes.TimedOut.Count == 0)
-                        Warn("emptyTimeoutPath", s.Id, $"Nothing happens when '{Name(s)}' runs out of time; the workflow just carries on.");
-                    LintSteps(ap.Outcomes.Approved, Inside(env, s), $"{s.Id}/outcome:approved");
-                    LintSteps(ap.Outcomes.Rejected, Inside(env, s), $"{s.Id}/outcome:rejected");
-                    LintSteps(ap.Outcomes.TimedOut, Inside(env, s), $"{s.Id}/outcome:timedOut");
-                    break;
-                case TaskStep tk:
-                    LintHuman(tk, env);
-                    if (tk.Outcomes.Count == 0) Error("noOutcomes", s.Id, $"'{Name(s)}' needs at least one button (outcome).");
-                    foreach (var o in tk.Outcomes)
-                    {
-                        CheckId(o.Id, s.Id);
-                        if (tk.Outcomes.Count(x => x.Key == o.Key) > 1) Error("duplicateKey", s.Id, $"Two outcomes of '{Name(s)}' use the key '{o.Key}'.");
-                        LintSteps(o.Steps, Inside(env, s), $"{s.Id}/outcome:{o.Key}");
-                    }
-                    CheckId(tk.OnTimeout.Id, s.Id);
-                    LintSteps(tk.OnTimeout.Steps, Inside(env, s), $"{s.Id}/onTimeout");
-                    break;
-                case WaitStep w:
-                    LintWait(w, env);
-                    break;
-                case SetFieldsStep sf:
-                    var target = TargetEntity(sf.Target, env, s.Id);
-                    if (sf.Values.Count == 0) Error("noValues", s.Id, $"'{Name(s)}' does not change anything yet.");
-                    foreach (var v in sf.Values)
-                    {
-                        var f = R.Field(target, v.Field);
-                        if (target is not null && f is null) Error("unknownField", s.Id, $"'{v.Field}' is not a field of {R.Entity(target)?.Label}.");
-                        else if (f is not null && !f.IsSettable) Error("fieldNotSettable", s.Id, $"Workflows cannot change {f.Label}; the app has not allowed it.");
-                        else if (f is not null && v.Value.HasConst && f.Options is { } opts && v.Value.Const is not null
-                                 && opts.All(o => Json.Values.Text(o.Value) != Json.Values.Text(v.Value.Const)))
-                            Error("unknownValue", s.Id, $"'{Json.Values.Text(v.Value.Const)}' is not one of {f.Label}'s values.");
-                        if (f is not null && def.IsLifecycle && def.Lifecycle?.Field == f.Key && target == def.Entity)
-                            Error("ownedField", s.Id, $"{f.Label} is controlled by this lifecycle; use 'Move lifecycle' instead.");
-                        var owner = ctx.OtherPublished.FirstOrDefault(d => d.IsLifecycle && d.Entity == target && d.Lifecycle?.Field == v.Field && d.Lifecycle.Enforce);
-                        if (owner is not null) Error("ownedField", s.Id, $"{f?.Label ?? v.Field} is controlled by the lifecycle '{owner.Title}'; use 'Move lifecycle' instead.");
-                        CheckOperand(v.Value, s.Id, env);
-                    }
-                    break;
-                case SetVariablesStep sv:
-                    foreach (var v in sv.Values)
-                    {
-                        if (def.Variables?.Any(x => x.Id == v.Variable) != true) Error("unknownVariable", s.Id, $"'{Name(s)}' sets a variable that does not exist.");
-                        CheckOperand(v.Value, s.Id, env);
-                    }
-                    break;
-                case ApplyTransitionStep at:
-                    var atEntity = TargetEntity(at.Target, env, s.Id);
-                    var lcDef = def.IsLifecycle && def.Key == at.Lifecycle ? def : ctx.OtherPublished.FirstOrDefault(d => d.IsLifecycle && d.Key == at.Lifecycle);
-                    if (lcDef is null) Error("unknownLifecycle", s.Id, $"There is no published lifecycle called '{at.Lifecycle}'.");
-                    else
-                    {
-                        if (lcDef.Entity != atEntity) Error("lifecycleEntity", s.Id, $"The lifecycle '{lcDef.Title}' is for a different record type.");
-                        if (lcDef.Lifecycle!.Transitions.All(t => t.Key != at.Transition)) Error("unknownTransition", s.Id, $"'{at.Transition}' is not a transition of {lcDef.Title}.");
-                    }
-                    foreach (var v in at.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, s.Id, env);
-                    break;
-                case NotifyStep n:
-                    if (R.Channels.All(c => c.Key != n.Channel)) Error("unknownChannel", s.Id, $"'{n.Channel}' is not a notification channel the app offers.");
-                    else if (ctx.Settings.Channels?.GetValueOrDefault(n.Channel)?.Enabled == false) Warn("channelDisabled", s.Id, $"The {n.Channel} channel is switched off in settings.");
-                    if (n.To.Count == 0) Error("noRecipients", s.Id, $"'{Name(s)}' has nobody to send to.");
-                    CheckAssignees(n.To, s.Id, allowEmpty: true, env);
-                    CheckTemplate(n.Subject, s.Id, env);
-                    CheckTemplate(n.Body, s.Id, env);
-                    if (n.Body.Parts.Count == 0) Error("emptyMessage", s.Id, $"'{Name(s)}' has no message.");
-                    break;
-                case WebhookStep wh:
-                    LintWebhook(wh, env);
-                    break;
-                case ActionStep act:
-                    var desc = R.Action(act.Action);
-                    if (desc is null) Error("unknownAction", s.Id, $"'{act.Action}' is not an action the app offers.");
-                    else
-                    {
-                        if (desc.Entity is not null && desc.Entity != env.Entity) Error("actionEntity", s.Id, $"'{desc.Label}' works on a different record type.");
-                        foreach (var i in desc.Inputs.Where(i => i.Required == true))
-                            if (act.Input?.ContainsKey(i.Key) != true) Error("missingInput", s.Id, $"'{Name(s)}' needs a value for {i.Label}.");
-                        foreach (var k in act.Input?.Keys ?? Enumerable.Empty<string>())
-                            if (desc.Inputs.All(i => i.Key != k)) Warn("unknownInput", s.Id, $"'{desc.Label}' has no input called '{k}'.");
-                    }
-                    foreach (var v in act.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, s.Id, env);
-                    break;
-                case SubWorkflowStep sub:
-                    if (sub.Workflow == def.Key) Error("selfSubWorkflow", s.Id, "A workflow cannot run itself.");
-                    else
-                    {
-                        var child = ctx.OtherPublished.FirstOrDefault(d => d.Key == sub.Workflow);
-                        if (child is null) Error("unknownWorkflow", s.Id, $"There is no published workflow called '{sub.Workflow}'.");
-                        else if (child.IsLifecycle) Error("notAutomation", s.Id, $"'{child.Title}' is a lifecycle; only automations can be run as steps.");
-                        else if (child.Entity is not null && child.Entity != TargetEntity(sub.Target, env, s.Id))
-                            Error("workflowEntity", s.Id, $"'{child.Title}' is about a different record type.");
-                    }
-                    foreach (var v in sub.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, s.Id, env);
-                    break;
-                case GoToStep g:
-                    if (g.MaxTimes is < 1 or > 50) Error("badLimit", s.Id, "Go back can repeat 1 to 50 times.");
-                    // Valid targets come before the current position, in this list or an enclosing one.
-                    var reachable = env.EnclosingLists.Any(list => FindIndex(list, g.Target) is { } idx && (list != listId || idx < index));
-                    if (!reachable) Error("goToInvalidTarget", s.Id, $"'{Name(s)}' must go back to an earlier step on the same path.");
-                    break;
-                case EndStep e:
-                    CheckTemplate(e.Reason, s.Id, env);
-                    break;
+                case BranchStep b: LintBranch(b, env); break;
+                case SwitchStep sw: LintSwitch(sw, env); break;
+                case ParallelStep par: LintParallel(par, env); break;
+                case ForEachStep fe: LintForEach(fe, env); break;
+                case ApprovalStep ap: LintApproval(ap, env); break;
+                case TaskStep tk: LintTask(tk, env); break;
+                case WaitStep w: LintWait(w, env); break;
+                case SetFieldsStep sf: LintSetFields(sf, env); break;
+                case SetVariablesStep sv: LintSetVariables(sv, env); break;
+                case ApplyTransitionStep at: LintApplyTransition(at, env); break;
+                case NotifyStep n: LintNotify(n, env); break;
+                case WebhookStep wh: LintWebhook(wh, env); break;
+                case ActionStep act: LintAction(act, env); break;
+                case SubWorkflowStep sub: LintSubWorkflow(sub, env); break;
+                case GoToStep g: LintGoTo(g, env, listId, index); break;
+                case EndStep e: CheckTemplate(e.Reason, e.Id, env); break;
             }
+        }
+
+        private void LintBranch(BranchStep b, Env env)
+        {
+            if (b.Paths.Count == 0) Error("emptyBranch", b.Id, $"'{Name(b)}' has no paths.");
+            foreach (var p in b.Paths)
+            {
+                CheckId(p.Id, b.Id);
+                if (p.When is null) Error("missingCondition", b.Id, $"Path '{p.Label}' of '{Name(b)}' needs a condition.");
+                else CheckCondition(p.When, b.Id, env);
+                LintSteps(p.Steps, Inside(env, b), $"{b.Id}/path:{p.Id}");
+            }
+            if (b.Otherwise is not null)
+            {
+                CheckId(b.Otherwise.Id, b.Id);
+                LintSteps(b.Otherwise.Steps, Inside(env, b), $"{b.Id}/otherwise");
+            }
+        }
+
+        private void LintSwitch(SwitchStep sw, Env env)
+        {
+            CheckToken(sw.On, sw.Id, env);
+            if (sw.Cases.Count == 0) Error("emptySwitch", sw.Id, $"'{Name(sw)}' has no cases.");
+            foreach (var c in sw.Cases)
+            {
+                CheckId(c.Id, sw.Id);
+                if (c.Values.Count == 0) Error("missingValues", sw.Id, $"Case '{c.Label}' of '{Name(sw)}' needs at least one value.");
+                LintSteps(c.Steps, Inside(env, sw), $"{sw.Id}/case:{c.Id}");
+            }
+            if (sw.Otherwise is not null)
+            {
+                CheckId(sw.Otherwise.Id, sw.Id);
+                LintSteps(sw.Otherwise.Steps, Inside(env, sw), $"{sw.Id}/otherwise");
+            }
+        }
+
+        private void LintParallel(ParallelStep par, Env env)
+        {
+            if (par.Paths.Count < 2) Error("parallelPaths", par.Id, $"'{Name(par)}' needs at least two paths.");
+            if (par.Join.Type == "count" && (par.Join.Count is null || par.Join.Count < 1 || par.Join.Count > par.Paths.Count))
+                Error("parallelJoinCount", par.Id, $"'{Name(par)}' waits for {par.Join.Count} paths but has {par.Paths.Count}.");
+            foreach (var p in par.Paths)
+            {
+                CheckId(p.Id, par.Id);
+                LintSteps(p.Steps, Inside(env, par) with { InParallelOrLoop = true, EnclosingLists = [] }, $"{par.Id}/path:{p.Id}");
+            }
+        }
+
+        private void LintForEach(ForEachStep fe, Env env)
+        {
+            var collectionEntity = CollectionEntity(fe.Collection, env, fe.Id);
+            if (fe.Max is < 1 or > 500) Error("badLimit", fe.Id, "For each can cover 1 to 500 items.");
+            var loopEnv = Inside(env, fe) with { ItemEntity = collectionEntity, InParallelOrLoop = true, EnclosingLists = [] };
+            if (fe.When is not null) CheckCondition(fe.When, fe.Id, loopEnv);
+            LintSteps(fe.Steps, loopEnv, $"{fe.Id}/each");
+        }
+
+        private void LintApproval(ApprovalStep ap, Env env)
+        {
+            LintHuman(ap, env);
+            if (ap.Rule.Type is "count" or "percent" && (ap.Rule.Value is null || ap.Rule.Value < 1))
+                Error("badRule", ap.Id, $"'{Name(ap)}' needs a number of approvals.");
+            if (ap.Rule.Type == "percent" && ap.Rule.Value > 100) Error("badRule", ap.Id, "A percentage cannot be over 100.");
+            if (ap.Outcomes.TimedOut.Count == 0)
+                Warn("emptyTimeoutPath", ap.Id, $"Nothing happens when '{Name(ap)}' runs out of time; the workflow just carries on.");
+            LintSteps(ap.Outcomes.Approved, Inside(env, ap), $"{ap.Id}/outcome:approved");
+            LintSteps(ap.Outcomes.Rejected, Inside(env, ap), $"{ap.Id}/outcome:rejected");
+            LintSteps(ap.Outcomes.TimedOut, Inside(env, ap), $"{ap.Id}/outcome:timedOut");
+        }
+
+        private void LintTask(TaskStep tk, Env env)
+        {
+            LintHuman(tk, env);
+            if (tk.Outcomes.Count == 0) Error("noOutcomes", tk.Id, $"'{Name(tk)}' needs at least one button (outcome).");
+            foreach (var o in tk.Outcomes)
+            {
+                CheckId(o.Id, tk.Id);
+                if (tk.Outcomes.Count(x => x.Key == o.Key) > 1) Error("duplicateKey", tk.Id, $"Two outcomes of '{Name(tk)}' use the key '{o.Key}'.");
+                LintSteps(o.Steps, Inside(env, tk), $"{tk.Id}/outcome:{o.Key}");
+            }
+            CheckId(tk.OnTimeout.Id, tk.Id);
+            LintSteps(tk.OnTimeout.Steps, Inside(env, tk), $"{tk.Id}/onTimeout");
+        }
+
+        private void LintSetFields(SetFieldsStep sf, Env env)
+        {
+            var target = TargetEntity(sf.Target, env, sf.Id);
+            if (sf.Values.Count == 0) Error("noValues", sf.Id, $"'{Name(sf)}' does not change anything yet.");
+            foreach (var v in sf.Values)
+            {
+                var f = R.Field(target, v.Field);
+                if (target is not null && f is null) Error("unknownField", sf.Id, $"'{v.Field}' is not a field of {R.Entity(target)?.Label}.");
+                else if (f is not null && !f.IsSettable) Error("fieldNotSettable", sf.Id, $"Workflows cannot change {f.Label}; the app has not allowed it.");
+                else if (f is not null && v.Value.HasConst && f.Options is { } opts && v.Value.Const is not null
+                         && opts.All(o => Json.Values.Text(o.Value) != Json.Values.Text(v.Value.Const)))
+                    Error("unknownValue", sf.Id, $"'{Json.Values.Text(v.Value.Const)}' is not one of {f.Label}'s values.");
+                if (f is not null && def.IsLifecycle && def.Lifecycle?.Field == f.Key && target == def.Entity)
+                    Error("ownedField", sf.Id, $"{f.Label} is controlled by this lifecycle; use 'Move lifecycle' instead.");
+                var owner = ctx.OtherPublished.FirstOrDefault(d => d.IsLifecycle && d.Entity == target && d.Lifecycle?.Field == v.Field && d.Lifecycle.Enforce);
+                if (owner is not null) Error("ownedField", sf.Id, $"{f?.Label ?? v.Field} is controlled by the lifecycle '{owner.Title}'; use 'Move lifecycle' instead.");
+                CheckOperand(v.Value, sf.Id, env);
+            }
+        }
+
+        private void LintSetVariables(SetVariablesStep sv, Env env)
+        {
+            foreach (var v in sv.Values)
+            {
+                if (def.Variables?.Any(x => x.Id == v.Variable) != true) Error("unknownVariable", sv.Id, $"'{Name(sv)}' sets a variable that does not exist.");
+                CheckOperand(v.Value, sv.Id, env);
+            }
+        }
+
+        private void LintApplyTransition(ApplyTransitionStep at, Env env)
+        {
+            var atEntity = TargetEntity(at.Target, env, at.Id);
+            var lcDef = def.IsLifecycle && def.Key == at.Lifecycle ? def : ctx.OtherPublished.FirstOrDefault(d => d.IsLifecycle && d.Key == at.Lifecycle);
+            if (lcDef is null) Error("unknownLifecycle", at.Id, $"There is no published lifecycle called '{at.Lifecycle}'.");
+            else
+            {
+                if (lcDef.Entity != atEntity) Error("lifecycleEntity", at.Id, $"The lifecycle '{lcDef.Title}' is for a different record type.");
+                if (lcDef.Lifecycle!.Transitions.All(t => t.Key != at.Transition)) Error("unknownTransition", at.Id, $"'{at.Transition}' is not a transition of {lcDef.Title}.");
+            }
+            foreach (var v in at.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, at.Id, env);
+        }
+
+        private void LintNotify(NotifyStep n, Env env)
+        {
+            if (R.Channels.All(c => c.Key != n.Channel)) Error("unknownChannel", n.Id, $"'{n.Channel}' is not a notification channel the app offers.");
+            else if (ctx.Settings.Channels?.GetValueOrDefault(n.Channel)?.Enabled == false) Warn("channelDisabled", n.Id, $"The {n.Channel} channel is switched off in settings.");
+            if (n.To.Count == 0) Error("noRecipients", n.Id, $"'{Name(n)}' has nobody to send to.");
+            CheckAssignees(n.To, n.Id, allowEmpty: true, env);
+            CheckTemplate(n.Subject, n.Id, env);
+            CheckTemplate(n.Body, n.Id, env);
+            if (n.Body.Parts.Count == 0) Error("emptyMessage", n.Id, $"'{Name(n)}' has no message.");
+        }
+
+        private void LintAction(ActionStep act, Env env)
+        {
+            var desc = R.Action(act.Action);
+            if (desc is null) Error("unknownAction", act.Id, $"'{act.Action}' is not an action the app offers.");
+            else
+            {
+                if (desc.Entity is not null && desc.Entity != env.Entity) Error("actionEntity", act.Id, $"'{desc.Label}' works on a different record type.");
+                foreach (var i in desc.Inputs.Where(i => i.Required == true))
+                    if (act.Input?.ContainsKey(i.Key) != true) Error("missingInput", act.Id, $"'{Name(act)}' needs a value for {i.Label}.");
+                foreach (var k in act.Input?.Keys ?? Enumerable.Empty<string>())
+                    if (desc.Inputs.All(i => i.Key != k)) Warn("unknownInput", act.Id, $"'{desc.Label}' has no input called '{k}'.");
+            }
+            foreach (var v in act.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, act.Id, env);
+        }
+
+        private void LintSubWorkflow(SubWorkflowStep sub, Env env)
+        {
+            if (sub.Workflow == def.Key) Error("selfSubWorkflow", sub.Id, "A workflow cannot run itself.");
+            else
+            {
+                var child = ctx.OtherPublished.FirstOrDefault(d => d.Key == sub.Workflow);
+                if (child is null) Error("unknownWorkflow", sub.Id, $"There is no published workflow called '{sub.Workflow}'.");
+                else if (child.IsLifecycle) Error("notAutomation", sub.Id, $"'{child.Title}' is a lifecycle; only automations can be run as steps.");
+                else if (child.Entity is not null && child.Entity != TargetEntity(sub.Target, env, sub.Id))
+                    Error("workflowEntity", sub.Id, $"'{child.Title}' is about a different record type.");
+            }
+            foreach (var v in sub.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, sub.Id, env);
+        }
+
+        private void LintGoTo(GoToStep g, Env env, string listId, int index)
+        {
+            if (g.MaxTimes is < 1 or > 50) Error("badLimit", g.Id, "Go back can repeat 1 to 50 times.");
+            // Valid targets come before the current position, in this list or an enclosing one.
+            var reachable = env.EnclosingLists.Any(list => FindIndex(list, g.Target) is { } idx && (list != listId || idx < index));
+            if (!reachable) Error("goToInvalidTarget", g.Id, $"'{Name(g)}' must go back to an earlier step on the same path.");
         }
 
         private int? FindIndex(string listId, string stepId)

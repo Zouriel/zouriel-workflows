@@ -157,9 +157,9 @@ public static class WorkflowServiceCollectionExtensions
         var registry = builder.Registry.Build();
         services.AddSingleton(registry);
         services.AddSingleton(builder.Settings);
-        services.TryAddSingleton<IWorkflowIdentity, NoIdentityService>();
-        services.TryAddSingleton<INotificationSender, NoNotificationService>();
-        services.TryAddSingleton<IWorkflowSecretResolver, NoSecretService>();
+        services.TryAddSingleton<IWorkflowIdentity, NoIdentity>();
+        services.TryAddSingleton<INotificationSender, NoNotifications>();
+        services.TryAddSingleton<IWorkflowSecretResolver, NoSecrets>();
         services.TryAddSingleton<IWebhookClient>(sp => new HttpWebhookClient(sp.GetRequiredService<WorkflowEngineSettings>().Webhooks));
         services.TryAddSingleton<IFormValidator, FormValidator>();
         services.TryAddSingleton<IWorkflowActionResolver, ServiceProviderActionResolver>();
@@ -233,25 +233,6 @@ internal sealed class ScopedNotifications<T>(IServiceProvider root) : INotificat
 internal sealed class ScopedSecrets<T>(IServiceProvider root) : IWorkflowSecretResolver where T : class, IWorkflowSecretResolver
 {
     public Task<string?> GetSecretAsync(string name, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, string?>(root, s => s.GetSecretAsync(name, ct));
-}
-
-internal sealed class NoIdentityService : IWorkflowIdentity
-{
-    public Task<WorkflowUser?> GetUserAsync(string id, CancellationToken ct = default) => Task.FromResult<WorkflowUser?>(new WorkflowUser(id, id));
-    public Task<IReadOnlyList<string>> GetUsersInRoleAsync(string role, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
-    public Task<IReadOnlyList<string>> GetUsersInGroupAsync(string group, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
-    public Task<string?> GetManagerAsync(string userId, CancellationToken ct = default) => Task.FromResult<string?>(null);
-    public Task<IReadOnlyList<WorkflowUser>> SearchUsersAsync(string? query, int limit, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowUser>>([]);
-}
-
-internal sealed class NoNotificationService : INotificationSender
-{
-    public Task SendAsync(WorkflowNotification notification, CancellationToken ct = default) => Task.CompletedTask;
-}
-
-internal sealed class NoSecretService : IWorkflowSecretResolver
-{
-    public Task<string?> GetSecretAsync(string name, CancellationToken ct = default) => Task.FromResult<string?>(null);
 }
 
 /// <summary>Creates action handlers from the current DI scope.</summary>

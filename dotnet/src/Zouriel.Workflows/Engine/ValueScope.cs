@@ -11,7 +11,7 @@ namespace Zouriel.Workflows.Engine;
 /// relation hops load the related record. Call <c>PrefetchAsync</c> with the paths a
 /// condition, operand or template reads, then evaluate synchronously.
 /// </summary>
-public sealed class ValueScope : IValueContext
+internal sealed class ValueScope : IValueContext
 {
     private readonly IEntityGateway _gateway;
     private readonly WorkflowRegistry _registry;
@@ -27,9 +27,7 @@ public sealed class ValueScope : IValueContext
     public Dictionary<string, object?>? Item { get; init; }
     public int? ItemIndex { get; init; }
     public string? ItemEntity { get; init; }
-    public Dictionary<string, object?>? Input { get; init; }
     public InstanceRecord? Instance { get; init; }
-    public Func<string, string>? VariableKey { get; init; }
     public required DateTimeOffset Now { get; init; }
     public required string Today { get; init; }
 
@@ -60,7 +58,7 @@ public sealed class ValueScope : IValueContext
                 ? ItemIndex
                 : await ReadRecordPathAsync(ItemEntity, Item?.GetValueOrDefault("id") as string, Item, parts.AsSpan(1).ToArray(), ct),
             "trigger" => Values.ReadPath(Trigger?.ToValue(), parts.Skip(1)),
-            "input" => Values.ReadPath(Input ?? State?.Input, parts.Skip(1)),
+            "input" => Values.ReadPath(State?.Input, parts.Skip(1)),
             "steps" => parts.Length >= 3 && State?.Outputs.TryGetValue(parts[1], out var o) == true ? Values.ReadPath(o, parts.Skip(2)) : null,
             "vars" => parts.Length >= 2 ? Values.ReadPath(State?.Vars.GetValueOrDefault(parts[1]), parts.Skip(2)) : null,
             "instance" => parts.ElementAtOrDefault(1) switch

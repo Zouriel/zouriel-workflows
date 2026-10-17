@@ -3,14 +3,14 @@ using Zouriel.Workflows.Model;
 namespace Zouriel.Workflows.Engine;
 
 /// <summary>Where a step sits: the list that holds it and its index there.</summary>
-public sealed record StepLocation(Step Step, string ListId, int Index, string? ParentStepId);
+internal sealed record StepLocation(Step Step, string ListId, int Index, string? ParentStepId);
 
 /// <summary>
 /// A parsed definition with every step list indexed. List ids: <c>root</c> for an automation's
 /// steps; <c>transition:ID</c>, <c>onEnter:ID</c>, <c>onExit:ID</c>, <c>sla:ID</c> for lifecycle runs;
 /// <c>STEPID/SLOT</c> for lists nested in a step (e.g. <c>s3/path:p1</c>, <c>s5/outcome:approved</c>).
 /// </summary>
-public sealed class CompiledDefinition
+internal sealed class CompiledDefinition
 {
     public WorkflowDefinition Definition { get; }
     public string DefinitionId { get; }

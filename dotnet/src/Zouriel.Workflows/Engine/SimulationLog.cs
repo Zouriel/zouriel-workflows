@@ -4,7 +4,7 @@ namespace Zouriel.Workflows.Engine;
 public sealed record SimulationEntry(string Kind, string Action, string? Subject, string? Text, object? Data, string At);
 
 /// <summary>Collects what a test run did, including side effects that were skipped.</summary>
-public sealed class SimulationLog(Func<DateTimeOffset> now)
+internal sealed class SimulationLog(Func<DateTimeOffset> now)
 {
     private readonly List<SimulationEntry> _entries = [];
 

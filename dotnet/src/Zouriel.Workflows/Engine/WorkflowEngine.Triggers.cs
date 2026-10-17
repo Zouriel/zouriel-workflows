@@ -331,7 +331,7 @@ public sealed partial class WorkflowEngine
         if (due is null || due <= u.Now) return;
         await u.S.AddBookmarkAsync(new BookmarkRecord
         {
-            Id = NewId(), Kind = BookmarkKinds.DateReached, Purpose = "dateReached", DefinitionId = c.DefinitionId, Entity = entity, EntityId = id, DueAt = due,
+            Id = NewId(), Kind = BookmarkKinds.DateReached, Purpose = BookmarkPurposes.DateReached, DefinitionId = c.DefinitionId, Entity = entity, EntityId = id, DueAt = due,
             Payload = Values.Serialize(new Dictionary<string, object?> { ["version"] = (double)c.Version, ["value"] = value }), CreatedAt = u.Now,
         }, ct);
     }
@@ -371,67 +371,78 @@ public sealed partial class WorkflowEngine
         return due.Count;
     }
 
+    /// <summary>Fires one due bookmark (it is removed first; reminders and escalations leave the task open).</summary>
     internal async Task FireAsync(Uow u, string bookmarkId, CancellationToken ct)
     {
         var b = await u.S.GetBookmarkAsync(bookmarkId, ct);
         if (b is null) return;
-        // Reminders and escalations don't end the task, so their own bookmark is all that goes.
         await u.S.RemoveBookmarkAsync(b.Id, ct);
         switch (b.Purpose)
         {
-            case "schedule": await RunScheduleAsync(u, b, ct); return;
-            case "dateReached": await RunDateTriggerAsync(u, b, ct); return;
-            case "reminder": await TaskReminderAsync(u, b, ct); return;
-            case "escalation": await TaskEscalationAsync(u, b, ct); return;
-            case "due": await TaskTimedOutAsync(u, b, ct); return;
+            case BookmarkPurposes.Schedule: await RunScheduleAsync(u, b, ct); return;
+            case BookmarkPurposes.DateReached: await RunDateTriggerAsync(u, b, ct); return;
+            case BookmarkPurposes.Reminder: await TaskReminderAsync(u, b, ct); return;
+            case BookmarkPurposes.Escalation: await TaskEscalationAsync(u, b, ct); return;
+            case BookmarkPurposes.Due: await TaskTimedOutAsync(u, b, ct); return;
         }
         if (b.InstanceId is null) return;
         var x = await LoadExecAsync(u, b.InstanceId, ct);
         if (InstanceStatus.IsFinished(x.I.Status)) return;
-        if (b.Purpose.StartsWith("auto:", StringComparison.Ordinal))
+        if (b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal)) await FireAutoTransitionAsync(u, x, b.Purpose[BookmarkPurposes.AutoPrefix.Length..], ct);
+        else if (b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)) await FireSlaAsync(u, x, b.Purpose[BookmarkPurposes.SlaPrefix.Length..], ct);
+        else await FireTokenTimerAsync(x, b, ct);
+    }
+
+    /// <summary>An automatic transition's time came (spec §6 <c>auto.after</c>); its guard still applies.</summary>
+    private async Task FireAutoTransitionAsync(Uow u, Exec x, string transitionId, CancellationToken ct)
+    {
+        var tr = x.C.TransitionById(transitionId);
+        if (tr is null || x.I.State is null || !tr.From.Allows(x.C.Lifecycle, x.I.State, tr.To)) return;
+        try
         {
-            var tr = x.C.TransitionById(b.Purpose[5..]);
-            if (tr is null || x.I.State is null || !tr.From.Allows(x.C.Lifecycle, x.I.State, tr.To)) return;
-            try
-            {
-                await ApplyTransitionCoreAsync(u, x.C.Definition.Key, x.I.Entity!, x.I.EntityId!, tr.Key, [], WorkflowActor.System, isPerson: false, auto: true, 0, ct);
-            }
-            catch (WorkflowException e) when (e.Code is "guardFailed" or "notInFromState")
-            {
-                await u.AuditAsync(new AuditEntry
-                {
-                    Category = "lifecycle", Action = "autoSkipped", SubjectType = "record", SubjectId = x.I.EntityId!, Entity = x.I.Entity, EntityId = x.I.EntityId,
-                    InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId, Data = new Dictionary<string, object?> { ["transition"] = tr.Key, ["reason"] = e.Code },
-                }, ct);
-            }
-            return;
+            await ApplyTransitionCoreAsync(u, x.C.Definition.Key, x.I.Entity!, x.I.EntityId!, tr.Key, [], WorkflowActor.System, isPerson: false, auto: true, 0, ct);
         }
-        if (b.Purpose.StartsWith("sla:", StringComparison.Ordinal))
+        catch (WorkflowException e) when (e.Code is "guardFailed" or "notInFromState")
         {
-            var state = x.C.StateById(b.Purpose[4..]);
-            if (state is null || x.I.State != state.Id) return;
             await u.AuditAsync(new AuditEntry
             {
-                Category = "lifecycle", Action = "slaBreached", SubjectType = "record", SubjectId = x.I.EntityId!, Entity = x.I.Entity, EntityId = x.I.EntityId,
-                InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId, Data = new Dictionary<string, object?> { ["state"] = state.Key, ["within"] = state.Sla?.Within },
+                Category = "lifecycle", Action = "autoSkipped", SubjectType = "record", SubjectId = x.I.EntityId!, Entity = x.I.Entity, EntityId = x.I.EntityId,
+                InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId, Data = new Dictionary<string, object?> { ["transition"] = tr.Key, ["reason"] = e.Code },
             }, ct);
-            var trigger = new TriggerInfo { Type = "sla", Field = x.C.Lifecycle.Field, To = state.Key, At = Values.FormatInstant(u.Now) };
-            await StartRunAsync(u, x.I, x.C, $"sla:{state.Id}", $"sla:{state.Id}", trigger, WorkflowActor.System, null, ct);
-            return;
         }
+    }
+
+    /// <summary>A record stayed in a state longer than its SLA: audit it and run the SLA steps.</summary>
+    private async Task FireSlaAsync(Uow u, Exec x, string stateId, CancellationToken ct)
+    {
+        var state = x.C.StateById(stateId);
+        if (state is null || x.I.State != state.Id) return;
+        await u.AuditAsync(new AuditEntry
+        {
+            Category = "lifecycle", Action = "slaBreached", SubjectType = "record", SubjectId = x.I.EntityId!, Entity = x.I.Entity, EntityId = x.I.EntityId,
+            InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId, Data = new Dictionary<string, object?> { ["state"] = state.Key, ["within"] = state.Sla?.Within },
+        }, ct);
+        var trigger = new TriggerInfo { Type = "sla", Field = x.C.Lifecycle.Field, To = state.Key, At = Values.FormatInstant(u.Now) };
+        var list = BookmarkPurposes.SlaPrefix + state.Id;
+        await StartRunAsync(u, x.I, x.C, list, list, trigger, WorkflowActor.System, null, ct);
+    }
+
+    /// <summary>A waiting token's timer: a wait ran out, a wait timed out, or a retry is due.</summary>
+    private async Task FireTokenTimerAsync(Exec x, BookmarkRecord b, CancellationToken ct)
+    {
         var t = b.TokenId is null ? null : x.S.Token(b.TokenId);
         if (t is null || t.Status != TokenStatus.Waiting) return;
         var step = b.NodeId is null ? null : x.C.Step(b.NodeId);
         if (step is null) return;
         switch (b.Purpose)
         {
-            case "wait":
+            case BookmarkPurposes.Wait:
                 x.S.SetOutput(step.Id, "timedOut", false);
                 Resume(t);
                 await CompleteWaitingStepAsync(x, t, step, ct);
                 Advance(t);
                 break;
-            case "timeout":
+            case BookmarkPurposes.Timeout:
                 await ClearWaitsAsync(x, t, ct);
                 x.S.SetOutput(step.Id, "timedOut", true);
                 Resume(t);
@@ -439,7 +450,7 @@ public sealed partial class WorkflowEngine
                 if (step is WaitStep { Until.OnTimeout: not null }) t.Frames.Add(new Frame { List = $"{step.Id}/onTimeout" });
                 else Advance(t);
                 break;
-            case "retry":
+            case BookmarkPurposes.Retry:
                 // The step runs again; its step.started entry carries the attempt number.
                 Resume(t);
                 break;
@@ -447,6 +458,13 @@ public sealed partial class WorkflowEngine
                 return;
         }
         await DriveAsync(x, ct);
+    }
+
+    /// <summary>Adds the bookmark for a schedule's next run after <c>now</c> (none when the cron never fires again).</summary>
+    internal static async Task PlanNextScheduleAsync(Uow u, string definitionId, Cron cron, CancellationToken ct)
+    {
+        if (cron.Next(u.Now, u.Calendar.Zone) is { } next)
+            await u.S.AddBookmarkAsync(new BookmarkRecord { Id = NewId(), Kind = BookmarkKinds.Schedule, Purpose = BookmarkPurposes.Schedule, DefinitionId = definitionId, DueAt = next, CreatedAt = u.Now }, ct);
     }
 
     private async Task RunScheduleAsync(Uow u, BookmarkRecord b, CancellationToken ct)
@@ -457,9 +475,7 @@ public sealed partial class WorkflowEngine
         var trig = c.Definition.Trigger;
         if (trig?.Type != TriggerTypes.Schedule || !Cron.TryParse(trig.Cron, out var cron, out _)) return;
         // Plan the next run first, so a failure below doesn't stop the schedule.
-        var next = cron!.Next(u.Now, u.Calendar.Zone);
-        if (next is not null)
-            await u.S.AddBookmarkAsync(new BookmarkRecord { Id = NewId(), Kind = BookmarkKinds.Schedule, Purpose = "schedule", DefinitionId = rec.Id, DueAt = next, CreatedAt = u.Now }, ct);
+        await PlanNextScheduleAsync(u, rec.Id, cron!, ct);
         var eventId = $"schedule:{b.DueAt?.ToUnixTimeSeconds()}";
         var info = new TriggerInfo { Type = TriggerTypes.Schedule, ActorType = "system", At = Values.FormatInstant(u.Now), EventId = eventId };
         if (trig.ForEach is null)
@@ -557,6 +573,15 @@ public sealed partial class WorkflowEngine
             return resumed;
         }, ct);
 
+    /// <summary>Whether a person may start a manual trigger: anyone signed in when it names no one, else its <c>who</c> (or a role the person carries).</summary>
+    internal async Task<bool> MayStartManualAsync(Uow u, Trigger trig, WorkflowActor user, string? entity, string? entityId, CancellationToken ct)
+    {
+        if (!user.IsUser) return false;
+        if (trig.Who is not { Count: > 0 }) return true;
+        if (user.Roles is { Count: > 0 } roles && trig.Who.Any(w => w.Role is not null && roles.Contains(w.Role))) return true;
+        return (await ResolveAssigneesAsync(u.Scope(null, null, null, null, entity, entityId), trig.Who, null, user.Id, ct)).Contains(user.Id!);
+    }
+
     /// <summary>A person starts a manual-trigger automation from a record (spec §5 <c>manual</c>).</summary>
     public Task<InstanceView> StartManualAsync(string definitionKey, string? entity, string? entityId, Dictionary<string, object?>? input, WorkflowActor user, CancellationToken ct = default)
     {
@@ -569,13 +594,7 @@ public sealed partial class WorkflowEngine
             var trig = c.Definition.Trigger;
             if (trig?.Type != TriggerTypes.Manual) throw new WorkflowException("notManual", $"'{c.Definition.Title}' cannot be started by hand.");
             if (c.Definition.Entity is not null && (entity != c.Definition.Entity || entityId is null)) throw new WorkflowException("noRecord", $"'{c.Definition.Title}' starts from a {c.Definition.Entity}.");
-            var scope = u.Scope(null, null, null, null, entity, entityId);
-            if (trig.Who is { Count: > 0 })
-            {
-                var allowed = await ResolveAssigneesAsync(scope, trig.Who, null, user.Id, ct);
-                var byRole = user.Roles is { Count: > 0 } roles && trig.Who.Any(w => w.Role is not null && roles.Contains(w.Role));
-                if (!user.IsUser || (!allowed.Contains(user.Id!) && !byRole)) throw new WorkflowException("notAllowed", $"You are not allowed to start '{c.Definition.Title}'.");
-            }
+            if (!await MayStartManualAsync(u, trig, user, entity, entityId, ct)) throw new WorkflowException("notAllowed", $"You are not allowed to start '{c.Definition.Title}'.");
             input ??= [];
             if (trig.Form is { } form)
             {

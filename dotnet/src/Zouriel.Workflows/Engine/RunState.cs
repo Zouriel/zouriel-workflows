@@ -4,7 +4,7 @@ using Zouriel.Workflows.Model;
 
 namespace Zouriel.Workflows.Engine;
 
-public static class TokenStatus
+internal static class TokenStatus
 {
     public const string Active = "active";
     public const string Waiting = "waiting";
@@ -13,7 +13,7 @@ public static class TokenStatus
 }
 
 /// <summary>A position in a step list.</summary>
-public sealed class Frame
+internal sealed class Frame
 {
     public string List { get; set; } = "root";
     public int Index { get; set; }
@@ -25,7 +25,7 @@ public sealed class Frame
 }
 
 /// <summary>A thread of execution. Parallel paths and parallel forEach items run in child tokens.</summary>
-public sealed class Token
+internal sealed class Token
 {
     public string Id { get; set; } = "root";
     public string? ParentId { get; set; }
@@ -54,7 +54,7 @@ public sealed class Token
     }
 }
 
-public sealed class JoinState
+internal sealed class JoinState
 {
     public string StepId { get; set; } = "";
     public string TokenId { get; set; } = "";
@@ -69,13 +69,13 @@ public sealed class JoinState
     public int Concurrency { get; set; } = 5;
 }
 
-public sealed class LoopState
+internal sealed class LoopState
 {
     public List<Dictionary<string, object?>> Items { get; set; } = [];
 }
 
 /// <summary>Everything an instance needs to continue later, persisted as JSON in <c>InstanceRecord.Data</c>.</summary>
-public sealed class RunState
+internal sealed class RunState
 {
     public string RootList { get; set; } = "root";
     public List<Token> Tokens { get; set; } = [];
@@ -124,7 +124,7 @@ public sealed class RunState
 }
 
 /// <summary>What started an instance (spec §3 <c>trigger.*</c>).</summary>
-public sealed class TriggerInfo
+internal sealed class TriggerInfo
 {
     public string Type { get; set; } = "";
     public string? Field { get; set; }

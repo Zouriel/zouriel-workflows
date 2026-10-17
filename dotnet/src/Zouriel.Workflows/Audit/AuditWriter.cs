@@ -6,7 +6,7 @@ using Zouriel.Workflows.Storage;
 namespace Zouriel.Workflows.Audit;
 
 /// <summary>An audit entry before it is chained (spec §11).</summary>
-public sealed record AuditEntry
+internal sealed record AuditEntry
 {
     public required string Category { get; init; }
     public required string Action { get; init; }

@@ -153,6 +153,37 @@ public static class BookmarkKinds
     public const string DateReached = "dateReached";
 }
 
+/// <summary>What a bookmark does when it fires (<see cref="BookmarkRecord.Purpose"/>).</summary>
+public static class BookmarkPurposes
+{
+    /// <summary>A <c>wait</c> step's timer ran out.</summary>
+    public const string Wait = "wait";
+    /// <summary>A condition or signal wait timed out.</summary>
+    public const string Timeout = "timeout";
+    /// <summary>A failed step's next attempt is due.</summary>
+    public const string Retry = "retry";
+    /// <summary>A task's due time passed.</summary>
+    public const string Due = "due";
+    /// <summary>A task reminder is due (payload: which reminder).</summary>
+    public const string Reminder = "reminder";
+    /// <summary>A task escalation is due.</summary>
+    public const string Escalation = "escalation";
+    /// <summary>A waited-for sub-workflow (payload: its instance id).</summary>
+    public const string Child = "child";
+    /// <summary>A condition wait, re-checked after each change to the record.</summary>
+    public const string Condition = "condition";
+    /// <summary>A signal wait.</summary>
+    public const string Signal = "signal";
+    /// <summary>A schedule trigger's next run.</summary>
+    public const string Schedule = "schedule";
+    /// <summary>A dateReached trigger's time for one record.</summary>
+    public const string DateReached = "dateReached";
+    /// <summary>Prefix of an automatic transition's timer (<c>auto:TRANSITION_ID</c>).</summary>
+    public const string AutoPrefix = "auto:";
+    /// <summary>Prefix of a state's SLA timer (<c>sla:STATE_ID</c>).</summary>
+    public const string SlaPrefix = "sla:";
+}
+
 /// <summary>A durable pause point: a timer, a person, a signal or a condition.</summary>
 public sealed class BookmarkRecord
 {

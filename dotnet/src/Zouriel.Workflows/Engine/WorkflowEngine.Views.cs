@@ -183,45 +183,11 @@ public sealed partial class WorkflowEngine
             if (InstanceStatus.IsFinished(i.Status)) throw new WorkflowException("finished", "A finished instance cannot move to another version.");
             var from = await CompiledAsync(u, i.DefinitionId, i.Version, ct);
             var to = await CompiledAsync(u, i.DefinitionId, toVersion, ct);
-            if (i.Kind == InstanceKinds.Record)
-            {
-                var current = from.StateById(i.State);
-                var key = current is null ? null : stateMap?.GetValueOrDefault(current.Key) ?? current.Key;
-                var target = key is null ? null : to.StateByKey(key);
-                if (current is not null && target is null) throw new WorkflowException("unmappedState", $"Version {toVersion} has no state for “{current.Label}”. Choose where it should go.");
-                if (target is not null && target.Key != current?.Key)
-                {
-                    await WriteStateAsync(u, to, i.Entity!, i.EntityId!, target, admin, 0, i.Id, ct);
-                }
-                foreach (var b in await u.S.ListBookmarksAsync(i.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
-                i.State = target?.Id;
-                i.Version = toVersion;
-                i.UpdatedAt = u.Now;
-                if (target is not null)
-                {
-                    i.Status = target.IsTerminal ? InstanceStatus.Completed : i.Status == InstanceStatus.OutOfSync ? InstanceStatus.Active : i.Status;
-                    i.EndedAt = target.IsTerminal ? u.Now : null;
-                }
-                if (target is not null && !target.IsTerminal) await PlanStateTimersAsync(u, to, i, target, ct);
-                await u.S.UpdateInstanceAsync(i, ct);
-            }
-            else
-            {
-                // Every position a live token holds must point at the same step in the new version.
-                var state = RunState.FromJson(i.Data);
-                foreach (var t in state.Tokens.Where(t => t.Status is TokenStatus.Active or TokenStatus.Waiting))
-                foreach (var f in t.Frames)
-                {
-                    var old = from.Lists.GetValueOrDefault(f.List);
-                    var same = to.Lists.TryGetValue(f.List, out var list) && old is not null && (f.Index < old.Count
-                        ? f.Index < list.Count && list[f.Index].Id == old[f.Index].Id
-                        : f.Index >= list.Count);
-                    if (!same) throw new WorkflowException("cannotMigrate", $"Version {toVersion} no longer has the step this run is at. Cancel it or keep it on version {i.Version}.");
-                }
-                i.Version = toVersion;
-                i.UpdatedAt = u.Now;
-                await u.S.UpdateInstanceAsync(i, ct);
-            }
+            if (i.Kind == InstanceKinds.Record) await MigrateRecordAsync(u, i, from, to, stateMap, admin, ct);
+            else EnsureSameSteps(RunState.FromJson(i.Data), from, to);
+            i.Version = toVersion;
+            i.UpdatedAt = u.Now;
+            await u.S.UpdateInstanceAsync(i, ct);
             await u.AuditAsync(new AuditEntry
             {
                 Category = "instance", Action = "migrated", SubjectType = "instance", SubjectId = id, InstanceId = id, DefinitionId = i.DefinitionId, Entity = i.Entity,
@@ -231,6 +197,36 @@ public sealed partial class WorkflowEngine
             }, ct);
             return await InstanceViewAsync(u, id, ct);
         }, ct);
+
+    /// <summary>Moves a record instance's state to the new version by key (or <paramref name="stateMap"/>), replanning its timers.</summary>
+    private async Task MigrateRecordAsync(Uow u, InstanceRecord i, CompiledDefinition from, CompiledDefinition to, Dictionary<string, string>? stateMap, WorkflowActor admin, CancellationToken ct)
+    {
+        var current = from.StateById(i.State);
+        var key = current is null ? null : stateMap?.GetValueOrDefault(current.Key) ?? current.Key;
+        var target = key is null ? null : to.StateByKey(key);
+        if (current is not null && target is null) throw new WorkflowException("unmappedState", $"Version {to.Version} has no state for “{current.Label}”. Choose where it should go.");
+        if (target is not null && target.Key != current?.Key) await WriteStateAsync(u, to, i.Entity!, i.EntityId!, target, admin, 0, i.Id, ct);
+        foreach (var b in await u.S.ListBookmarksAsync(i.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+        i.State = target?.Id;
+        if (target is null) return;
+        i.Status = target.IsTerminal ? InstanceStatus.Completed : i.Status == InstanceStatus.OutOfSync ? InstanceStatus.Active : i.Status;
+        i.EndedAt = target.IsTerminal ? u.Now : null;
+        if (!target.IsTerminal) await PlanStateTimersAsync(u, to, i, target, ct);
+    }
+
+    /// <summary>Every position a live token holds must point at the same step id in the new version.</summary>
+    private static void EnsureSameSteps(RunState state, CompiledDefinition from, CompiledDefinition to)
+    {
+        foreach (var t in state.Tokens.Where(t => t.Status is TokenStatus.Active or TokenStatus.Waiting))
+        foreach (var f in t.Frames)
+        {
+            var old = from.Lists.GetValueOrDefault(f.List);
+            var same = to.Lists.TryGetValue(f.List, out var list) && old is not null && (f.Index < old.Count
+                ? f.Index < list.Count && list[f.Index].Id == old[f.Index].Id
+                : f.Index >= list.Count);
+            if (!same) throw new WorkflowException("cannotMigrate", $"Version {to.Version} no longer has the step this run is at. Cancel it or keep it on version {from.Version}.");
+        }
+    }
 
     // ── Tasks ─────────────────────────────────────────────────────────────
 
@@ -307,12 +303,7 @@ public sealed partial class WorkflowEngine
         {
             var mc = await CompiledAsync(u, trig.DefinitionId, trig.Version, ct);
             var mt = mc.Definition.Trigger!;
-            if (mt.Who is { Count: > 0 })
-            {
-                var allowed = await ResolveAssigneesAsync(u.Scope(null, null, null, null, entity, id), mt.Who, null, viewer.Id, ct);
-                var byRole = viewer.Roles is { Count: > 0 } roles && mt.Who.Any(w => w.Role is not null && roles.Contains(w.Role));
-                if (!viewer.IsUser || (!allowed.Contains(viewer.Id!) && !byRole)) continue;
-            }
+            if (!await MayStartManualAsync(u, mt, viewer, entity, id, ct)) continue;
             manual.Add(new ManualOption(mc.Definition.Key, mt.Label ?? mc.Definition.Title, mt.Form?.DeepClone()));
         }
         var state = rc?.StateById(record?.State);

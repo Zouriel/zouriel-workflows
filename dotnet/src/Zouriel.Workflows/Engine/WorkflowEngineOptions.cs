@@ -26,7 +26,7 @@ public sealed class WorkflowEngineOptions
     /// <summary>Who is making record writes outside workflows (e.g. the logged-in user of the request).</summary>
     public Changes.IWorkflowActorAccessor? ActorAccessor { get; init; }
     /// <summary>Set only for test runs: side effects (notifications, webhooks, actions) are logged here instead of happening.</summary>
-    public SimulationLog? SimulationLog { get; init; }
+    internal SimulationLog? SimulationLog { get; init; }
     /// <summary>A base URL for links to records in notifications, e.g. <c>https://app.example.com/records/{entity}/{id}</c>.</summary>
     public string? RecordLinkTemplate { get; init; }
     /// <summary>

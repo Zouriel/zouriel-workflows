@@ -230,7 +230,7 @@ public sealed partial class WorkflowEngine
             case "duration":
             {
                 var due = Due(x, u.Duration!, u.Calendar);
-                await AddTimerAsync(x, t, w, "wait", due, null, ct);
+                await AddTimerAsync(x, t, w, BookmarkPurposes.Wait, due, null, ct);
                 Wait(t, "timer", rec);
                 break;
             }
@@ -244,7 +244,7 @@ public sealed partial class WorkflowEngine
                     Advance(t);
                     return;
                 }
-                await AddTimerAsync(x, t, w, "wait", due.Value, null, ct);
+                await AddTimerAsync(x, t, w, BookmarkPurposes.Wait, due.Value, null, ct);
                 Wait(t, "timer", rec);
                 break;
             }
@@ -259,10 +259,10 @@ public sealed partial class WorkflowEngine
                 }
                 await x.U.S.AddBookmarkAsync(new BookmarkRecord
                 {
-                    Id = NewId(), InstanceId = x.I.Id, TokenId = t.Id, NodeId = w.Id, Kind = BookmarkKinds.Condition, Purpose = "condition",
+                    Id = NewId(), InstanceId = x.I.Id, TokenId = t.Id, NodeId = w.Id, Kind = BookmarkKinds.Condition, Purpose = BookmarkPurposes.Condition,
                     Entity = x.I.Entity, EntityId = x.I.EntityId, DefinitionId = x.I.DefinitionId, CreatedAt = x.U.Now,
                 }, ct);
-                await AddTimerAsync(x, t, w, "timeout", Due(x, u.Timeout!, null), null, ct);
+                await AddTimerAsync(x, t, w, BookmarkPurposes.Timeout, Due(x, u.Timeout!, null), null, ct);
                 Wait(t, "condition", rec);
                 break;
             }
@@ -270,10 +270,10 @@ public sealed partial class WorkflowEngine
             {
                 await x.U.S.AddBookmarkAsync(new BookmarkRecord
                 {
-                    Id = NewId(), InstanceId = x.I.Id, TokenId = t.Id, NodeId = w.Id, Kind = BookmarkKinds.Signal, Purpose = "signal", Signal = u.Signal,
+                    Id = NewId(), InstanceId = x.I.Id, TokenId = t.Id, NodeId = w.Id, Kind = BookmarkKinds.Signal, Purpose = BookmarkPurposes.Signal, Signal = u.Signal,
                     Entity = x.I.Entity, EntityId = x.I.EntityId, DefinitionId = x.I.DefinitionId, CreatedAt = x.U.Now,
                 }, ct);
-                if (u.Timeout is not null) await AddTimerAsync(x, t, w, "timeout", Due(x, u.Timeout, null), null, ct);
+                if (u.Timeout is not null) await AddTimerAsync(x, t, w, BookmarkPurposes.Timeout, Due(x, u.Timeout, null), null, ct);
                 Wait(t, "signal", rec);
                 break;
             }
@@ -319,6 +319,7 @@ public sealed partial class WorkflowEngine
         {
             await x.U.S.Entities.SetFieldsAsync(entity, id, values, ct);
         }
+        x.U.ForgetMasker(entity, id);
         await CompleteStepAsync(x, rec, sf, null, ct);
         Advance(t);
     }
@@ -326,14 +327,12 @@ public sealed partial class WorkflowEngine
     internal async Task<(string? Entity, string? Id)> TargetAsync(ValueScope scope, string? target, CancellationToken ct)
     {
         if (target is null or "self") return (scope.Entity, scope.EntityId);
-        var parts = target.Split('.');
         var (entity, id, field) = await CollectionOwnerAsync(scope, target, ct);
         if (entity is null || id is null || field is null) return (null, null);
         var f = Registry.Field(entity, field);
         if (f?.Type != FieldTypes.Relation) return (null, null);
         var snap = await scope.LoadAsync(entity, id, ct);
         var related = snap?[field];
-        _ = parts;
         return (f.Entity, related is null ? null : Values.Text(related));
     }
 
@@ -433,11 +432,15 @@ public sealed partial class WorkflowEngine
         }, ct);
     }
 
-    private async Task WebhookAsync(Exec x, Token t, WebhookStep wh, CancellationToken ct)
+    /// <summary>
+    /// The address, headers and body of a webhook call. The address must stay on the named connection's host
+    /// or match an allowed origin; values from records go into the path URL-encoded, so they cannot add path
+    /// segments, a query or another host.
+    /// </summary>
+    private async Task<(string Url, Dictionary<string, string> Headers, string? Body)> BuildWebhookAsync(Exec x, Token t, WebhookStep wh, CancellationToken ct)
     {
         var scope = x.Scope(t);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        // Values from records go into the path URL-encoded, so they cannot add segments, a query or another host.
         var path = wh.Path is null ? "" : await RenderAsync(scope, wh.Path, ct, Uri.EscapeDataString);
         string url;
         if (wh.Connection is not null)
@@ -464,6 +467,12 @@ public sealed partial class WorkflowEngine
         }
         foreach (var (k, v) in wh.Headers ?? []) headers[k] = await RenderAsync(scope, v, ct);
         var body = wh.Body is null ? null : (await SubstituteAsync(scope, wh.Body.DeepClone(), ct))?.ToJsonString();
+        return (url, headers, body);
+    }
+
+    private async Task WebhookAsync(Exec x, Token t, WebhookStep wh, CancellationToken ct)
+    {
+        var (url, headers, body) = await BuildWebhookAsync(x, t, wh, ct);
         var key = $"{x.I.Id}:{wh.Id}:{t.Id}:{t.CurrentItem().Index}:{t.Top.Attempt}";
         var rec = await BeginStepAsync(x, t, wh, new Dictionary<string, object?> { ["method"] = wh.Method, ["url"] = url }, ct);
         WebhookResponse res;
@@ -620,7 +629,7 @@ public sealed partial class WorkflowEngine
         }
         await x.U.S.AddBookmarkAsync(new BookmarkRecord
         {
-            Id = bookmarkId, InstanceId = x.I.Id, TokenId = t.Id, NodeId = sub.Id, Kind = BookmarkKinds.Child, Purpose = "child", Payload = started.Id, CreatedAt = x.U.Now,
+            Id = bookmarkId, InstanceId = x.I.Id, TokenId = t.Id, NodeId = sub.Id, Kind = BookmarkKinds.Child, Purpose = BookmarkPurposes.Child, Payload = started.Id, CreatedAt = x.U.Now,
         }, ct);
         Wait(t, $"child:{started.Id}", rec);
         await x.U.S.UpdateStepAsync(rec, ct);
@@ -687,7 +696,7 @@ public sealed partial class WorkflowEngine
                 if (delay > cap) delay = cap;
             }
             t.Top.Attempt = attempt + 1;
-            await AddTimerAsync(x, t, step, "retry", x.U.Now + delay, null, ct);
+            await AddTimerAsync(x, t, step, BookmarkPurposes.Retry, x.U.Now + delay, null, ct);
             Wait(t, "retry", null);
             await x.U.AuditAsync(StepAudit(x, step, "retryScheduled", new Dictionary<string, object?> { ["attempt"] = (double)(attempt + 1), ["at"] = Values.FormatInstant(x.U.Now + delay) }), ct);
             return;

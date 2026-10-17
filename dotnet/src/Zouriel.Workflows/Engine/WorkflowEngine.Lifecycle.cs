@@ -198,7 +198,7 @@ public sealed partial class WorkflowEngine
     private async Task ExitStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State from, WorkflowActor actor, TriggerInfo trigger, CancellationToken ct)
     {
         foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct))
-            if (b.Purpose.StartsWith("auto:", StringComparison.Ordinal) || b.Purpose.StartsWith("sla:", StringComparison.Ordinal)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+            if (b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal) || b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)) await u.S.RemoveBookmarkAsync(b.Id, ct);
         if (from.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, from, ct);
         await StartRunAsync(u, record, c, $"onExit:{from.Id}", $"onExit:{from.Id}", trigger, actor, null, ct);
     }
@@ -237,7 +237,7 @@ public sealed partial class WorkflowEngine
             var working = (t.Auto.Calendar ?? c.Definition.Settings?.Calendar) == "working";
             await u.S.AddBookmarkAsync(new BookmarkRecord
             {
-                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = $"auto:{t.Id}", DueAt = u.Calendar.Add(u.Now, d, working),
+                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.AutoPrefix + t.Id, DueAt = u.Calendar.Add(u.Now, d, working),
                 Entity = record.Entity, EntityId = record.EntityId, DefinitionId = record.DefinitionId, CreatedAt = u.Now,
             }, ct);
         }
@@ -246,7 +246,7 @@ public sealed partial class WorkflowEngine
             var working = (sla.Calendar ?? c.Definition.Settings?.Calendar) == "working";
             await u.S.AddBookmarkAsync(new BookmarkRecord
             {
-                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = $"sla:{state.Id}", DueAt = u.Calendar.Add(u.Now, within, working),
+                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.SlaPrefix + state.Id, DueAt = u.Calendar.Add(u.Now, within, working),
                 Entity = record.Entity, EntityId = record.EntityId, DefinitionId = record.DefinitionId, CreatedAt = u.Now,
             }, ct);
         }

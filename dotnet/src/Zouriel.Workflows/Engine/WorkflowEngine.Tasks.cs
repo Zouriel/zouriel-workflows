@@ -43,12 +43,12 @@ public sealed partial class WorkflowEngine
             AllowDelegation = h.AllowDelegation ?? x.U.Settings.People?.Delegation ?? false, DueAt = due, CreatedAt = x.U.Now,
         };
         await x.U.S.AddTaskAsync(task, ct);
-        await AddTimerAsync(x, t, h, "due", due, null, ct, task.Id);
+        await AddTimerAsync(x, t, h, BookmarkPurposes.Due, due, null, ct, task.Id);
         var reminders = h.Reminders ?? x.U.Settings.Defaults?.Reminders ?? [];
         for (var i = 0; i < reminders.Count; i++)
-            if (IsoDuration.TryParse(reminders[i], out var r)) await AddTimerAsync(x, t, h, "reminder", x.U.Calendar.Add(x.U.Now, r, IsWorking(x, h.Calendar)), i.ToString(System.Globalization.CultureInfo.InvariantCulture), ct, task.Id);
+            if (IsoDuration.TryParse(reminders[i], out var r)) await AddTimerAsync(x, t, h, BookmarkPurposes.Reminder, x.U.Calendar.Add(x.U.Now, r, IsWorking(x, h.Calendar)), i.ToString(System.Globalization.CultureInfo.InvariantCulture), ct, task.Id);
         if (h.Escalation is { } esc && IsoDuration.TryParse(esc.After, out var ea))
-            await AddTimerAsync(x, t, h, "escalation", x.U.Calendar.Add(x.U.Now, ea, IsWorking(x, h.Calendar)), null, ct, task.Id);
+            await AddTimerAsync(x, t, h, BookmarkPurposes.Escalation, x.U.Calendar.Add(x.U.Now, ea, IsWorking(x, h.Calendar)), null, ct, task.Id);
         Wait(t, $"task:{task.Id}", rec);
         await x.U.S.UpdateStepAsync(rec, ct);
         await x.U.AuditAsync(TaskAudit(x.U, task, "created", x.Actor, new Dictionary<string, object?>

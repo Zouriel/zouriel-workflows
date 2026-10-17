@@ -34,12 +34,12 @@ public sealed partial class WorkflowEngine
         {
             return [new LintProblem("invalidJson", "error", null, $"The definition is not valid JSON: {e.Message}")];
         }
+        // Published versions never change, so their parsed form comes from the engine's cache.
         var others = new List<WorkflowDefinition>();
         foreach (var d in await u.S.ListDefinitionsAsync(ct))
         {
             if (d.Id == def.Id || d.Version == 0 || d.Status == DefinitionStatus.Archived) continue;
-            var v = await u.S.GetVersionAsync(d.Id, d.Version, ct);
-            if (v is not null) others.Add(Definitions.Parse(v.Json));
+            others.Add((await CompiledAsync(u, d.Id, d.Version, ct)).Definition);
         }
         return Linter.Lint(def, new LintContext(Registry, u.Settings, others));
     }
@@ -210,41 +210,45 @@ public sealed partial class WorkflowEngine
         return await SummaryAsync(u, rec, ct);
     }
 
+    /// <summary>The trigger index rows of a definition version: one per lifecycle (its owned field) or automation trigger.</summary>
+    internal static List<TriggerRecord> TriggerRows(WorkflowDefinition def, string definitionId, string definitionKey, int version, DateTimeOffset publishedAt)
+    {
+        if (def.IsLifecycle && def.Lifecycle is { } lc)
+        {
+            return
+            [
+                new TriggerRecord
+                {
+                    Id = NewId(), DefinitionId = definitionId, DefinitionKey = definitionKey, Version = version, Type = "lifecycle", Entity = def.Entity, Field = lc.Field,
+                    PublishedAt = publishedAt,
+                    Data = Values.Serialize(new Dictionary<string, object?> { ["mode"] = lc.Mode ?? "enforce", ["initial"] = lc.States.FirstOrDefault(s => s.IsInitial)?.Key }),
+                },
+            ];
+        }
+        if (def.Trigger is not { } trig) return [];
+        return
+        [
+            new TriggerRecord
+            {
+                Id = NewId(), DefinitionId = definitionId, DefinitionKey = definitionKey, Version = version, Type = trig.Type, Entity = def.Entity, Field = trig.Field,
+                PublishedAt = publishedAt, Lifecycle = trig.Lifecycle, Signal = trig.Signal,
+                Data = trig.Cron is null ? null : Values.Serialize(new Dictionary<string, object?> { ["cron"] = trig.Cron }),
+            },
+        ];
+    }
+
     /// <summary>Builds the trigger index rows for a published version (and timers for schedules and date triggers).</summary>
     private async Task IndexTriggersAsync(Uow u, DefinitionRecord rec, WorkflowDefinition def, int version, CancellationToken ct)
     {
-        var rows = new List<TriggerRecord>();
         var trig = def.Trigger;
         // Changes are compared with the first publish, not this version's: events still in the outbox when a
         // new version is published belong to the workflow and must not be dropped (spec §5).
         var firstPublished = version == 1 ? u.Now : (await u.S.GetVersionAsync(rec.Id, 1, ct))?.PublishedAt ?? u.Now;
-        if (def.IsLifecycle && def.Lifecycle is { } lc)
-        {
-            var initial = lc.States.FirstOrDefault(s => s.IsInitial)?.Key;
-            rows.Add(new TriggerRecord
-            {
-                Id = NewId(), DefinitionId = rec.Id, DefinitionKey = rec.Key, Version = version, Type = "lifecycle", Entity = def.Entity, Field = lc.Field, PublishedAt = firstPublished,
-                Data = Values.Serialize(new Dictionary<string, object?> { ["mode"] = lc.Mode ?? "enforce", ["initial"] = initial }),
-            });
-        }
-        else if (trig is not null)
-        {
-            rows.Add(new TriggerRecord
-            {
-                Id = NewId(), DefinitionId = rec.Id, DefinitionKey = rec.Key, Version = version, Type = trig.Type, Entity = def.Entity, Field = trig.Field, PublishedAt = firstPublished,
-                Lifecycle = trig.Lifecycle, Signal = trig.Signal, Data = trig.Cron is null ? null : Values.Serialize(new Dictionary<string, object?> { ["cron"] = trig.Cron }),
-            });
-        }
-        await u.S.ReplaceTriggersAsync(rec.Id, rows, ct);
+        await u.S.ReplaceTriggersAsync(rec.Id, TriggerRows(def, rec.Id, rec.Key, version, firstPublished), ct);
 
         // Re-plan schedule and date timers for the new version.
         foreach (var b in await u.S.FindDefinitionBookmarksAsync(rec.Id, BookmarkKinds.Schedule, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
-        if (trig?.Type == TriggerTypes.Schedule && trig.Cron is not null && Cron.TryParse(trig.Cron, out var cron, out _))
-        {
-            var next = cron!.Next(u.Now, u.Calendar.Zone);
-            if (next is not null)
-                await u.S.AddBookmarkAsync(new BookmarkRecord { Id = NewId(), Kind = BookmarkKinds.Schedule, Purpose = "schedule", DefinitionId = rec.Id, DueAt = next, CreatedAt = u.Now }, ct);
-        }
+        if (trig?.Type == TriggerTypes.Schedule && trig.Cron is not null && Cron.TryParse(trig.Cron, out var cron, out _)) await PlanNextScheduleAsync(u, rec.Id, cron!, ct);
         if (trig?.Type == TriggerTypes.DateReached) await PlanDateTriggersForAllAsync(u, new CompiledDefinition(def, rec.Id, version), ct);
         else foreach (var b in await u.S.FindDefinitionBookmarksAsync(rec.Id, BookmarkKinds.DateReached, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
     }
