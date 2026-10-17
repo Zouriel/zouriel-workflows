@@ -29,13 +29,17 @@ public record DefinitionSummary(
 /// <param name="Changed">False when the changes left everything as it was (no version was published).</param>
 /// <param name="DraftSkipped">The nodes the draft no longer has, so the draft did not get their change.</param>
 /// <param name="RecordsMoved">Lifecycles: how many record instances moved from earlier versions to the new one.</param>
+/// <param name="RecordsKept">
+/// Lifecycles: how many record instances stayed on an older version because its states or transitions differ from
+/// the new one (moving them could leave them in a state that version does not have); migrate them explicitly.
+/// </param>
 public sealed record PermissionsSummary(
     string Id, string Key, string Kind, string Title, string? Entity, string Status, int Version, bool HasDraftChanges,
-    DateTimeOffset UpdatedAt, string? UpdatedBy, int RunningInstances, bool Changed, IReadOnlyList<string> DraftSkipped, int RecordsMoved)
+    DateTimeOffset UpdatedAt, string? UpdatedBy, int RunningInstances, bool Changed, IReadOnlyList<string> DraftSkipped, int RecordsMoved, int RecordsKept = 0)
     : DefinitionSummary(Id, Key, Kind, Title, Entity, Status, Version, HasDraftChanges, UpdatedAt, UpdatedBy, RunningInstances)
 {
-    internal static PermissionsSummary Of(DefinitionSummary s, bool changed, IReadOnlyList<string> draftSkipped, int recordsMoved) =>
-        new(s.Id, s.Key, s.Kind, s.Title, s.Entity, s.Status, s.Version, s.HasDraftChanges, s.UpdatedAt, s.UpdatedBy, s.RunningInstances, changed, draftSkipped, recordsMoved);
+    internal static PermissionsSummary Of(DefinitionSummary s, bool changed, IReadOnlyList<string> draftSkipped, int recordsMoved, int recordsKept = 0) =>
+        new(s.Id, s.Key, s.Kind, s.Title, s.Entity, s.Status, s.Version, s.HasDraftChanges, s.UpdatedAt, s.UpdatedBy, s.RunningInstances, changed, draftSkipped, recordsMoved, recordsKept);
 }
 
 /// <summary>A definition with its draft, latest published version, version history and the draft's lint problems.</summary>
@@ -281,6 +285,7 @@ public sealed partial class WorkflowEngine
             // Nothing would change: no identical version is published.
             if (Hash(published.ToJsonString()) == current.Hash) return PermissionsSummary.Of(await SummaryAsync(u, rec, ct), false, [], 0);
             var hadDraft = rec.HasDraftChanges;
+            var previousVersion = rec.Version;
             var draft = JsonNode.Parse(rec.DraftJson)!.AsObject();
             // The draft gets the same changes where its nodes still exist (it may have removed some).
             var skipped = new List<string>();
@@ -303,7 +308,7 @@ public sealed partial class WorkflowEngine
                 summary = await SummaryAsync(u, rec, ct);
             }
             // Existing records follow the new permissions (revoked people stop acting on them).
-            var moved = rec.Kind == WorkflowKinds.Lifecycle ? await MoveRecordsToVersionAsync(u, id, summary.Version, actor, "permissions", ct) : 0;
+            var (moved, kept) = rec.Kind == WorkflowKinds.Lifecycle ? await MoveRecordsToVersionAsync(u, id, previousVersion, summary.Version, actor, "permissions", ct) : (0, 0);
             await u.AuditAsync(new AuditEntry
             {
                 Category = "definition", Action = "permissionsChanged", SubjectType = "definition", SubjectId = id, DefinitionId = id, Actor = actor,
@@ -313,22 +318,28 @@ public sealed partial class WorkflowEngine
                     ["changes"] = changes.Select(c => (object?)new Dictionary<string, object?> { ["node"] = c.Node, ["who"] = Values.FromJson(c.Who.ToJsonString()) }).ToList(),
                     ["draftSkipped"] = skipped.Select(x => (object?)x).ToList(),
                     ["recordsMoved"] = (double)moved,
+                    ["recordsKept"] = (double)kept,
                 },
             }, ct);
-            return PermissionsSummary.Of(summary, true, skipped, moved);
+            return PermissionsSummary.Of(summary, true, skipped, moved, kept);
         }, ct);
         await RefreshOwnershipAsync(ct);
         return result;
     }
 
     /// <summary>
-    /// Moves a lifecycle's record instances (not cancelled) from earlier versions to <paramref name="version"/>
-    /// without touching their state; only for versions whose states and transitions are the same (a
-    /// permissions change). Each move is audited as <c>instance.migrated</c> with the reason.
+    /// Moves a lifecycle's record instances (not cancelled) to <paramref name="version"/> without touching their state
+    /// (a permissions change). Only instances whose version has the very same states and transitions as the new one
+    /// move: those on <paramref name="previous"/> (the new version is it plus permission changes) and older versions
+    /// that never changed the states or transitions. The others stay where they are (moving them could put them in a
+    /// state the new version does not have) and are counted as kept. Each move is audited as <c>instance.migrated</c>.
     /// </summary>
-    private static async Task<int> MoveRecordsToVersionAsync(Uow u, string definitionId, int version, WorkflowActor actor, string reason, CancellationToken ct)
+    private async Task<(int Moved, int Kept)> MoveRecordsToVersionAsync(Uow u, string definitionId, int previous, int version, WorkflowActor actor, string reason, CancellationToken ct)
     {
+        var target = await CompiledAsync(u, definitionId, version, ct);
+        var sameShape = new Dictionary<int, bool> { [previous] = true };
         var moved = 0;
+        var kept = 0;
         for (var skip = 0; ; skip += 500)
         {
             var page = await u.S.QueryInstancesAsync(new InstanceQuery
@@ -340,6 +351,13 @@ public sealed partial class WorkflowEngine
             {
                 var i = u.Records.TryGetValue(found.Id, out var held) ? held : found;
                 if (i.Version >= version) continue;
+                if (!sameShape.TryGetValue(i.Version, out var same))
+                    sameShape[i.Version] = same = Shape(await CompiledAsync(u, definitionId, i.Version, ct)) == Shape(target);
+                if (!same || (i.State is not null && target.StateById(i.State) is null))
+                {
+                    kept++;
+                    continue;
+                }
                 var from = i.Version;
                 i.Version = version;
                 i.UpdatedAt = u.Now;
@@ -353,9 +371,16 @@ public sealed partial class WorkflowEngine
                 }, ct);
                 moved++;
             }
-            if (page.Count < 500) return moved;
+            if (page.Count < 500) return (moved, kept);
         }
     }
+
+    /// <summary>A lifecycle's states and transitions (what record instances depend on), for comparing versions.</summary>
+    private static string Shape(CompiledDefinition c) => JsonSerializer.Serialize(new
+    {
+        states = c.Lifecycle.States.Select(s => new { s.Id, s.Key, s.Category }),
+        transitions = c.Lifecycle.Transitions.Select(t => new { t.Id, t.Key, t.To, from = t.From.Any ? null : t.From.States }),
+    });
 
     /// <summary>Sets who may do one node of a definition (see <see cref="UpdatePermissionsAsync"/>).</summary>
     private static void ApplyPermission(JsonObject def, string node, JsonArray who)

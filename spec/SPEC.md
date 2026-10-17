@@ -505,11 +505,14 @@ engine from working or the settings from being fixed.
   (as when the builder leaves it empty); an approval or task needs someone, so it is refused
   (`lintErrors`, `noAssignees`). A `who` field must be a person field of the record (lint). A change
   that alters nothing publishes nothing (`changed: false`). After publishing, a lifecycle's record
-  instances (not cancelled) move from earlier versions to the new one (states and transitions are
-  unchanged, so they map 1:1; their state, timers and runs stay as they are), each audited as
-  `instance.migrated` with `reason: "permissions"`, so people whose permission was revoked stop acting
-  on existing records at once (`recordsMoved`). Automation runs already in progress, and a record's
+  instances (not cancelled) on the previous published version move to the new one (its states and
+  transitions are that version's, so they map 1:1; their state, timers and runs stay as they are), and
+  so do instances on older versions whose states and transitions are exactly the same; each is audited
+  as `instance.migrated` with `reason: "permissions"`, so people whose permission was revoked stop
+  acting on existing records at once (`recordsMoved`). Instances on an older version whose states or
+  transitions differ stay where they are (moving them could leave them in a state the new version does
+  not have); they are counted as `recordsKept` and need an explicit migration. Automation runs already in progress, and a record's
   child runs, keep their version: their open tasks keep their assignees. The response is the
-  definition summary plus `changed`, `draftSkipped` and `recordsMoved`. Errors: `unknownNode`,
-  `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged` (data: the new
-  `version`, `changes`, `draftSkipped`, `recordsMoved`).
+  definition summary plus `changed`, `draftSkipped`, `recordsMoved` and `recordsKept`. Errors:
+  `unknownNode`, `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged` (data:
+  the new `version`, `changes`, `draftSkipped`, `recordsMoved`, `recordsKept`).

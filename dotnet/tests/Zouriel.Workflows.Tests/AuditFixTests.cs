@@ -237,6 +237,59 @@ public sealed class AuditFixTests(ITestOutputHelper output)
     }
 }
 
+/// <summary>Regressions from the final audit, part 2.</summary>
+public sealed class AuditFixTests2(ITestOutputHelper output)
+{
+    private static WorkflowActor Admin => AuditFixTests.Admin;
+    private static Task<WorkflowTestHost> HostAsync() => AuditFixTests.HostAsync();
+
+    private void Dump(WorkflowTestHost h)
+    {
+        foreach (var i in h.Store.All<InstanceRecord>("instances").OrderBy(i => i.StartedAt))
+            output.WriteLine($"{i.DefinitionKey} {i.Kind} {i.Reason} {i.Status} v{i.Version} depth={i.Depth} {i.Error}");
+    }
+
+    // ── 5. A permissions change only moves records whose version has the same states ──
+
+    [Fact]
+    public async Task A_permissions_change_leaves_records_on_versions_with_other_states_alone()
+    {
+        var h = await HostAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "lc_p", "key": "lcp", "kind": "lifecycle", "title": "LC", "entity": "application",
+          "lifecycle": { "field": "status", "mode": "enforce",
+            "states": [ { "id": "d", "key": "draft", "label": "Draft", "category": "initial" },
+                        { "id": "s", "key": "submitted", "label": "Sub", "category": "active" },
+                        { "id": "o", "key": "approved", "label": "OK", "category": "terminal" } ],
+            "transitions": [ { "id": "t1", "key": "submit", "label": "Submit", "from": ["d"], "to": "s", "who": [ { "role": "reviewer" } ] },
+                             { "id": "t2", "key": "approve", "label": "Approve", "from": ["s"], "to": "o", "who": [ { "role": "reviewer" } ] } ] } }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        await h.Engine.ApplyTransitionAsync("application", "a1", "submit", null, WorkflowActor.User("rev1", "Rana", ["reviewer"]));
+        await h.SettleAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "lc_p", "key": "lcp", "kind": "lifecycle", "title": "LC", "entity": "application",
+          "lifecycle": { "field": "status", "mode": "enforce",
+            "states": [ { "id": "d", "key": "draft", "label": "Draft", "category": "initial" },
+                        { "id": "o", "key": "approved", "label": "OK", "category": "terminal" } ],
+            "transitions": [ { "id": "t2", "key": "approve", "label": "Approve", "from": ["d"], "to": "o", "who": [ { "role": "reviewer" } ] } ] } }
+        """);
+        await h.Store.CreateRecordAsync("application", "a2", new() { ["title"] = "New" });
+        await h.SettleAsync();
+        var r = await h.Engine.UpdatePermissionsAsync("lc_p", [("t2", new JsonArray(new JsonObject { ["role"] = "finance" }))], null, Admin);
+        Dump(h);
+        Assert.Equal(1, r.RecordsMoved);
+        Assert.Equal(1, r.RecordsKept);
+        var records = h.Store.All<InstanceRecord>("instances").Where(i => i.Kind == "record").ToDictionary(i => i.EntityId!);
+        Assert.Equal(1, records["a1"].Version);
+        Assert.Equal(3, records["a2"].Version);
+        var view = await h.Engine.GetRecordAsync("application", "a1", WorkflowActor.User("rev1", "Rana", ["reviewer"]));
+        Assert.Equal("submitted", view.State);
+        Assert.Contains(h.Store.All<AuditRecord>("audit"), a => a.Action == "permissionsChanged" && a.Data!.Contains("\"recordsKept\":1"));
+    }
+}
+
 /// <summary>Collects log messages for assertions.</summary>
 internal sealed class ListLogger(List<string> into) : Microsoft.Extensions.Logging.ILogger
 {
