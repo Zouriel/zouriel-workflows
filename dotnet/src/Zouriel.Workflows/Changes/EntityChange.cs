@@ -114,6 +114,8 @@ public sealed class LifecycleEvent
     public string? CorrelationId { get; set; }
     /// <summary>When the transition happened.</summary>
     public DateTimeOffset At { get; set; }
+    /// <summary>The remarks given with the move or reset (<c>trigger.comment</c> of the automations it starts), if any.</summary>
+    public string? Comment { get; set; }
 
     /// <summary>The actor, rebuilt from the stored fields.</summary>
     public WorkflowActor Actor => ActorType == "user" && ActorId is not null ? WorkflowActor.User(ActorId, ActorName) : new WorkflowActor(ActorType ?? "system", ActorId, ActorName);

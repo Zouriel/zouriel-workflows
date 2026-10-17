@@ -1,0 +1,111 @@
+{
+ "name": "Remarks on moves: red moves offer optional remarks, required remarks refuse a person without them and are trimmed, audited and read as trigger.comment by the move's steps, the new state's onEnter and stateEntered automations; automatic and workflow moves never need them; remarks on a move that asks for none are ignored",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": [
+   { "id": "a1", "title": "Bursary", "applicant": "ali", "notes": "start" },
+   { "id": "a2", "title": "Grant", "applicant": "ali", "score": 10 },
+   { "id": "a3", "title": "Loan", "applicant": "ali", "priority": "low" }
+  ]
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_remarks",
+   "key": "remarksReview",
+   "kind": "lifecycle",
+   "title": "Remarks review",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "active" },
+     { "id": "st_rev", "key": "underReview", "label": "Under review", "category": "active" },
+     { "id": "st_ok", "key": "approved", "label": "Approved", "category": "terminal",
+       "onEnter": [{ "id": "ok_note", "type": "setFields", "values": [{ "field": "notes", "value": { "ref": "trigger.comment" } }] }] },
+     { "id": "st_no", "key": "rejected", "label": "Rejected", "category": "terminal",
+       "onEnter": [{ "id": "no_note", "type": "setFields", "values": [{ "field": "notes", "value": { "ref": "trigger.comment" } }] }] },
+     { "id": "st_wd", "key": "withdrawn", "label": "Withdrawn", "category": "terminal" }
+    ],
+    "transitions": [
+     { "id": "t_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "field": "entity.applicant" }],
+       "steps": [{ "id": "sub_note", "type": "setFields", "values": [{ "field": "notes", "value": { "ref": "trigger.comment" } }] }] },
+     { "id": "t_return", "key": "sendBack", "label": "Send back", "from": ["st_sub"], "to": "st_draft", "tone": "danger", "who": [{ "role": "reviewer" }] },
+     { "id": "t_start", "key": "startReview", "label": "Start review", "from": ["st_sub"], "to": "st_rev", "who": [{ "role": "reviewer" }] },
+     { "id": "t_hold", "key": "hold", "label": "Hold", "from": ["st_sub"], "to": "st_rev", "tone": "warning", "comment": "optional", "who": [{ "role": "reviewer" }] },
+     { "id": "t_reject", "key": "reject", "label": "Reject", "from": ["st_rev"], "to": "st_no", "tone": "danger", "comment": "required", "who": [{ "role": "reviewer" }],
+       "steps": [{ "id": "tell", "type": "notify", "channel": "email", "to": [{ "field": "entity.applicant" }], "subject": "Application rejected",
+                   "body": ["Your application was rejected: ", { "ref": "trigger.comment" }] }] },
+     { "id": "t_fast", "key": "fastApprove", "label": "Fast approve", "from": ["st_rev"], "to": "st_ok", "comment": "required",
+       "auto": { "when": { "ref": "entity.score", "op": "gte", "value": { "const": 90 } } } },
+     { "id": "t_wd", "key": "withdraw", "label": "Withdraw", "from": "*", "to": "st_wd", "tone": "danger", "comment": "required", "who": [{ "field": "entity.applicant" }] }
+    ]
+   }
+  },
+  {
+   "specVersion": 1,
+   "id": "wf_rejected",
+   "key": "onRejected",
+   "kind": "automation",
+   "title": "Record the rejection",
+   "entity": "application",
+   "trigger": { "type": "stateEntered", "lifecycle": "remarksReview", "states": ["rejected"] },
+   "variables": [{ "id": "v_reason", "key": "reason", "label": "Reason", "type": "text" }],
+   "steps": [{ "id": "rj_keep", "type": "setVariables", "values": [{ "variable": "v_reason", "value": { "ref": "trigger.comment" } }] }]
+  },
+  {
+   "specVersion": 1,
+   "id": "wf_withdraw",
+   "key": "autoWithdraw",
+   "kind": "automation",
+   "title": "Withdraw high-priority loans",
+   "entity": "application",
+   "trigger": { "type": "fieldChanged", "field": "priority", "to": ["high"] },
+   "steps": [{ "id": "wd", "type": "applyTransition", "lifecycle": "remarksReview", "transition": "withdraw",
+               "comment": ["Withdrawn automatically (", { "ref": "entity.title" }, ")"] }]
+  }
+ ],
+ "steps": [
+  {
+   "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "ali", "comment": "Not asked for" },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "submitted", "notes": null } },
+    "available": { "entity": "application", "id": "a1", "user": "rev1", "transitions": ["sendBack", "startReview", "hold"],
+                   "comments": { "sendBack": "optional", "startReview": "none", "hold": "optional" } }
+   }
+  },
+  {
+   "transition": { "entity": "application", "id": "a1", "transition": "startReview", "actor": "rev1" },
+   "expect": { "available": { "entity": "application", "id": "a1", "user": "rev1", "transitions": ["reject"], "comments": { "reject": "required" } } }
+  },
+  { "transition": { "entity": "application", "id": "a1", "transition": "reject", "actor": "rev1" }, "expectError": "commentRequired" },
+  { "transition": { "entity": "application", "id": "a1", "transition": "reject", "actor": "rev1", "comment": "   " }, "expectError": "commentRequired" },
+  {
+   "transition": { "entity": "application", "id": "a1", "transition": "reject", "actor": "rev1", "comment": "  Two documents are missing.  " },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "rejected", "notes": "Two documents are missing." } },
+    "audit": [{ "is": "lifecycle.transitioned", "actor": "rev1", "data": { "transition": "reject", "comment": "Two documents are missing." } }],
+    "notifications": [{ "channel": "email", "to": ["ali"], "subject": "Application rejected", "body": "Your application was rejected: Two documents are missing." }],
+    "vars": { "onRejected": { "reason": "Two documents are missing." } }
+   }
+  },
+  { "transition": { "entity": "application", "id": "a2", "transition": "submit", "actor": "ali" } },
+  { "transition": { "entity": "application", "id": "a2", "transition": "startReview", "actor": "rev1" } },
+  {
+   "change": { "entity": "application", "id": "a2", "values": { "score": 95 } },
+   "expect": {
+    "record": { "entity": "application", "id": "a2", "values": { "status": "approved", "notes": null } },
+    "audit": [{ "is": "lifecycle.autoTransitioned", "data": { "transition": "fastApprove" } }]
+   }
+  },
+  {
+   "change": { "entity": "application", "id": "a3", "values": { "priority": "high" } },
+   "expect": {
+    "record": { "entity": "application", "id": "a3", "values": { "status": "withdrawn" } },
+    "audit": [{ "is": "lifecycle.transitioned", "actor": "workflow", "data": { "transition": "withdraw", "comment": "Withdrawn automatically (Loan)" } }]
+   }
+  }
+ ]
+}

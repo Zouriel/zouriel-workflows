@@ -128,7 +128,7 @@ public static class ConformanceRunner
         else if (s["transition"] is JsonObject tr)
         {
             await e.ApplyTransitionAsync(tr["entity"]!.GetValue<string>(), tr["id"]!.GetValue<string>(), tr["transition"]!.GetValue<string>(), Map(tr["input"]),
-                Actor(host, tr["actor"]), tr["lifecycle"]?.GetValue<string>(), ct);
+                Actor(host, tr["actor"]), tr["lifecycle"]?.GetValue<string>(), ct, tr["comment"]?.GetValue<string>());
         }
         else if (s["reset"] is JsonObject rs)
         {
@@ -137,7 +137,7 @@ public static class ConformanceRunner
             var undo = (rs["undo"] as JsonArray)?.Select(x => x!.GetValue<string>()).ToList();
             if (rs["undoSelected"]?.GetValue<bool>() == true)
                 undo = (await e.GetResetPreviewAsync(re, rid, actor, rs["lifecycle"]?.GetValue<string>(), ct)).Items.Where(i => i.Selected).Select(i => i.Id).ToList();
-            await e.ResetAsync(re, rid, Map(rs["input"]), actor, rs["lifecycle"]?.GetValue<string>(), ct, undo);
+            await e.ResetAsync(re, rid, Map(rs["input"]), actor, rs["lifecycle"]?.GetValue<string>(), ct, undo, comment: rs["comment"]?.GetValue<string>());
         }
         else if (s["forceState"] is JsonObject fs)
         {
@@ -322,6 +322,11 @@ public static class ConformanceRunner
             if (av["state"] is JsonValue st && view.State != st.GetValue<string>()) throw new ConformanceException($"available.state: expected {st}, got {view.State}");
             if (av["reset"] is JsonValue rv && (view.Reset is not null) != rv.GetValue<bool>())
                 throw new ConformanceException($"available.reset: expected {rv}, got {view.Reset is not null}");
+            // "comments": { transitionKey: "none"|"optional"|"required" } for the offered transitions; "resetComment" for the reset option.
+            if (av["comments"] is JsonObject wantC)
+                CompareSubset("available.comments", wantC, view.Transitions.ToDictionary(t => t.Key, t => (object?)t.Comment));
+            if (av["resetComment"] is JsonValue rc && view.Reset?.Comment != rc.GetValue<string>())
+                throw new ConformanceException($"available.resetComment: expected {rc}, got {view.Reset?.Comment ?? "no reset"}");
         }
         if (expect["resetPreview"] is JsonObject rp)
         {

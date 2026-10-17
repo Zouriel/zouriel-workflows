@@ -1078,7 +1078,7 @@
                     "type": "null"
                   },
                   {
-                    "$ref": "#/components/schemas/InputBody"
+                    "$ref": "#/components/schemas/TransitionBody"
                   }
                 ]
               }
@@ -1936,7 +1936,7 @@
             "description": "Which lifecycle, when the entity has more than one."
           }
         },
-        "description": "Body of transition and manual-start requests."
+        "description": "Body of manual-start requests."
       },
       "JsonArray": {
         "type": "array"
@@ -2131,6 +2131,13 @@
               "type": "string"
             },
             "description": "The reset list's item ids to take back (from `GET \u2026/reset`); empty = none."
+          },
+          "comment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The person's remarks: required when the reset's `comment` is `required` (`commentRequired`), ignored when `none`; at most 2000 characters."
           }
         },
         "description": "Body of `POST /records/{entity}/{id}/reset`."
@@ -2223,6 +2230,37 @@
           }
         },
         "description": "Body of `POST /instances/{id}/skip`."
+      },
+      "TransitionBody": {
+        "required": [
+          "input",
+          "lifecycle"
+        ],
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "The transition form's answers."
+          },
+          "lifecycle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Which lifecycle, when the entity has more than one."
+          },
+          "comment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The person's remarks: required when the transition's `comment` is `required` (`commentRequired`), ignored when `none`; at most 2000 characters."
+          }
+        },
+        "description": "Body of `POST /records/{entity}/{id}/transitions/{key}`."
       },
       "TriggerOverview": {
         "required": [

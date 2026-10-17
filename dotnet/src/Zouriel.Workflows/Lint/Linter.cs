@@ -283,6 +283,12 @@ public static class Linter
                     Warn("resetToFinal", null, $"The reset goes back to the final state '{final.Label}', which ends the workflow.");
                 CheckAssignees(reset.Who, null, allowEmpty: true);
                 if (reset.Who is not { Count: > 0 }) Warn("resetNobody", null, "Nobody can reset this workflow yet; choose who may.");
+                if (reset.States is { } offeredIn)
+                {
+                    foreach (var st in offeredIn)
+                        if (!stateIds.Contains(st)) Error("unknownState", null, $"The reset is offered in a state that does not exist ('{st}').");
+                    if (offeredIn.Count == 0) Warn("resetNeverOffered", null, "The reset is offered in no state, so nobody can ever use it.");
+                }
                 if (reset.Input?.Form is { } resetForm && resetForm["pages"] is null) Error("badForm", null, "The reset's form is not a form definition.");
                 if (reset.Steps is not null) LintSteps(reset.Steps, new Env(entity?.Key, null, [], reset.Input is not null, null), "reset");
             }
@@ -450,6 +456,8 @@ public static class Linter
                 if (tk.Outcomes.Count(x => x.Key == o.Key) > 1) Error("duplicateKey", tk.Id, $"Two outcomes of '{Name(tk)}' use the key '{o.Key}'.");
                 LintSteps(o.Steps, Inside(env, tk), $"{tk.Id}/outcome:{o.Key}");
             }
+            if (tk.RequireComment == "reject" && !tk.Outcomes.Any(o => o.Tone == "danger" || o.Key == "rejected"))
+                Warn("noNegativeOutcome", tk.Id, $"'{Name(tk)}' asks for a comment on rejecting, but none of its buttons is red (danger), so it never does.");
             CheckId(tk.OnTimeout.Id, tk.Id);
             LintSteps(tk.OnTimeout.Steps, Inside(env, tk), $"{tk.Id}/onTimeout");
         }
@@ -513,6 +521,7 @@ public static class Linter
                 if (lcDef.Lifecycle!.Transitions.All(t => t.Key != at.Transition)) Error("unknownTransition", at.Id, $"'{at.Transition}' is not a transition of {lcDef.Title}.");
             }
             foreach (var v in at.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, at.Id, env);
+            CheckTemplate(at.Comment, at.Id, env);
         }
 
         private void LintNotify(NotifyStep n, Env env)
@@ -799,7 +808,7 @@ public static class Linter
                     else if (expectUser && f.Type != FieldTypes.User) Error("notAUser", node, $"{f.Label} does not hold a person.");
                     return;
                 case "trigger":
-                    if (parts.Length < 2 || parts[1] is not ("field" or "from" or "to" or "actor" or "actorName" or "at" or "transition" or "data" or "type"))
+                    if (parts.Length < 2 || parts[1] is not ("field" or "from" or "to" or "actor" or "actorName" or "at" or "transition" or "data" or "type" or "comment"))
                         Error("unknownToken", node, $"'{path}' is not something the trigger provides.");
                     if (expectUser && parts.ElementAtOrDefault(1) != "actor") Error("notAUser", node, $"'{path}' does not hold a person.");
                     return;

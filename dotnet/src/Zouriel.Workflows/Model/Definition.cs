@@ -191,6 +191,13 @@ public sealed class LifecycleReset
     public bool? RunExitEnter { get; set; }
     /// <summary>Also cancel running automations about the record (default true); the lifecycle's own runs always stop.</summary>
     public bool? CancelAutomations { get; set; }
+    /// <summary>Remarks people give when they reset: <c>none</c>, <c>optional</c> (default) or <c>required</c>; steps read them as <c>trigger.comment</c>.</summary>
+    public string? Comment { get; set; }
+    /// <summary>The state ids the reset is offered in; null = every state (it is never offered when it would change nothing).</summary>
+    public List<string>? States { get; set; }
+
+    /// <summary>The remarks setting with its default applied.</summary>
+    [JsonIgnore] public string ResolvedComment => Remarks.Resolve(Comment, Remarks.Optional);
     /// <summary>Steps run after the record is back in <see cref="To"/> (list id <c>reset</c>).</summary>
     public List<Step>? Steps { get; set; }
 }
@@ -265,6 +272,27 @@ public sealed class Transition
     public string? Tone { get; set; }
     /// <summary>When true, people never see or apply it; only automations and the system do.</summary>
     public bool? Hidden { get; set; }
+    /// <summary>Remarks people give when they apply it: <c>none</c>, <c>optional</c> or <c>required</c>; null = optional for <c>danger</c> moves, else none.</summary>
+    public string? Comment { get; set; }
+
+    /// <summary>The remarks setting with its default applied (never null).</summary>
+    [JsonIgnore] public string ResolvedComment => Remarks.Resolve(Comment, Tone == "danger" ? Remarks.Optional : Remarks.None);
+}
+
+/// <summary>Remarks people give with a move or a reset (spec §6): whether they are asked, and the length limit.</summary>
+public static class Remarks
+{
+    /// <summary>Not asked; anything sent is ignored.</summary>
+    public const string None = "none";
+    /// <summary>Asked, may be left empty.</summary>
+    public const string Optional = "optional";
+    /// <summary>A person must give them (<c>commentRequired</c> otherwise).</summary>
+    public const string Required = "required";
+    /// <summary>The longest remarks accepted, in characters.</summary>
+    public const int MaxLength = 2000;
+
+    /// <summary>A known setting, else <paramref name="fallback"/>.</summary>
+    public static string Resolve(string? value, string fallback) => value is None or Optional or Required ? value : fallback;
 }
 
 /// <summary><c>"*"</c> (any non-terminal state) or a list of state ids.</summary>

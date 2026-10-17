@@ -281,7 +281,7 @@ public sealed partial class WorkflowEngine
             var info = new TriggerInfo
             {
                 Type = trig.Type, Field = null, From = ev.FromState, To = ev.ToState, Transition = ev.Transition, ActorType = ev.ActorType, ActorId = ev.ActorId,
-                ActorName = ev.ActorName, At = Values.FormatInstant(ev.At), EventId = ev.EventId,
+                ActorName = ev.ActorName, At = Values.FormatInstant(ev.At), EventId = ev.EventId, Comment = ev.Comment,
             };
             starts.Add(new EventStart(t.DefinitionId, t.Version, ev.Entity, ev.EntityId, ev.EventId, info, ev.Actor, ev.Depth, ev.CausationDefinitionId, null, ev.CorrelationId));
         }

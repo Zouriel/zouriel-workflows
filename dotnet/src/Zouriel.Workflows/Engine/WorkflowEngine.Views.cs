@@ -80,7 +80,7 @@ public sealed record TokenView(string Id, string Status, string? Waiting, string
 /// <param name="Outcomes">The choices: <c>[{ key, label, tone }]</c>.</param>
 /// <param name="Decisions">The decisions made so far.</param>
 /// <param name="Form">The form to fill in when deciding, if any.</param>
-/// <param name="RequireComment"><c>never</c>, <c>reject</c> or <c>always</c>.</param>
+/// <param name="RequireComment"><c>never</c>, <c>reject</c> (an approval's <c>rejected</c>, or a task outcome whose tone is <c>danger</c>, needs a comment) or <c>always</c>.</param>
 /// <param name="AllowDelegation">Whether an assignee may hand it to someone else.</param>
 /// <param name="Outcome">The settled outcome, once there is one.</param>
 /// <param name="DueAt">When it times out (ISO 8601 UTC).</param>
@@ -103,7 +103,8 @@ public sealed record TaskView(
 /// <param name="Tone">The button tone, if set.</param>
 /// <param name="Confirm">A confirmation question to ask first, if set.</param>
 /// <param name="Form">The input form to fill in, if the transition asks for one.</param>
-public sealed record TransitionOption(string Key, string Label, string To, string ToLabel, string? Tone, string? Confirm, JsonNode? Form);
+/// <param name="Comment">Whether the person is asked for remarks: <c>none</c>, <c>optional</c> or <c>required</c> (resolved, never null).</param>
+public sealed record TransitionOption(string Key, string Label, string To, string ToLabel, string? Tone, string? Confirm, JsonNode? Form, string Comment);
 
 /// <summary>Starting the record's workflow over, offered to the people the lifecycle's reset allows (spec §6).</summary>
 /// <param name="Label">The button label ("Reset workflow" by default).</param>
@@ -111,7 +112,8 @@ public sealed record TransitionOption(string Key, string Label, string To, strin
 /// <param name="ToLabel">That state's label.</param>
 /// <param name="Confirm">A confirmation question to ask first, if set.</param>
 /// <param name="Form">The form to fill in (e.g. a reason), if the reset asks for one.</param>
-public sealed record ResetOption(string Label, string To, string ToLabel, string? Confirm, JsonNode? Form);
+/// <param name="Comment">Whether the person is asked for remarks: <c>none</c>, <c>optional</c> or <c>required</c> (resolved, never null).</param>
+public sealed record ResetOption(string Label, string To, string ToLabel, string? Confirm, JsonNode? Form, string Comment);
 
 /// <summary>
 /// Everything a record page shows (the record panel): its lifecycle state, the transitions the viewer may
@@ -409,15 +411,15 @@ public sealed partial class WorkflowEngine
                     if (!await MayApplyAsync(u, scope, t, viewer, record, ct)) continue;
                     if (!await scope.ConditionAsync(t.When, ct)) continue;
                     var to = rc.StateById(t.To)!;
-                    options.Add(new TransitionOption(t.Key, t.Label, to.Key, to.Label, t.Tone, t.Confirm, t.Input?.Form.DeepClone()));
+                    options.Add(new TransitionOption(t.Key, t.Label, to.Key, to.Label, t.Tone, t.Confirm, t.Input?.Form.DeepClone(), t.ResolvedComment));
                 }
             }
-            if (lc.Reset is { } r && await MayResetAsync(u, rc, record, viewer, ct))
+            if (lc.Reset is { } r && ResetOfferedIn(r, record) && await MayResetAsync(u, rc, record, viewer, ct))
             {
                 var back = ResetTarget(rc);
                 // Not offered when it would change nothing (already back, nothing running).
                 var changes = record.State != back.Id || record.Status == InstanceStatus.OutOfSync || (await RunningAboutAsync(u, record, r, ct)).Count > 0;
-                if (changes) reset = new ResetOption(r.Label ?? "Reset workflow", back.Key, back.Label, r.Confirm, r.Input?.Form.DeepClone());
+                if (changes) reset = new ResetOption(r.Label ?? "Reset workflow", back.Key, back.Label, r.Confirm, r.Input?.Form.DeepClone(), r.ResolvedComment);
             }
         }
         var tasks = new List<TaskView>();

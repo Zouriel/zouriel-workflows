@@ -1,0 +1,178 @@
+{
+ "name": "remarks read as trigger.comment, an applyTransition comment, reset states and a task with a red outcome have no problems",
+ "registry": "../engine/_registry.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_r",
+  "key": "review",
+  "kind": "lifecycle",
+  "title": "Review",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "m",
+     "key": "submitted",
+     "label": "Submitted",
+     "category": "active",
+     "onEnter": [
+      {
+       "id": "tk",
+       "type": "task",
+       "title": "Screen",
+       "assignees": [
+        {
+         "role": "reviewer"
+        }
+       ],
+       "due": "P1D",
+       "requireComment": "reject",
+       "outcomes": [
+        {
+         "id": "o1",
+         "key": "accept",
+         "label": "Accept",
+         "tone": "success",
+         "steps": []
+        },
+        {
+         "id": "o2",
+         "key": "decline",
+         "label": "Decline",
+         "tone": "danger",
+         "steps": [
+          {
+           "id": "mv",
+           "type": "applyTransition",
+           "lifecycle": "review",
+           "transition": "sendBack",
+           "comment": [
+            "Declined: ",
+            {
+             "ref": "steps.tk.comment"
+            },
+            " (",
+            {
+             "ref": "trigger.comment"
+            },
+            ")"
+           ]
+          }
+         ]
+        }
+       ],
+       "onTimeout": {
+        "id": "to",
+        "steps": []
+       }
+      }
+     ]
+    },
+    {
+     "id": "b",
+     "key": "approved",
+     "label": "Approved",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t1",
+     "key": "submit",
+     "label": "Submit",
+     "from": [
+      "a"
+     ],
+     "to": "m",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    },
+    {
+     "id": "t",
+     "key": "approve",
+     "label": "Approve",
+     "from": [
+      "m"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    },
+    {
+     "id": "t2",
+     "key": "sendBack",
+     "label": "Send back",
+     "from": [
+      "m"
+     ],
+     "to": "a",
+     "tone": "danger",
+     "comment": "required",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ],
+     "steps": [
+      {
+       "id": "n1",
+       "type": "notify",
+       "channel": "email",
+       "to": [
+        {
+         "field": "entity.applicant"
+        }
+       ],
+       "subject": "Sent back",
+       "body": [
+        "Remarks: ",
+        {
+         "ref": "trigger.comment"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "reset": {
+    "who": [
+     {
+      "role": "admin"
+     }
+    ],
+    "comment": "required",
+    "states": [
+     "m"
+    ],
+    "steps": [
+     {
+      "id": "r1",
+      "type": "setFields",
+      "values": [
+       {
+        "field": "notes",
+        "value": {
+         "ref": "trigger.comment"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "expected": []
+}
