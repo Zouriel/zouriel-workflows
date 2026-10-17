@@ -16,4 +16,8 @@
     <ProjectReference Include="..\Zouriel.Workflows\Zouriel.Workflows.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zouriel.Workflows.EntityFrameworkCore.Tests" />
+  </ItemGroup>
+
 </Project>
