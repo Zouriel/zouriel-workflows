@@ -224,7 +224,7 @@
           "type": "object",
           "additionalProperties": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
         },
-        "appliesWhen": { "$ref": "#/$defs/condition", "description": "Which records the lifecycle is for (spec §6 applies to)." },
+        "appliesWhen": { "$ref": "#/$defs/condition", "description": "Which records the lifecycle is for, read from the record's own fields when it gets its lifecycle; the record stays pinned to it afterwards (spec §6 applies to)." },
         "reset": {
           "description": "Lets people start a record's workflow over (spec §6 reset).",
           "type": "object",
@@ -634,7 +634,7 @@
         "lifecycle": { "$ref": "#/$defs/key" },
         "transition": { "$ref": "#/$defs/key" },
         "input": { "type": "object", "additionalProperties": { "$ref": "#/$defs/operand" } },
-        "ifNotAllowed": { "enum": ["fail", "skip"] }
+        "ifNotAllowed": { "enum": ["fail", "skip"], "description": "skip: output applied=false instead of failing when the record is not in a from state, the guard fails or the lifecycle is not the record's own (wrongLifecycle)." }
       }
     },
     "notifyStep": {
