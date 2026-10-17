@@ -482,15 +482,24 @@ public static class Linter
                 Error(string.IsNullOrEmpty(cr.Entity) ? "missingEntity" : "unknownEntity", cr.Id, $"Choose which kind of record '{Name(cr)}' creates.");
                 return;
             }
+            // Fields a lifecycle controls (this one or a published one): a new record starts in the lifecycle's first state.
+            bool Owned(string field) => (def.IsLifecycle && def.Entity == target.Key && def.Lifecycle?.Field == field)
+                                        || ctx.OtherPublished.Any(d => d.IsLifecycle && d.Entity == target.Key && d.Lifecycle?.Field == field);
             foreach (var v in cr.Values)
             {
                 var f = target.Field(v.Field);
                 if (f is null) Error("unknownField", cr.Id, $"'{v.Field}' is not a field of {target.Label}.");
                 else if (!f.IsSettable) Error("fieldNotSettable", cr.Id, $"Workflows cannot set {f.Label}; the app has not allowed it.");
-                else if (ctx.OtherPublished.Any(d => d.IsLifecycle && d.Entity == target.Key && d.Lifecycle?.Field == f.Key))
+                else if (Owned(f.Key))
                     Error("ownedField", cr.Id, $"{f.Label} is controlled by a lifecycle; a new record starts in its first state.");
+                else if (v.Value.HasConst && f.Options is { } opts && v.Value.Const is not null
+                         && opts.All(o => Json.Values.Text(o.Value) != Json.Values.Text(v.Value.Const)))
+                    Error("unknownValue", cr.Id, $"'{Json.Values.Text(v.Value.Const)}' is not one of {f.Label}'s values.");
                 CheckOperand(v.Value, cr.Id, env);
             }
+            // Fields the app requires must be given (a lifecycle's field is filled with its first state).
+            foreach (var f in target.Fields.Where(f => f.Required == true && f.Type != FieldTypes.Collection && !Owned(f.Key) && cr.Values.All(v => v.Field != f.Key)))
+                Error("missingRequiredField", cr.Id, $"'{Name(cr)}' must set {f.Label}; the app requires it.");
         }
 
         private void LintSetVariables(SetVariablesStep sv, Env env)

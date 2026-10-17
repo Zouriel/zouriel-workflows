@@ -1,0 +1,30 @@
+{
+ "name": "create record: a value that is not one of the field's options, the definition's own lifecycle field, and a field the app requires left out are flagged; a lifecycle's field never counts as missing",
+ "registry": "../engine/_registry-required.json",
+ "definition": {
+  "specVersion": 1, "id": "lc_t", "key": "tickets", "kind": "lifecycle", "title": "Tickets", "entity": "ticket",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    { "id": "o", "key": "open", "label": "Open", "category": "initial" },
+    { "id": "c", "key": "closed", "label": "Closed", "category": "terminal" }
+   ],
+   "transitions": [
+    { "id": "t", "key": "close", "label": "Close", "from": ["o"], "to": "c", "who": [{ "role": "admin" }],
+      "steps": [
+       { "id": "bad", "type": "createRecord", "entity": "ticket", "values": [
+        { "field": "kind", "value": { "const": "question" } },
+        { "field": "status", "value": { "const": "closed" } } ] },
+       { "id": "good", "type": "createRecord", "entity": "ticket", "values": [
+        { "field": "title", "value": { "const": "Follow up" } },
+        { "field": "kind", "value": { "const": "idea" } } ] }
+      ] }
+   ]
+  }
+ },
+ "expected": [
+  { "code": "unknownValue", "node": "bad" },
+  { "code": "ownedField", "node": "bad" },
+  { "code": "missingRequiredField", "node": "bad" }
+ ]
+}

@@ -1,0 +1,53 @@
+{
+ "specVersion": 1,
+ "entities": [
+  {
+   "key": "ticket",
+   "label": "Ticket",
+   "titleField": "title",
+   "fields": [
+    {
+     "key": "title",
+     "label": "Title",
+     "type": "text",
+     "settable": true,
+     "required": true
+    },
+    {
+     "key": "kind",
+     "label": "Kind",
+     "type": "enum",
+     "settable": true,
+     "options": [
+      {
+       "value": "bug",
+       "label": "Bug"
+      },
+      {
+       "value": "idea",
+       "label": "Idea"
+      }
+     ]
+    },
+    {
+     "key": "status",
+     "label": "Status",
+     "type": "enum",
+     "settable": true,
+     "lifecycle": true,
+     "required": true,
+     "options": [
+      {
+       "value": "open",
+       "label": "Open"
+      },
+      {
+       "value": "closed",
+       "label": "Closed"
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
