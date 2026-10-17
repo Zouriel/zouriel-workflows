@@ -25,7 +25,6 @@
       "type": "object",
       "properties": {
         "retry": { "$ref": "definition.schema.json#/$defs/retry" },
-        "taskDue": { "$ref": "definition.schema.json#/$defs/duration" },
         "reminders": { "type": "array", "items": { "$ref": "definition.schema.json#/$defs/duration" } },
         "concurrency": { "enum": ["perRecordSerial", "parallel", "skipIfRunning"] },
         "maxChainDepth": { "type": "integer", "minimum": 1, "maximum": 20 },
@@ -36,8 +35,7 @@
     "people": {
       "type": "object",
       "properties": {
-        "delegation": { "type": "boolean" },
-        "escalationDefault": { "$ref": "definition.schema.json#/$defs/assignees" }
+        "delegation": { "type": "boolean" }
       },
       "additionalProperties": false
     },
@@ -47,7 +45,6 @@
         "type": "object",
         "properties": {
           "enabled": { "type": "boolean" },
-          "sender": { "type": "string" },
           "footer": { "type": "string" }
         },
         "additionalProperties": false

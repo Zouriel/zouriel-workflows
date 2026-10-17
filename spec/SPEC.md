@@ -461,12 +461,24 @@ appear in test runs.
 
 ## 12. Global settings
 
-`schema/settings.schema.json`: `{ version, timeZone, calendar, defaults: { retry, taskDue,
-reminders, concurrency, maxChainDepth, forEachMax }, people: { delegation: bool, escalationDefault },
-channels: { <key>: { enabled, sender?, footer? } }, webhooks: { allowedOrigins: [...], connections:
-[{ key, label, baseUrl, auth: "none"|"secret", secretName? }] }, audit: { retentionDays: { <category>:
-days }, maskedFields: ["entity.field", …] }, paused: [{ entity }] }`. Secrets are never stored in
-settings; a connection names a secret the host resolves.
+`schema/settings.schema.json`: `{ version, timeZone, calendar, defaults: { retry, reminders,
+concurrency, maxChainDepth, forEachMax }, people: { delegation: bool }, channels: { <key>: { enabled,
+footer? } }, webhooks: { allowedOrigins: [...], connections: [{ key, label, baseUrl, auth:
+"none"|"secret", secretName?, header? }] }, audit: { retentionDays: { <category>: days },
+maskedFields: ["entity.field", …] }, paused: [{ entity }] }`. Secrets are never stored in settings; a
+connection names a secret the host resolves.
+
+Saving checks every field and refuses the whole save with `invalidSettings` (the problems listed) when
+one is wrong: a known time zone; working days among `mon`…`sun`, each once; working hours exactly two
+`HH:mm` times, the end after the start; holidays real dates (`YYYY-MM-DD`); retry `max` 0–10, `backoff`
+`fixed`/`exponential`, durations valid; reminders valid durations; `concurrency` one of the three modes;
+`maxChainDepth` 1–20; `forEachMax` 1–500; allowed origins `scheme://host[:port]` only; connections with
+a unique key, an http(s) `baseUrl`, a known `auth`, a `secretName` when `auth` is `secret`, a valid
+`header` name; `retentionDays` at least 1; masked fields shaped `entity.field`/`input.key`; paused
+entries naming an entity. Settings stored before these checks existed are read leniently: a value the
+engine cannot use (hours that are not times, a holiday that is not a date, an unknown day) is ignored
+and the default used (09:00–17:00, Monday–Friday), and the engine logs a warning; it never stops the
+engine from working or the settings from being fixed.
 
 ## 13. Versions and lint
 

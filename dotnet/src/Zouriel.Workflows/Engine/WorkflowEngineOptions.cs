@@ -45,6 +45,11 @@ public sealed class WorkflowEngineOptions
     /// interval (writes on them are accepted, and observed, until then). Default 30 seconds.
     /// </summary>
     public TimeSpan OwnershipRefreshInterval { get; init; } = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Where the engine reports problems it works around instead of failing (stored settings values it cannot read,
+    /// timers parked after repeated failures). Default: nowhere.
+    /// </summary>
+    public Microsoft.Extensions.Logging.ILogger Logger { get; init; } = Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
 }
 
 internal sealed class NoIdentity : IWorkflowIdentity

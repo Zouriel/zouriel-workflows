@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using Microsoft.Extensions.Logging;
 using Zouriel.Workflows.Audit;
 using Zouriel.Workflows.Changes;
 using Zouriel.Workflows.Json;
@@ -46,7 +47,7 @@ public sealed partial class WorkflowEngine
         public WorkflowEngine Engine { get; } = engine;
         public IWorkflowSession S { get; } = session;
         public GlobalSettings Settings { get; } = settings;
-        public WorkCalendar Calendar { get; } = settings.WorkCalendar();
+        public WorkCalendar Calendar { get; } = settings.WorkCalendar(m => engine.Options.Logger.LogWarning("{Problem}", m));
         public DateTimeOffset Now { get; } = now;
         public string Today => Calendar.Today(Now);
         public AuditWriter Audit { get; } = new(session, engine.Options.Tenant, () => engine.Now);
@@ -295,7 +296,7 @@ public sealed partial class WorkflowEngine
             return new OwnedField(t.DefinitionId, t.DefinitionKey, t.Entity!, t.Field!, data.GetValueOrDefault("mode") as string != "observe",
                 data.GetValueOrDefault("initial") as string, AppliesWhenOf(t), t.PublishedAt);
         }).ToList();
-        var calendar = GlobalSettings.Parse((await s.GetSettingsAsync(ct))?.Json).WorkCalendar();
+        var calendar = GlobalSettings.Parse((await s.GetSettingsAsync(ct))?.Json).WorkCalendar(m => Options.Logger.LogWarning("{Problem}", m));
 
         // Pins matter where the lifecycle depends on the record: a field shared by several lifecycles
         // (archived ones included, their records stay pinned) or one with a condition.
@@ -399,13 +400,13 @@ public sealed partial class WorkflowEngine
     /// <summary>
     /// Saves the global settings when <paramref name="expectedRevision"/> is still current and returns the new
     /// revision. Refuses <c>invalidSettings</c> (bad time zone, hours, durations, connection addresses) and
-    /// <c>staleSettings</c> (someone saved meanwhile). Audited as <c>settings.updated</c> with before and after.
+    /// <c>staleSettings</c> (someone saved meanwhile); <see cref="GlobalSettings.Problems"/> lists every check. Audited as <c>settings.updated</c> with before and after.
     /// </summary>
     public async Task<int> SaveSettingsAsync(GlobalSettings settings, int expectedRevision, WorkflowActor actor, CancellationToken ct = default)
     {
         var revision = await RunAsync(async u =>
         {
-            var problems = SettingsProblems(settings);
+            var problems = settings.Problems();
             if (problems.Count > 0) throw new WorkflowException("invalidSettings", string.Join(" ", problems), problems);
             var rec = await u.S.GetSettingsAsync(ct);
             var current = rec?.Revision ?? 0;
@@ -423,26 +424,5 @@ public sealed partial class WorkflowEngine
         // The change hook reads "today" in the settings' time zone.
         InvalidateOwnership();
         return revision;
-    }
-
-    private static List<string> SettingsProblems(GlobalSettings s)
-    {
-        var p = new List<string>();
-        if (!string.IsNullOrWhiteSpace(s.TimeZone))
-        {
-            try
-            {
-                TimeZoneInfo.FindSystemTimeZoneById(s.TimeZone);
-            }
-            catch (Exception e) when (e is TimeZoneNotFoundException or InvalidTimeZoneException)
-            {
-                p.Add($"Unknown time zone '{s.TimeZone}'.");
-            }
-        }
-        if (s.Calendar?.Hours is { Count: 2 } h && string.CompareOrdinal(h[0], h[1]) >= 0) p.Add("Working hours must end after they start.");
-        if (s.Defaults?.TaskDue is { } due && !IsoDuration.TryParse(due, out _)) p.Add($"'{due}' is not a duration.");
-        foreach (var c in s.Webhooks?.Connections ?? [])
-            if (!Uri.TryCreate(c.BaseUrl, UriKind.Absolute, out var u) || (u.Scheme != "https" && u.Scheme != "http")) p.Add($"Connection '{c.Key}' needs an http(s) address.");
-        return p;
     }
 }

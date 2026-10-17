@@ -156,4 +156,94 @@ public sealed class AuditFixTests(ITestOutputHelper output)
         Assert.Contains("maxChainDepth", b.Error);
         Assert.DoesNotContain(h.Store.All<InstanceRecord>("instances"), i => i.DefinitionKey == "ccc");
     }
+
+    // ── 4. Settings are validated on save and read leniently ──────────────
+
+    public static TheoryData<string> BadSettings() =>
+    [
+        """{ "version": 1, "calendar": { "hours": ["09:00", "5pm"] } }""",
+        """{ "version": 1, "calendar": { "hours": ["09:00"] } }""",
+        """{ "version": 1, "calendar": { "holidays": ["2026-02-30"] } }""",
+        """{ "version": 1, "calendar": { "days": ["monday"] } }""",
+        """{ "version": 1, "calendar": { "days": ["mon", "mon"] } }""",
+        """{ "version": 1, "defaults": { "maxChainDepth": 0 } }""",
+        """{ "version": 1, "defaults": { "maxChainDepth": 50 } }""",
+        """{ "version": 1, "defaults": { "forEachMax": 501 } }""",
+        """{ "version": 1, "defaults": { "concurrency": "whenever" } }""",
+        """{ "version": 1, "defaults": { "reminders": ["tomorrow"] } }""",
+        """{ "version": 1, "defaults": { "retry": { "max": 11 } } }""",
+        """{ "version": 1, "audit": { "retentionDays": { "step": 0 } } }""",
+        """{ "version": 1, "audit": { "maskedFields": ["applicantEmail"] } }""",
+        """{ "version": 1, "webhooks": { "allowedOrigins": ["https://api.example.com/path"] } }""",
+        """{ "version": 1, "webhooks": { "connections": [ { "key": "crm", "label": "CRM", "baseUrl": "https://crm.example.com", "auth": "secret" } ] } }""",
+        """{ "version": 1, "webhooks": { "connections": [ { "key": "crm", "label": "CRM", "baseUrl": "https://crm.example.com", "header": "X Bad" } ] } }""",
+    ];
+
+    [Theory]
+    [MemberData(nameof(BadSettings))]
+    public async Task Settings_with_a_bad_value_are_refused_on_save(string json)
+    {
+        var h = await HostAsync();
+        var e = await Assert.ThrowsAsync<WorkflowException>(() => h.Engine.SaveSettingsAsync(GlobalSettings.Parse(json), 0, Admin));
+        Assert.Equal("invalidSettings", e.Code);
+        Assert.Equal(0, (await h.Engine.GetSettingsAsync()).Revision);
+    }
+
+    [Fact]
+    public async Task Good_settings_still_save()
+    {
+        var h = await HostAsync();
+        var json = """
+        { "version": 1, "timeZone": "Europe/London", "calendar": { "days": ["mon", "tue"], "hours": ["08:30", "16:00"], "holidays": ["2026-12-25"] },
+          "defaults": { "retry": { "max": 3, "backoff": "exponential", "initial": "PT1M" }, "reminders": ["P1D"], "concurrency": "parallel", "maxChainDepth": 7, "forEachMax": 100 },
+          "webhooks": { "allowedOrigins": ["https://api.example.com", "http://localhost:8080"], "connections": [ { "key": "crm", "label": "CRM", "baseUrl": "https://crm.example.com/v1", "auth": "secret", "secretName": "crm", "header": "X-Api-Key" } ] },
+          "audit": { "retentionDays": { "step": 30 }, "maskedFields": ["application.notes", "input.reason"] }, "paused": [ { "entity": "document" } ] }
+        """;
+        Assert.Equal(1, await h.Engine.SaveSettingsAsync(GlobalSettings.Parse(json), 0, Admin));
+    }
+
+    [Fact]
+    public async Task Bad_calendar_values_already_stored_never_stop_the_engine()
+    {
+        var logged = new List<string>();
+        var h = await HostAsync(o => new WorkflowEngineOptions
+        {
+            Registry = o.Registry, Store = o.Store, Identity = o.Identity, Notifications = o.Notifications, Webhooks = o.Webhooks, Actions = o.Actions,
+            Time = o.Time, RecordLinkTemplate = o.RecordLinkTemplate, Logger = new ListLogger(logged),
+        });
+        // Written straight to the store, as an older engine (without the checks) would have saved it.
+        await using (var s = await h.Store.BeginAsync())
+        {
+            await s.SaveSettingsAsync(new SettingsRecord
+            {
+                Json = """{ "version": 1, "calendar": { "days": ["mon", "funday"], "hours": ["09:00", "5pm"], "holidays": ["2026-02-30", "2026-12-25"] } }""", Revision = 1,
+            });
+            await s.CommitAsync();
+        }
+        var (_, rev) = await h.Engine.GetSettingsAsync();
+        Assert.Equal(1, rev);
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_w", "key": "waiter", "kind": "automation", "title": "W", "entity": "application", "settings": { "calendar": "working" },
+          "trigger": { "type": "created" }, "steps": [ { "id": "w", "type": "wait", "until": { "type": "duration", "duration": "PT2H" } } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        Assert.Equal(InstanceStatus.Waiting, h.Store.All<InstanceRecord>("instances").Single(i => i.DefinitionKey == "waiter").Status);
+        Assert.Contains(logged, m => m.Contains("5pm"));
+        Assert.Contains(logged, m => m.Contains("2026-02-30"));
+        Assert.Contains(logged, m => m.Contains("funday"));
+        // The settings can be fixed.
+        Assert.Equal(2, await h.Engine.SaveSettingsAsync(new GlobalSettings(), rev, Admin));
+    }
+}
+
+/// <summary>Collects log messages for assertions.</summary>
+internal sealed class ListLogger(List<string> into) : Microsoft.Extensions.Logging.ILogger
+{
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+    public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        lock (into) into.Add(formatter(state, exception));
+    }
 }
