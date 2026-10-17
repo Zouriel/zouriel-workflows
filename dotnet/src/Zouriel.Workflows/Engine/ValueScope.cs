@@ -136,7 +136,7 @@ internal sealed class ValueScope : IValueContext
     {
         if (o is null) return null;
         if (o.Ref is not null) return await ResolveAsync(o.Ref, ct);
-        if (o.Calc is not null) await PrefetchAsync(CalcRefs(o.Calc), ct);
+        if (o.Calc is not null) await PrefetchAsync(Conditions.CalcRefs(o.Calc), ct);
         return Conditions.ResolveOperand(o, this);
     }
 
@@ -145,7 +145,4 @@ internal sealed class ValueScope : IValueContext
         await PrefetchAsync(c, ct);
         return Conditions.Evaluate(c, this);
     }
-
-    public static IEnumerable<string> CalcRefs(Calc c) =>
-        c.Args.SelectMany(a => a.Ref is not null ? [a.Ref] : a.Calc is not null ? CalcRefs(a.Calc) : []);
 }
