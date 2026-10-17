@@ -279,11 +279,10 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             if (q.Entity is not null && t.Entity != q.Entity) return false;
             if (q.EntityId is not null && t.EntityId != q.EntityId) return false;
             if (q.Statuses is not null && !q.Statuses.Contains(t.Status)) return false;
-            if (q.AssigneeId is not null || q.AssigneeAnyOf is not null)
+            if (q.AssigneeId is not null)
             {
                 var people = (Values.FromJson(t.Assignees) as List<object?> ?? []).Select(Values.Text).ToHashSet();
-                if (q.AssigneeId is not null && !people.Contains(q.AssigneeId)) return false;
-                if (q.AssigneeAnyOf is not null && !q.AssigneeAnyOf.Any(people.Contains)) return false;
+                if (!people.Contains(q.AssigneeId)) return false;
             }
             return true;
         });
@@ -334,11 +333,15 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             return Task.CompletedTask;
         }
 
-        public Task AddAuditAsync(AuditRecord a, CancellationToken ct = default) { Put("audit", a.Seq.ToString("D19", System.Globalization.CultureInfo.InvariantCulture), a); return Task.CompletedTask; }
+        public Task AddAuditAsync(AuditRecord a, CancellationToken ct = default) { Put("audit", AuditKey(a), a); return Task.CompletedTask; }
+
+        /// <summary>An audit row's key: each tenant has its own chain (and sequence numbers), so the tenant is part of it.</summary>
+        private static string AuditKey(AuditRecord a) => $"{a.Tenant}|{a.Seq.ToString("D19", System.Globalization.CultureInfo.InvariantCulture)}";
 
         public Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default)
         {
-            var rows = All<AuditRecord>("audit").Where(a =>
+            var tenant = q.Tenant ?? "";
+            var rows = All<AuditRecord>("audit").Where(a => (a.Tenant ?? "") == tenant &&
                 (q.Category is null || a.Category == q.Category) && (q.Action is null || a.Action == q.Action) && (q.Entity is null || a.Entity == q.Entity) &&
                 (q.EntityId is null || a.EntityId == q.EntityId) && (q.InstanceId is null || a.InstanceId == q.InstanceId || a.CorrelationId == q.InstanceId) &&
                 (q.DefinitionId is null || a.DefinitionId == q.DefinitionId) && (q.ActorId is null || a.ActorId == q.ActorId) &&
@@ -347,10 +350,11 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             return Task.FromResult<IReadOnlyList<AuditRecord>>(ordered.Take(q.Take).ToList());
         }
 
-        public Task<AuditPurgeResult> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default)
+        public Task<AuditPurgeResult> PurgeAuditAsync(string? tenant, string category, DateTimeOffset before, CancellationToken ct = default)
         {
-            var victims = All<AuditRecord>("audit").Where(a => a.Category == category && a.At < before).OrderBy(a => a.Seq).ToList();
-            foreach (var v in victims) Remove("audit", v.Seq.ToString("D19", System.Globalization.CultureInfo.InvariantCulture));
+            var key = tenant ?? "";
+            var victims = All<AuditRecord>("audit").Where(a => (a.Tenant ?? "") == key && a.Category == category && a.At < before).OrderBy(a => a.Seq).ToList();
+            foreach (var v in victims) Remove("audit", AuditKey(v));
             return Task.FromResult(new AuditPurgeResult(victims.Count, SeqRange.Compress(victims.Select(v => v.Seq))));
         }
 

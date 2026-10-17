@@ -438,9 +438,16 @@ public sealed partial class WorkflowEngine
 
     // ── Audit ─────────────────────────────────────────────────────────────
 
-    /// <summary>Audit entries matching the query (newest first, or oldest first from <see cref="AuditQuery.FromSeq"/>). Entries are stored masked.</summary>
+    /// <summary>
+    /// Audit entries matching the query (newest first, or oldest first from <see cref="AuditQuery.FromSeq"/>). Entries are
+    /// stored masked. Only this engine's audit chain is read: <see cref="AuditQuery.Tenant"/> is always set to
+    /// <see cref="WorkflowEngineOptions.Tenant"/>.
+    /// </summary>
     public Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default) =>
-        RunAsync(u => u.S.QueryAuditAsync(q, ct), ct);
+        RunAsync(u => u.S.QueryAuditAsync(OwnAudit(q), ct), ct);
+
+    /// <summary>The query restricted to this engine's audit chain.</summary>
+    internal AuditQuery OwnAudit(AuditQuery q) => q.Tenant == Options.Tenant ? q : q with { Tenant = Options.Tenant };
 
     private const int AuditPage = 1000;
 
@@ -453,7 +460,7 @@ public sealed partial class WorkflowEngine
         var purged = new List<SeqRange>();
         for (long next = 1; ;)
         {
-            var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { Category = "audit", Action = "purged", FromSeq = next, Take = AuditPage }, ct), ct);
+            var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { Tenant = Options.Tenant, Category = "audit", Action = "purged", FromSeq = next, Take = AuditPage }, ct), ct);
             foreach (var p in page) purged.AddRange(PurgedRanges(p));
             if (page.Count < AuditPage) break;
             next = page[^1].Seq + 1;
@@ -461,7 +468,7 @@ public sealed partial class WorkflowEngine
         var verifier = new AuditChainVerifier(purged, fromSeq);
         for (var next = fromSeq; ;)
         {
-            var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { FromSeq = next, Take = AuditPage }, ct), ct);
+            var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { Tenant = Options.Tenant, FromSeq = next, Take = AuditPage }, ct), ct);
             foreach (var e in page)
                 if (!verifier.Add(e)) return verifier.Result();
             if (page.Count < AuditPage) break;
@@ -490,7 +497,7 @@ public sealed partial class WorkflowEngine
             {
                 if (days < 1 || category == "audit") continue;
                 var before = u.Now.AddDays(-days);
-                var result = await u.S.PurgeAuditAsync(category, before, ct);
+                var result = await u.S.PurgeAuditAsync(Options.Tenant, category, before, ct);
                 if (result.Count == 0) continue;
                 total += result.Count;
                 await u.AuditAsync(new AuditEntry

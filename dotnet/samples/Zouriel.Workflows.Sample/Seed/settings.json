@@ -1,6 +1,6 @@
 { "version": 1, "timeZone": "UTC",
   "calendar": { "days": ["mon", "tue", "wed", "thu", "fri"], "hours": ["09:00", "17:00"], "holidays": [] },
-  "defaults": { "taskDue": "P3D", "reminders": ["P1D"], "concurrency": "perRecordSerial", "maxChainDepth": 5, "forEachMax": 200,
+  "defaults": { "reminders": ["P1D"], "concurrency": "perRecordSerial", "maxChainDepth": 5, "forEachMax": 200,
                 "retry": { "max": 2, "backoff": "exponential", "initial": "PT1M" } },
   "people": { "delegation": true },
   "channels": { "email": { "enabled": true, "footer": "— Scholarship office" }, "inApp": { "enabled": true } },

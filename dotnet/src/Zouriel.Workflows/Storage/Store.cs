@@ -69,8 +69,6 @@ public sealed class TaskQuery
 {
     /// <summary>Only tasks this user is assigned to.</summary>
     public string? AssigneeId { get; init; }
-    /// <summary>Only tasks assigned to any of these users.</summary>
-    public IReadOnlyList<string>? AssigneeAnyOf { get; init; }
     /// <summary>Only tasks of this instance.</summary>
     public string? InstanceId { get; init; }
     /// <summary>Only tasks about records of this entity.</summary>
@@ -86,8 +84,13 @@ public sealed class TaskQuery
 }
 
 /// <summary>Filters for reading the audit log.</summary>
-public sealed class AuditQuery
+public sealed record AuditQuery
 {
+    /// <summary>
+    /// The audit chain to read (<see cref="AuditRecord.Tenant"/>; null = the default chain). Stores return only this
+    /// chain's entries, so apps sharing one audit table never see each other's. The engine sets it to its own tenant.
+    /// </summary>
+    public string? Tenant { get; init; }
     /// <summary>Only this category.</summary>
     public string? Category { get; init; }
     /// <summary>Only this action.</summary>
@@ -239,8 +242,12 @@ public interface IWorkflowSession : IAsyncDisposable
     Task AddAuditAsync(AuditRecord a, CancellationToken ct = default);
     /// <summary>Audit entries matching a query (newest first, or oldest first with <c>FromSeq</c>).</summary>
     Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default);
-    /// <summary>Deletes the entries of a category older than <paramref name="before"/> and reports exactly which sequence numbers went.</summary>
-    Task<AuditPurgeResult> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default);
+    /// <summary>
+    /// Deletes the entries of a category older than <paramref name="before"/> in the audit chain of
+    /// <paramref name="tenant"/> (null = the default chain; other chains are never touched) and reports exactly which
+    /// sequence numbers went.
+    /// </summary>
+    Task<AuditPurgeResult> PurgeAuditAsync(string? tenant, string category, DateTimeOffset before, CancellationToken ct = default);
 
     /// <summary>Deletes housekeeping rows: processed outbox rows and trigger claims older than the given instants.</summary>
     Task<int> CleanupAsync(DateTimeOffset processedOutboxBefore, DateTimeOffset claimsBefore, CancellationToken ct = default);

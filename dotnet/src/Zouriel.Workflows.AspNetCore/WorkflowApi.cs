@@ -283,7 +283,8 @@ public static class WorkflowApi
         {
             var body = await ReadBodyAsync<SettingsBody>(http, o.MaxBodyBytes, ct);
             return Results.Ok(new RevisionResponse(await e.SaveSettingsAsync(GlobalSettings.Parse(body.Settings?.ToJsonString()), body.Revision, Actor(http), ct)));
-        }).Accepts<SettingsBody>(Json).Produces<RevisionResponse>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.SettingsPolicy);
+        }).Accepts<SettingsBody>(Json).Produces<RevisionResponse>().Produces<WorkflowError>(StatusCodes.Status400BadRequest)
+            .Produces<WorkflowError>(StatusCodes.Status409Conflict), o.SettingsPolicy);
         Secure(g.MapGet("/triggers", (WorkflowEngine e, CancellationToken ct) => e.ListTriggersAsync(ct)), o.ViewPolicy);
         Secure(g.MapGet("/directory/users", async (string? q, int? take, IWorkflowIdentity identity, CancellationToken ct) =>
             Results.Ok(await identity.SearchUsersAsync(q, Math.Clamp(take ?? 20, 1, 100), ct))).Produces<IReadOnlyList<WorkflowUser>>(), o.ViewPolicy);
@@ -733,6 +734,10 @@ public static class WorkflowApi
             "notFound" or "noRecord" or "definitionNotFound" => 404,
             "notInIncident" or "alreadyRunning" or "alreadyAssigned" or "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" or "resetChanged" or "wrongLifecycle" => 409,
             "tooLarge" => 413,
+            // Refused input: settings that fail validation, a value that is not one of a field's options, and the
+            // run-time checks of steps (a webhook header or method the engine will not send, sub-workflows nested past
+            // maxChainDepth) when they surface from a request (a transition or start that runs the step at once).
+            "invalidSettings" or "unknownValue" or "badHeader" or "badMethod" or "subWorkflowDepth" => 400,
             _ => 400,
         };
         return Error(e.Code, e.Message, status, e.Details);

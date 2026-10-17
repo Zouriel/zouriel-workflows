@@ -50,6 +50,17 @@ public sealed class StampThenFail(AppDb db) : IWorkflowAction
     }
 }
 
+/// <summary>An action that changes a watched field on the app's DbContext and leaves saving it to the unit of work.</summary>
+public sealed class BumpAmountUnsaved(AppDb db) : IWorkflowAction
+{
+    public async Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
+    {
+        var a = await db.Applications.FindAsync([int.Parse(context.EntityId!, System.Globalization.CultureInfo.InvariantCulture)], ct);
+        a!.Amount += 1;
+        return new Dictionary<string, object?>();
+    }
+}
+
 /// <summary>A service provider wired like a real app: AppDb with the workflow tables and interceptor.</summary>
 public sealed class TestApp : IAsyncDisposable
 {
@@ -91,6 +102,7 @@ public sealed class TestApp : IAsyncDisposable
             .Entity<Receipt>("receipt", e => e.Field(r => r.Text, f => f.Settable()))
             .Entity<Ghost>("ghost", e => e.Field(g => g.Name, f => f.Settable()))
             .Action<StampThenFail>("stampThenFail", a => a.For("application"))
+            .Action<BumpAmountUnsaved>("bumpUnsaved", a => a.For("application"))
             .Action<StampNotes>("stamp", a => a.For("application").Input("text", "Text", required: true).Output("length", "Length", "number"))
             .Role("reviewer", "Reviewer"));
         Services = services.BuildServiceProvider();

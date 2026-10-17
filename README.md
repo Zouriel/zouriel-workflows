@@ -59,16 +59,35 @@ Targets .NET 8 and .NET 10; tested on SQLite and PostgreSQL.
 
 #### Upgrading: database migration
 
-The workflow tables now carry a unique filtered index, `IX_wf_instances_live_record` on
-`wf_instances (definition_id, entity, entity_id)` where `kind = 'record'` and `status` is not
-`completed`, `failed` or `cancelled`: the database refuses a second live lifecycle instance of one
-workflow for one record, even when two units race to create it (the loser is retried). Add a migration
-after upgrading (`dotnet ef migrations add WorkflowLiveRecordIndex`). If old data already holds
-duplicates, the migration fails: cancel the extra live instances first. On a provider without filtered
-indexes, turn it off with `modelBuilder.AddWorkflows(o => o.UniqueLiveRecordInstances = false)`.
+This version changes the workflow tables. After upgrading, add a migration
+(`dotnet ef migrations add WorkflowsUpgrade`) and apply it. It adds:
 
-With `WorkflowEngineSettings.Tenant` set, the EF store reads, verifies and purges only that tenant's
-audit chain; apps sharing one audit table no longer see or break each other's entries.
+| Table | Change |
+| --- | --- |
+| `wf_bookmarks` | `attempts` (int, not null, default 0) and `error` (text, null): failed timer firings, backoff and parking. |
+| `wf_outbox` | `record_key` (text, null), and an index on `(record_key, processed_at, created_at)`: one record's events are processed in the order they were written. Outbox ids are now 32-character time-ordered strings; old ids still work. |
+| `wf_instances` | `live_key` (text, null), and a unique filtered index `IX_wf_instances_live_key` on it where it is not null. |
+
+`live_key` is how the database itself refuses a second live lifecycle instance of one workflow for one
+record (`record:DEFINITION:ENTITY:ID`, held until the instance is cancelled) and a second running
+automation of a `perRecordSerial` or `skipIfRunning` workflow for one record (`serial:DEFINITION:ENTITY:ID`,
+held until it finishes), even when two units race: the loser fails on the index and is retried. Rows
+written before the upgrade have no key, so they are not protected until they finish; to protect live
+lifecycle instances at once, fill their keys in the migration (cancel any duplicates first, or the
+statement fails on the index):
+
+```sql
+UPDATE wf_instances SET live_key = 'record:' || definition_id || ':' || entity || ':' || entity_id
+WHERE kind = 'record' AND status <> 'cancelled';
+```
+
+(SQL Server: use `+` for `||`.) The filter needs filtered (partial) indexes: PostgreSQL, SQL Server and
+SQLite have them.
+
+With `WorkflowEngineSettings.Tenant` set, the engine reads, verifies and purges only that tenant's
+audit chain (`AuditQuery.Tenant`, the tenant argument of `IWorkflowSession.PurgeAuditAsync`), in the EF
+and in-memory stores alike; apps sharing one audit table no longer see or break each other's entries.
+Custom stores must filter by it.
 
 ### Run the sample
 

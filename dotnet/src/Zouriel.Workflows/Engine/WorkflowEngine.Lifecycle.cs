@@ -411,7 +411,7 @@ public sealed partial class WorkflowEngine
                 var entered = record.StateEnteredAt ?? u.Now;
                 var slaRan = (await u.S.QueryInstancesAsync(new InstanceQuery { ParentId = record.Id, Kinds = [InstanceKinds.Run], Take = 1000 }, ct))
                     .Any(r => r.Reason == BookmarkPurposes.SlaPrefix + state.Id && r.StartedAt >= entered)
-                    || (await u.S.QueryAuditAsync(new AuditQuery { InstanceId = record.Id, Category = "lifecycle", Action = "slaBreached", From = entered, Take = 1 }, ct)).Count > 0;
+                    || (await u.S.QueryAuditAsync(new AuditQuery { Tenant = Options.Tenant, InstanceId = record.Id, Category = "lifecycle", Action = "slaBreached", From = entered, Take = 1 }, ct)).Count > 0;
                 await PlanStateTimersAsync(u, c, record, state, ct, entered, withSla: !slaRan);
             }
             if (page.Count < 500) return;

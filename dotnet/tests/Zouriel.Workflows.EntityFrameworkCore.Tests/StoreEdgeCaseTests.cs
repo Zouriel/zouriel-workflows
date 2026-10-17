@@ -110,7 +110,6 @@ public abstract class StoreEdgeCaseTests : IAsyncLifetime
             {
                 var mine = await s.QueryTasksAsync(new TaskQuery { AssigneeId = who });
                 Assert.Equal(who, Assert.Single(mine).Title);
-                Assert.Single(await s.QueryTasksAsync(new TaskQuery { AssigneeAnyOf = [who, "nobody"] }));
             }
         }
     }
@@ -141,21 +140,22 @@ public abstract class StoreEdgeCaseTests : IAsyncLifetime
         Assert.True(checkB.Valid, checkB.Problem);
     }
 
-    private static InstanceRecord RecordInstance(string id, string status) => new()
+    private static InstanceRecord RecordInstance(string id, string status, string entityId = "7") => new()
     {
-        Id = id, DefinitionId = "lc", DefinitionKey = "review", Version = 1, Kind = InstanceKinds.Record, Entity = "application", EntityId = "7",
+        Id = id, DefinitionId = "lc", DefinitionKey = "review", Version = 1, Kind = InstanceKinds.Record, Entity = "application", EntityId = entityId,
         Status = status, StartedAt = DateTimeOffset.UtcNow,
+        LiveKey = status == InstanceStatus.Cancelled ? null : InstanceRecord.RecordKey("lc", "application", entityId),
     };
 
     [Fact]
-    public async Task The_database_refuses_a_second_live_record_instance_of_one_workflow_for_one_record()
+    public async Task The_database_refuses_a_second_instance_with_the_same_live_key()
     {
         var store = App.Engine.Options.Store;
         await using (var s = await store.BeginAsync())
         {
-            // Finished ones do not count: a record may have had any number of earlier instances.
+            // Rows without a key (cancelled instances, parallel runs) never collide, however many there are.
             await s.AddInstanceAsync(RecordInstance("old1", InstanceStatus.Cancelled));
-            await s.AddInstanceAsync(RecordInstance("old2", InstanceStatus.Completed));
+            await s.AddInstanceAsync(RecordInstance("old2", InstanceStatus.Cancelled));
             await s.AddInstanceAsync(RecordInstance("live", InstanceStatus.Active));
             await s.CommitAsync();
         }
@@ -167,15 +167,134 @@ public abstract class StoreEdgeCaseTests : IAsyncLifetime
         }
         await using (var s = await store.BeginAsync())
         {
-            // Another record, or an automation run of the same record, is fine.
-            var other = RecordInstance("other", InstanceStatus.Active);
-            other.EntityId = "8";
-            await s.AddInstanceAsync(other);
+            // A serial automation run of the same record has its own key; so does another record.
+            await s.AddInstanceAsync(RecordInstance("other", InstanceStatus.Active, entityId: "8"));
             var run = RecordInstance("run", InstanceStatus.Running);
-            run.Kind = InstanceKinds.Automation;
+            (run.Kind, run.LiveKey) = (InstanceKinds.Automation, InstanceRecord.SerialKey("lc", "application", "7"));
             await s.AddInstanceAsync(run);
+            var parallel = RecordInstance("parallel", InstanceStatus.Running);
+            (parallel.Kind, parallel.LiveKey) = (InstanceKinds.Automation, null);
+            await s.AddInstanceAsync(parallel);
             await s.CommitAsync();
         }
+        await using (var s = await store.BeginAsync())
+        {
+            // Once the live one lets its key go (cancelled), a new one may take it.
+            var live = (await s.GetInstanceAsync("live"))!;
+            (live.Status, live.LiveKey) = (InstanceStatus.Cancelled, null);
+            await s.UpdateInstanceAsync(live);
+            await s.AddInstanceAsync(RecordInstance("next", InstanceStatus.Active));
+            await s.CommitAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Two_units_racing_to_adopt_one_record_leave_one_record_instance()
+    {
+        var id = await NewApplicationAsync(); // exists before the lifecycle: its instance is made on first use
+        await App.PublishAsync("""
+        { "specVersion": 1, "id": "lc1", "key": "life", "kind": "lifecycle", "title": "Life", "entity": "application",
+          "lifecycle": { "field": "status", "states": [
+              { "id": "d", "key": "Draft", "label": "Draft", "category": "initial" },
+              { "id": "s", "key": "Submitted", "label": "Submitted", "category": "terminal" } ],
+            "transitions": [ { "id": "t1", "key": "submit", "label": "Submit", "from": ["d"], "to": "s", "who": [ { "field": "entity.applicant" } ] } ] } }
+        """);
+        var ali = WorkflowActor.User("ali", "Ali");
+        var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(async () =>
+        {
+            try
+            {
+                await App.Engine.ApplyTransitionAsync("application", id.ToString(), "submit", null, ali);
+                return "moved";
+            }
+            catch (WorkflowException e)
+            {
+                return e.Code; // the losers find the record already moved
+            }
+        })));
+        Assert.Contains("moved", results);
+        var live = await App.WithDbAsync(db => db.Set<InstanceRecord>().AsNoTracking().Where(i => i.Kind == InstanceKinds.Record).ToListAsync());
+        Assert.Equal(InstanceRecord.RecordKey("lc1", "application", id.ToString()), Assert.Single(live).LiveKey);
+    }
+
+    private OutboxRecord Row(string id, string? key, DateTimeOffset at, DateTimeOffset? processed = null, DateTimeOffset? locked = null) =>
+        new() { Id = id, Kind = OutboxKinds.Change, Payload = "{}", RecordKey = key, CreatedAt = at, ProcessedAt = processed, LockedUntil = locked };
+
+    [Fact]
+    public async Task An_outbox_row_waits_for_older_pending_rows_of_its_record_whatever_their_lock()
+    {
+        var store = App.Engine.Options.Store;
+        var t0 = App.Clock.GetUtcNow();
+        var rows = new[]
+        {
+            Row("0000000000001aaaa", "application:1", t0.AddSeconds(-5), processed: t0), // done: does not hold anything up
+            Row("0000000000002aaaa", "application:1", t0, locked: t0.AddMinutes(10)),   // pending and locked by another worker
+            Row("0000000000002bbbb", "application:1", t0),                               // same instant, larger id
+            Row("0000000000003aaaa", "application:1", t0.AddSeconds(1)),
+            Row("0000000000003bbbb", "application:2", t0.AddSeconds(1)),                 // another record
+            Row("0000000000003cccc", null, t0.AddSeconds(1)),                            // not about a record
+        };
+        await using (var s = await store.BeginAsync())
+        {
+            foreach (var r in rows) await s.AddOutboxAsync(r);
+            await s.CommitAsync();
+        }
+        await using (var s = await store.BeginAsync())
+        {
+            Assert.False(await s.HasEarlierPendingOutboxAsync(rows[1]));
+            Assert.True(await s.HasEarlierPendingOutboxAsync(rows[2]));
+            Assert.True(await s.HasEarlierPendingOutboxAsync(rows[3]));
+            Assert.False(await s.HasEarlierPendingOutboxAsync(rows[4]));
+            Assert.False(await s.HasEarlierPendingOutboxAsync(rows[5]));
+            // Claims come oldest first, the same instant by id.
+            var claimed = await s.ClaimOutboxAsync(t0.AddSeconds(2), t0.AddMinutes(1), 10);
+            Assert.Equal(["0000000000002bbbb", "0000000000003aaaa", "0000000000003bbbb", "0000000000003cccc"], claimed.Select(r => r.Id));
+            await s.CommitAsync();
+        }
+    }
+
+    [Fact]
+    public async Task A_failed_timers_attempts_error_and_parking_are_saved()
+    {
+        var store = App.Engine.Options.Store;
+        await using (var s = await store.BeginAsync())
+        {
+            await s.AddBookmarkAsync(new BookmarkRecord { Id = "b1", Kind = BookmarkKinds.Timer, Purpose = "sla", DueAt = App.Clock.GetUtcNow(), CreatedAt = App.Clock.GetUtcNow() });
+            await s.CommitAsync();
+        }
+        await using (var s = await store.BeginAsync())
+        {
+            var b = (await s.GetBookmarkAsync("b1"))!;
+            (b.Attempts, b.Error, b.LockedUntil) = (10, "boom", DateTimeOffset.MaxValue);
+            await s.UpdateBookmarkAsync(b);
+            await s.CommitAsync();
+        }
+        var saved = await App.WithDbAsync(db => db.Set<BookmarkRecord>().AsNoTracking().SingleAsync(b => b.Id == "b1"));
+        Assert.Equal((10, "boom"), (saved.Attempts, saved.Error));
+        Assert.True(saved.LockedUntil > App.Clock.GetUtcNow().AddYears(1000));
+        // Parked: never claimed again, however late it gets.
+        await using (var s = await store.BeginAsync())
+            Assert.Empty(await s.ClaimDueBookmarksAsync(App.Clock.GetUtcNow().AddYears(100), App.Clock.GetUtcNow().AddYears(100).AddMinutes(1), 10));
+    }
+
+    [Fact]
+    public async Task Record_changes_an_action_leaves_unsaved_are_saved_as_the_workflows()
+    {
+        await App.PublishAsync("""
+        { "specVersion": 1, "id": "wf_bump", "key": "bump", "kind": "automation", "title": "Bump", "entity": "application",
+          "trigger": { "type": "fieldChanged", "field": "amount" },
+          "steps": [ { "id": "a", "type": "action", "action": "bumpUnsaved", "input": {} } ] }
+        """);
+        var id = await NewApplicationAsync();
+        await App.WithDbAsync(async db => { (await db.Applications.FindAsync(id))!.Amount = 10m; await db.SaveChangesAsync(); });
+        await App.SettleAsync();
+        Assert.Equal(11m, await App.WithDbAsync(db => db.Applications.Where(a => a.Id == id).Select(a => a.Amount).FirstAsync()));
+        // Saved inside the action's write scope: the workflow's own change (depth 1), so it does not start itself again.
+        Assert.Equal(1, await App.WithDbAsync(db => db.Set<InstanceRecord>().CountAsync(i => i.DefinitionKey == "bump")));
+        var changes = await App.WithDbAsync(db => db.Set<OutboxRecord>().AsNoTracking().Where(o => o.Kind == OutboxKinds.Change).ToListAsync());
+        var bump = changes.Select(o => Changes.EntityChange.FromJson(o.Payload)).Single(c => c.Fields.TryGetValue("amount", out var f) && Equals(f.To, 11m) || (c.Fields.TryGetValue("amount", out var g) && Equals(g.To, 11.0)));
+        Assert.Equal(("wf_bump", 1, "workflow"), (bump.CausationDefinitionId, bump.Depth, bump.ActorType));
+        Assert.All(changes, o => Assert.Equal(OutboxRecord.KeyOf("application", id.ToString()), o.RecordKey));
     }
 
     private async Task<AppDb> CancellableDbAsync(CancelOnce cancel)

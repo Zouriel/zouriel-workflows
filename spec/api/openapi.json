@@ -68,6 +68,16 @@
               }
             }
           },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
+          },
           "409": {
             "description": "Conflict",
             "content": {
@@ -3242,6 +3252,16 @@
             ],
             "description": "Lifecycles: how many record instances moved from earlier versions to the new one.",
             "format": "int32"
+          },
+          "recordsKept": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Lifecycles: how many record instances stayed on an older version because its states or transitions differ from\nthe new one (moving them could leave them in a state that version does not have); migrate them explicitly.",
+            "format": "int32",
+            "default": 0
           },
           "id": {
             "type": "string",

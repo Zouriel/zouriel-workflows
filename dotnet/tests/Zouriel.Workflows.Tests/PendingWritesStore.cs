@@ -84,7 +84,7 @@ internal sealed class PendingSession(IWorkflowSession inner) : IWorkflowSession
     public Task SetAuditHeadAsync(string? tenant, AuditHead head, CancellationToken ct = default) => inner.SetAuditHeadAsync(tenant, head, ct);
     public Task AddAuditAsync(AuditRecord a, CancellationToken ct = default) => inner.AddAuditAsync(a, ct);
     public Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default) => inner.QueryAuditAsync(q, ct);
-    public Task<AuditPurgeResult> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default) => inner.PurgeAuditAsync(category, before, ct);
+    public Task<AuditPurgeResult> PurgeAuditAsync(string? tenant, string category, DateTimeOffset before, CancellationToken ct = default) => inner.PurgeAuditAsync(tenant, category, before, ct);
     public Task<int> CleanupAsync(DateTimeOffset processedOutboxBefore, DateTimeOffset claimsBefore, CancellationToken ct = default) => inner.CleanupAsync(processedOutboxBefore, claimsBefore, ct);
     public Task<bool> CreateSavepointAsync(string name, CancellationToken ct = default) => inner.CreateSavepointAsync(name, ct);
     public Task RollbackToSavepointAsync(string name, CancellationToken ct = default) => inner.RollbackToSavepointAsync(name, ct);
