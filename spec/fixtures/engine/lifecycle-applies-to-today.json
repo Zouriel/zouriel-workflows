@@ -1,0 +1,163 @@
+{
+ "name": "Lifecycle applies to, today: the change hook reads \"today\" in the settings' time zone like processing does, so a new record's initial state comes from the lifecycle it gets",
+ "now": "2026-10-19T12:00:00Z",
+ "settings": {
+  "version": 1,
+  "timeZone": "Pacific/Kiritimati"
+ },
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": []
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_due",
+   "key": "dueToday",
+   "kind": "lifecycle",
+   "title": "Due today",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "enforce",
+    "appliesWhen": {
+     "match": "all",
+     "conditions": [
+      {
+       "ref": "entity.deadline",
+       "op": "eq",
+       "value": {
+        "today": 0
+       }
+      }
+     ]
+    },
+    "states": [
+     {
+      "id": "d_d",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "d_r",
+      "key": "underReview",
+      "label": "Review",
+      "category": "active"
+     },
+     {
+      "id": "d_ok",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "d_t1",
+      "key": "review",
+      "label": "Review",
+      "from": [
+       "d_d"
+      ],
+      "to": "d_r",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     },
+     {
+      "id": "d_t2",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "d_r"
+      ],
+      "to": "d_ok",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "specVersion": 1,
+   "id": "lc_any",
+   "key": "generalApplication",
+   "kind": "lifecycle",
+   "title": "General",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "observe",
+    "states": [
+     {
+      "id": "g_s",
+      "key": "submitted",
+      "label": "Submitted",
+      "category": "initial"
+     },
+     {
+      "id": "g_ok",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "g_t",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "g_s"
+      ],
+      "to": "g_ok",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "Due",
+     "deadline": "2026-10-20"
+    }
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "draft"
+     }
+    },
+    "instanceKinds": [
+     "record"
+    ],
+    "instances": [
+     {
+      "definition": "dueToday",
+      "record": "a1",
+      "state": "draft",
+      "status": "active"
+     }
+    ]
+   }
+  }
+ ]
+}

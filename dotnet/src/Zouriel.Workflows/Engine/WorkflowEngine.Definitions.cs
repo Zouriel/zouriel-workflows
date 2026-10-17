@@ -375,7 +375,8 @@ public sealed partial class WorkflowEngine
         var trig = def.Trigger;
         // Changes are compared with the first publish, not this version's: events still in the outbox when a
         // new version is published belong to the workflow and must not be dropped (spec §5).
-        var firstPublished = version == 1 ? u.Now : (await u.S.GetVersionAsync(rec.Id, 1, ct))?.PublishedAt ?? u.Now;
+        // Restoring version 1 keeps its first publish time too (publish order, spec §6).
+        var firstPublished = (await u.S.GetVersionAsync(rec.Id, 1, ct))?.PublishedAt ?? u.Now;
         await u.S.ReplaceTriggersAsync(rec.Id, TriggerRows(def, rec.Id, rec.Key, version, firstPublished), ct);
 
         // Re-plan schedule and date timers for the new version.
