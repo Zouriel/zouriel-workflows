@@ -521,6 +521,10 @@ public sealed partial class WorkflowEngine
         var scope = x.Scope(t);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var path = wh.Path is null ? "" : await RenderAsync(scope, wh.Path, ct, Uri.EscapeDataString);
+        // "." and ".." segments (also percent-encoded) would climb out of the connection's base path once resolved.
+        var pathOnly = path.Split('?', '#')[0];
+        if (pathOnly.Split('/').Any(seg => Uri.UnescapeDataString(seg) is "." or ".."))
+            throw new WorkflowException("webhookOriginNotAllowed", "The webhook path cannot contain '.' or '..' segments.");
         string url;
         if (wh.Connection is not null)
         {
@@ -532,7 +536,10 @@ public sealed partial class WorkflowEngine
                 var secret = await Options.Secrets.GetSecretAsync(conn.SecretName, ct) ?? throw new WorkflowException("missingSecret", $"The secret for '{conn.Label}' is not set up.");
                 headers[conn.Header ?? "Authorization"] = conn.Header is null ? $"Bearer {secret}" : secret;
             }
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var connUri) || connUri.Authority != new Uri(conn.BaseUrl).Authority)
+            var baseUri = new Uri(conn.BaseUrl);
+            var basePath = baseUri.AbsolutePath.TrimEnd('/') + "/";
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var connUri) || connUri.Authority != baseUri.Authority || connUri.Scheme != baseUri.Scheme
+                || !(connUri.AbsolutePath + "/").StartsWith(basePath, StringComparison.Ordinal))
                 throw new WorkflowException("webhookOriginNotAllowed", "The webhook path must stay on the connection's address.");
         }
         else
@@ -544,7 +551,14 @@ public sealed partial class WorkflowEngine
             if (x.U.Settings.Webhooks?.AllowedOrigins?.Contains(origin, StringComparer.OrdinalIgnoreCase) != true)
                 throw new WorkflowException("webhookOriginNotAllowed", $"{origin} is not an allowed address.");
         }
-        foreach (var (k, v) in wh.Headers ?? []) headers[k] = await RenderAsync(scope, v, ct);
+        foreach (var (k, v) in wh.Headers ?? [])
+        {
+            var value = await RenderAsync(scope, v, ct);
+            // A line break in a value would add headers of its own (values come from records).
+            if (!HttpWebhookClient.IsValidHeader(k, value))
+                throw new WorkflowException("badHeader", $"The header '{k}' cannot be sent: its name must be a plain token and its value cannot contain line breaks or other control characters.");
+            headers[k] = value;
+        }
         var body = wh.Body is null ? null : (await SubstituteAsync(scope, wh.Body.DeepClone(), ct))?.ToJsonString();
         return (url, headers, body);
     }
@@ -776,7 +790,7 @@ public sealed partial class WorkflowEngine
         x.U.Log?.Add("step", "failed", step.Id, message);
 
         var retry = step.Retry ?? (step is ActionStep or WebhookStep or NotifyStep or SubWorkflowStep ? x.U.Settings.Defaults?.Retry : null);
-        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" };
+        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" or "badHeader" };
         if (retry is { Max: > 0 } && attempt <= retry.Max && retryable)
         {
             var initial = retry.Initial is null ? TimeSpan.FromMinutes(1) : IsoDuration.Parse(retry.Initial).Approximate;

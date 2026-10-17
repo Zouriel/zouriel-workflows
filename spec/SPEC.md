@@ -343,7 +343,13 @@ never as anonymous writes when the unit commits.
 commit and is retried by the outbox (backing off up to an hour, parked for an admin after 10
 attempts). A step's `retry` and `onError` never apply to delivery, so lint warns about them on a
 `notify` step (`notifyDelivery`). Webhook `path` templates URL-encode the values they insert, so a
-value cannot add path segments, a query or another host; webhooks do not follow redirects.
+value cannot add path segments, a query or another host; a path with a `.` or `..` segment (also
+percent-encoded) is refused (`webhookOriginNotAllowed`), and with a connection the final address must
+stay under the connection's base path. Header names must be HTTP tokens and rendered values may not
+contain control characters (a line break would add a header): such a step fails with `badHeader`
+(never retried). Webhooks do not follow redirects, use no proxy, and never connect to loopback,
+private, link-local or other local addresses, IPv6 forms that carry such an IPv4 address (mapped,
+IPv4-compatible, NAT64, 6to4) and Teredo included.
 
 | Type | Shape | Outputs |
 |---|---|---|

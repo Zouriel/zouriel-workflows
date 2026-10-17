@@ -504,6 +504,52 @@ public sealed class AuditFixTests3(ITestOutputHelper output)
     }
 }
 
+/// <summary>Webhook client hardening from the final audit.</summary>
+public sealed class WebhookClientAuditTests
+{
+    [Theory]
+    [InlineData("64:ff9b::7f00:1", true)]          // NAT64 of 127.0.0.1
+    [InlineData("64:ff9b::a00:1", true)]           // NAT64 of 10.0.0.1
+    [InlineData("64:ff9b:1::c0a8:101", true)]      // local-use NAT64 of 192.168.1.1
+    [InlineData("2002:a9fe:a9fe::1", true)]        // 6to4 of 169.254.169.254
+    [InlineData("2002:c0a8:101::1", true)]         // 6to4 of 192.168.1.1
+    [InlineData("::7f00:1", true)]                 // IPv4-compatible 127.0.0.1
+    [InlineData("::ffff:0:a00:1", true)]           // IPv4-translated 10.0.0.1
+    [InlineData("2001:0:4136:e378:8000:63bf:3fff:fdd2", true)] // Teredo
+    [InlineData("64:ff9b::808:808", false)]        // NAT64 of 8.8.8.8
+    [InlineData("2002:808:808::1", false)]         // 6to4 of 8.8.8.8
+    [InlineData("2606:4700:4700::1111", false)]
+    [InlineData("8.8.8.8", false)]
+    [InlineData("::1", true)]
+    public void Ipv6_forms_that_carry_an_ipv4_address_are_judged_by_it(string address, bool isPrivate) =>
+        Assert.Equal(isPrivate, HttpWebhookClient.IsPrivate(System.Net.IPAddress.Parse(address)));
+
+    [Fact]
+    public void The_guarded_handler_uses_no_proxy() => Assert.False(HttpWebhookClient.CreateHandler(new HttpWebhookClientOptions()).UseProxy);
+
+    [Theory]
+    [InlineData("X-Title", "a\r\nX-Admin: yes", false)]
+    [InlineData("X-Title", "a\nb", false)]
+    [InlineData("X Title", "a", false)]
+    [InlineData("X-Title:", "a", false)]
+    [InlineData("X-Title", "plain value\twith tab", true)]
+    public void Header_names_and_values_are_checked(string name, string value, bool ok) => Assert.Equal(ok, HttpWebhookClient.IsValidHeader(name, value));
+
+    [Fact]
+    public async Task The_client_refuses_to_send_a_header_with_a_line_break()
+    {
+        using var client = new HttpWebhookClient(new HttpClient(new NeverHandler()));
+        await Assert.ThrowsAsync<ArgumentException>(() => client.SendAsync(new WebhookRequest("POST", "https://example.com/x",
+            new Dictionary<string, string> { ["X-Title"] = "a\r\nX-Admin: yes" }, null, "k", null)));
+    }
+
+    private sealed class NeverHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Nothing may be sent.");
+    }
+}
+
 /// <summary>Collects log messages for assertions.</summary>
 internal sealed class ListLogger(List<string> into) : Microsoft.Extensions.Logging.ILogger
 {
