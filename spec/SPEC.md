@@ -529,7 +529,7 @@ engine from working or the settings from being fixed.
   re-indexes its triggers with its original first-publish time.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
   produce the same codes for the same definition. Among them: a webhook `method` must be one of `GET`,
-  `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS` in capitals (`badMethod`, also refused at run
+  `POST`, `PUT`, `PATCH`, `DELETE` in capitals (`badMethod`, also refused at run
   time); `subWorkflowCycle` (§5); `renamedInUse` (§1) needs the engine's records, so only engines
   report it.
 - **Test runs** (`POST /simulate`) report the definition's lint problems with the result. A lifecycle

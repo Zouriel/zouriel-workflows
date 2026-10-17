@@ -384,8 +384,8 @@ public sealed class WebhookStep : Step
     /// <summary>The HTTP method (default <c>POST</c>), one of <see cref="Methods"/>.</summary>
     public string Method { get; set; } = "POST";
 
-    /// <summary>The HTTP methods a webhook may use, in capitals as sent.</summary>
-    public static readonly IReadOnlyList<string> Methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+    /// <summary>The HTTP methods a webhook may use, in capitals as sent (the schema's <c>method</c> enum).</summary>
+    public static readonly IReadOnlyList<string> Methods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
     /// <summary>Appended to the connection or URL; values it inserts are URL-encoded.</summary>
     public Template? Path { get; set; }
     /// <summary>Extra request headers.</summary>
