@@ -504,6 +504,97 @@ public sealed class AuditFixTests3(ITestOutputHelper output)
     }
 }
 
+/// <summary>Masking gaps from the final audit (spec §11).</summary>
+public sealed class MaskingAuditTests
+{
+    private static Task<WorkflowTestHost> HostAsync() => AuditFixTests.HostAsync();
+
+    [Fact]
+    public async Task An_instance_error_quoting_a_sensitive_value_is_masked()
+    {
+        var h = await HostAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_e", "key": "ende", "kind": "automation", "title": "End", "entity": "application",
+          "trigger": { "type": "created" },
+          "steps": [ { "id": "e", "type": "end", "result": "failed", "reason": ["Bad email ", { "ref": "entity.applicantEmail" }] } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q", ["applicantEmail"] = "secret@x.com" });
+        await h.SettleAsync();
+        var inst = h.Store.All<InstanceRecord>("instances").Single(i => i.DefinitionKey == "ende");
+        var view = await h.Engine.GetInstanceAsync(inst.Id);
+        Assert.Equal("Bad email ***", view.Error);
+        Assert.DoesNotContain(h.Store.All<AuditRecord>("audit"), a => (a.Data ?? "").Contains("secret@x.com"));
+    }
+
+    [Fact]
+    public async Task Task_titles_and_instructions_quoting_sensitive_values_are_masked()
+    {
+        var h = await HostAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_t", "key": "ask", "kind": "automation", "title": "Ask", "entity": "application",
+          "trigger": { "type": "created" },
+          "steps": [ { "id": "t", "type": "approval", "title": "Check", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P1D",
+                       "instructions": ["Write to ", { "ref": "entity.applicantEmail" }], "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q", ["applicantEmail"] = "secret@x.com" });
+        await h.SettleAsync();
+        var task = (await h.Engine.QueryTasksAsync(new TaskQuery(), null)).Items.Single();
+        Assert.Equal("Write to ***", task.Instructions);
+        var record = await h.Engine.GetRecordAsync("application", "a1", WorkflowActor.User("rev1", "Rana"));
+        Assert.Equal("Write to ***", record.Tasks.Single().Instructions);
+    }
+
+    [Fact]
+    public async Task A_sensitive_value_url_encoded_into_a_webhook_path_is_masked()
+    {
+        var h = await HostAsync();
+        await h.Engine.SaveSettingsAsync(new GlobalSettings
+        {
+            Webhooks = new WebhookSettings { Connections = [new WebhookConnection { Key = "crm", Label = "CRM", BaseUrl = "https://crm.example.com" }] },
+        }, 0, AuditFixTests.Admin);
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_w", "key": "push", "kind": "automation", "title": "Push", "entity": "application",
+          "trigger": { "type": "created" },
+          "steps": [ { "id": "w", "type": "webhook", "connection": "crm", "method": "POST", "path": ["/people/", { "ref": "entity.applicantEmail" }] } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q", ["applicantEmail"] = "secret@x.com" });
+        await h.SettleAsync();
+        Assert.Equal("https://crm.example.com/people/secret%40x.com", h.Webhooks.Calls.Single().Url);
+        var inst = h.Store.All<InstanceRecord>("instances").Single(i => i.DefinitionKey == "push");
+        var view = await h.Engine.GetInstanceAsync(inst.Id);
+        var input = Values.Serialize(view.Steps!.Single(s => s.NodeId == "w").Input);
+        Assert.DoesNotContain("secret", input);
+        Assert.DoesNotContain(h.Store.All<AuditRecord>("audit"), a => (a.Data ?? "").Contains("secret"));
+    }
+
+    [Fact]
+    public async Task The_reset_list_hides_values_of_fields_masked_in_settings()
+    {
+        var h = await HostAsync();
+        await h.Engine.SaveSettingsAsync(new GlobalSettings { Audit = new AuditSettings { MaskedFields = ["application.notes"] } }, 0, AuditFixTests.Admin);
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "lc_m", "key": "lcm", "kind": "lifecycle", "title": "LC", "entity": "application",
+          "lifecycle": { "field": "status",
+            "states": [ { "id": "d", "key": "draft", "label": "Draft", "category": "initial" },
+                        { "id": "s", "key": "submitted", "label": "Sub", "category": "active",
+                          "onEnter": [ { "id": "n", "type": "setFields", "values": [ { "field": "notes", "value": { "const": "private remark" } } ] },
+                                       { "id": "m", "type": "notify", "channel": "email", "to": [ { "user": "ali" } ], "subject": ["About ", { "ref": "entity.notes" }], "body": ["x"] } ] },
+                        { "id": "o", "key": "approved", "label": "OK", "category": "terminal" } ],
+            "transitions": [ { "id": "t1", "key": "submit", "label": "Submit", "from": ["d"], "to": "s", "who": [ { "role": "reviewer" } ] },
+                             { "id": "t2", "key": "approve", "label": "OK", "from": ["s"], "to": "o", "who": [ { "role": "reviewer" } ] } ],
+            "reset": { "who": [ { "role": "admin" } ] } } }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q", ["notes"] = "old remark" });
+        await h.SettleAsync();
+        await h.Engine.ApplyTransitionAsync("application", "a1", "submit", null, WorkflowActor.User("rev1", "Rana", ["reviewer"]));
+        await h.SettleAsync();
+        var preview = await h.Engine.GetResetPreviewAsync("application", "a1", AuditFixTests.Admin);
+        var all = string.Join(" | ", preview.Items.Select(i => $"{i.Title} {i.Detail} {i.Warning}"));
+        Assert.Contains("(hidden)", all);
+        Assert.DoesNotContain("remark", all);
+    }
+}
+
 /// <summary>Webhook client hardening from the final audit.</summary>
 public sealed class WebhookClientAuditTests
 {

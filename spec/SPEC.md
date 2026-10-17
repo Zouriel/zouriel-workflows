@@ -477,7 +477,10 @@ form answers listed there as `input.key`, are replaced by `"***"` wherever data 
 audit `before`, `after` and `data` (including step outputs and the trigger of `instance.started`), run
 and task views, and test runs. A value is masked under such a key anywhere in the data, and also when
 it equals (or, inside text, contains) the current value of a sensitive field of the record concerned,
-so values copied into variables or messages are hidden too. Fields that are not `readable` never
+or its URL-encoded form (as a webhook path inserts it), so values copied into variables, messages or
+addresses are hidden too. This covers an instance's `error`, task titles and instructions, and the reset
+list (item titles, details and warnings; values of any listed record's sensitive or masked fields show
+as "(hidden)", and a record whose title field is hidden is named by its id). Fields that are not `readable` never
 appear in test runs.
 
 ## 12. Global settings

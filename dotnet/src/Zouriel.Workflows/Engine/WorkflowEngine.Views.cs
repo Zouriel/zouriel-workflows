@@ -194,7 +194,7 @@ public sealed partial class WorkflowEngine
             tasks = list;
         }
         return new InstanceView(i.Id, i.DefinitionId, i.DefinitionKey, c.Definition.Title, i.Version, i.Kind, i.ParentId, i.Reason, i.Entity, i.EntityId, entityTitle,
-            i.Status, state?.Key, state?.Label, i.Error, i.ErrorStepId, i.InitiatorId, i.InitiatorName, Values.FormatInstant(i.StartedAt), Values.FormatInstant(i.UpdatedAt),
+            i.Status, state?.Key, state?.Label, mask.MaskText(i.Error), i.ErrorStepId, i.InitiatorId, i.InitiatorName, Values.FormatInstant(i.StartedAt), Values.FormatInstant(i.UpdatedAt),
             i.EndedAt is null ? null : Values.FormatInstant(i.EndedAt.Value), i.TriggerJson is null ? null : mask.MaskTrigger(Values.FromJson(i.TriggerJson)), steps, tokens, outputs, vars, tasks);
     }
 
@@ -371,7 +371,8 @@ public sealed partial class WorkflowEngine
         var mask = await u.MaskerAsync(t.Entity, t.EntityId, ct);
         var decisions = ParseDecisions(t).Select(d => d with { Data = d.Data is null ? null : mask.MaskMap(d.Data), Comment = mask.MaskText(d.Comment) }).ToList();
         var canDecide = t.Status == TaskStatus.Open && viewer?.IsUser == true && assignees.Contains(viewer.Id!) && decisions.All(d => d.UserId != viewer.Id);
-        return new TaskView(t.Id, t.InstanceId, t.Kind, t.Title, t.Instructions, t.DefinitionKey, t.Entity, t.EntityId, t.EntityTitle, t.Status, assignees, names,
+        // Titles and instructions are rendered from the record and may quote its sensitive values (spec §11).
+        return new TaskView(t.Id, t.InstanceId, t.Kind, mask.MaskText(t.Title)!, mask.MaskText(t.Instructions), t.DefinitionKey, t.Entity, t.EntityId, mask.MaskText(t.EntityTitle), t.Status, assignees, names,
             t.Rule is null ? null : Values.FromJson(t.Rule), Values.FromJson(t.Outcomes) ?? new List<object?>(), decisions, t.Form is null ? null : JsonNode.Parse(t.Form),
             t.RequireComment, t.AllowDelegation, t.Outcome, Values.FormatInstant(t.DueAt), t.Status == TaskStatus.Open && t.DueAt < u.Now, t.EscalationLevel,
             Values.FormatInstant(t.CreatedAt), t.CompletedAt is null ? null : Values.FormatInstant(t.CompletedAt.Value), canDecide);
