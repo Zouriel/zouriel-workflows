@@ -153,7 +153,9 @@ public sealed partial class WorkflowEngine
             if (c is null) continue;
             if (change.Kind == ChangeKinds.Created)
             {
-                await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct, change.Actor);
+                // A new record enters its first state: onEnter runs and stateEntered automations start (spec §6).
+                if (await FindRecordInstanceAsync(u, c.DefinitionId, change.Entity, change.EntityId, ct) is null)
+                    await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct, change.Actor, entering: true, depth: change.Depth);
                 continue;
             }
             var record = await FindRecordInstanceAsync(u, c.DefinitionId, change.Entity, change.EntityId, ct);
@@ -442,7 +444,7 @@ public sealed partial class WorkflowEngine
         }, ct);
         var trigger = new TriggerInfo { Type = "sla", Field = x.C.Lifecycle.Field, To = state.Key, At = Values.FormatInstant(u.Now) };
         var list = BookmarkPurposes.SlaPrefix + state.Id;
-        await StartRunAsync(u, x.I, x.C, list, list, trigger, WorkflowActor.System, null, ct);
+        await StartRunAsync(u, x.I, x.C, list, list, trigger, WorkflowActor.System, 0, null, ct);
     }
 
     /// <summary>A waiting token's timer: a wait ran out, a wait timed out, or a retry is due.</summary>
@@ -591,14 +593,23 @@ public sealed partial class WorkflowEngine
             return resumed;
         }, ct);
 
-    /// <summary>Whether a person may start a manual trigger: anyone signed in when it names no one, else its <c>who</c> (or a role the person carries).</summary>
+    /// <summary>
+    /// Whether a person may start a manual trigger: anyone signed in when it names no one, else its <c>who</c> (or a
+    /// role the person carries). "The initiator" in <c>who</c> is the record's initiator (spec §8: whoever started
+    /// its lifecycle), never the person asking; a record without one, or no record, has no initiator.
+    /// </summary>
     internal async Task<bool> MayStartManualAsync(Uow u, Trigger trig, WorkflowActor user, string? entity, string? entityId, CancellationToken ct)
     {
         if (!user.IsUser) return false;
         if (trig.Who is not { Count: > 0 }) return true;
         if (user.Roles is { Count: > 0 } roles && trig.Who.Any(w => w.Role is not null && roles.Contains(w.Role))) return true;
-        return (await ResolveAssigneesAsync(u.Scope(null, null, null, null, entity, entityId), trig.Who, null, user.Id, ct)).Contains(user.Id!);
+        var initiator = entity is null || entityId is null ? null : await RecordInitiatorAsync(u, entity, entityId, ct);
+        return (await ResolveAssigneesAsync(u.Scope(null, null, null, null, entity, entityId), trig.Who, null, initiator, ct)).Contains(user.Id!);
     }
+
+    /// <summary>The record's initiator (spec §8): the person its oldest live lifecycle instance names, or null.</summary>
+    internal static async Task<string?> RecordInitiatorAsync(Uow u, string entity, string id, CancellationToken ct) =>
+        (await LiveRecordInstancesAsync(u, entity, id, ct)).Where(i => i.InitiatorId is not null).OrderBy(i => i.StartedAt).FirstOrDefault()?.InitiatorId;
 
     /// <summary>A person starts a manual-trigger automation from a record (spec §5 <c>manual</c>).</summary>
     public Task<InstanceView> StartManualAsync(string definitionKey, string? entity, string? entityId, Dictionary<string, object?>? input, WorkflowActor user, CancellationToken ct = default)

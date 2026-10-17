@@ -408,7 +408,7 @@ public sealed partial class WorkflowEngine
                 foreach (var t in lc.Transitions)
                 {
                     if (t.Hidden == true || !t.From.Allows(lc, record.State, t.To)) continue;
-                    if (!await MayApplyAsync(u, scope, t, viewer, record, ct)) continue;
+                    if (!await MayApplyAsync(scope, t, viewer, record, ct)) continue;
                     if (!await scope.ConditionAsync(t.When, ct)) continue;
                     var to = rc.StateById(t.To)!;
                     options.Add(new TransitionOption(t.Key, t.Label, to.Key, to.Label, t.Tone, t.Confirm, t.Input?.Form.DeepClone(), t.ResolvedComment));

@@ -79,9 +79,13 @@ public sealed partial class WorkflowEngine
         return inst;
     }
 
-    /// <summary>Starts a child run of a lifecycle record (transition steps, onEnter, onExit, SLA). Returns null when the list is empty.</summary>
+    /// <summary>
+    /// Starts a child run of a lifecycle record (transition steps, onEnter, onExit, SLA). Returns null when the list is empty.
+    /// <paramref name="depth"/> is the loop protection depth of the move that started it (spec §5), so writes the run
+    /// makes count one deeper than that move, never from 0 again.
+    /// </summary>
     internal async Task<InstanceRecord?> StartRunAsync(Uow u, InstanceRecord record, CompiledDefinition c, string listId, string reason,
-        TriggerInfo trigger, WorkflowActor initiator, Dictionary<string, object?>? input, CancellationToken ct)
+        TriggerInfo trigger, WorkflowActor initiator, int depth, Dictionary<string, object?>? input, CancellationToken ct)
     {
         if (!c.Lists.TryGetValue(listId, out var list) || list.Count == 0) return null;
         var id = NewId();
@@ -92,7 +96,7 @@ public sealed partial class WorkflowEngine
         {
             Id = id, DefinitionId = c.DefinitionId, DefinitionKey = c.Definition.Key, Version = c.Version, Kind = InstanceKinds.Run, ParentId = record.Id,
             Reason = reason, Entity = record.Entity, EntityId = record.EntityId, Status = InstanceStatus.Running, Data = state.ToJson(),
-            TriggerJson = trigger.ToJson(), Depth = record.Depth, InitiatorId = initiator.IsUser ? initiator.Id : null,
+            TriggerJson = trigger.ToJson(), Depth = depth, InitiatorId = initiator.IsUser ? initiator.Id : null,
             InitiatorName = initiator.IsUser ? initiator.Name : null, CorrelationId = record.CorrelationId, StartedAt = u.Now, UpdatedAt = u.Now,
         };
         await u.S.AddInstanceAsync(inst, ct);

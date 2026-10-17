@@ -1,0 +1,39 @@
+{
+ "name": "A new record enters its lifecycle's first state like any move: the state's onEnter runs and stateEntered automations start; a record that existed before publishing is only adopted",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": { "application": [ { "id": "a0", "title": "Old" } ] },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "lc_i", "key": "intake", "kind": "lifecycle", "title": "Intake", "entity": "application",
+   "lifecycle": { "field": "status",
+    "states": [
+     { "id": "d", "key": "draft", "label": "Draft", "category": "initial",
+       "onEnter": [ { "id": "p", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "high" } } ] } ] },
+     { "id": "o", "key": "approved", "label": "Approved", "category": "terminal" } ],
+    "transitions": [ { "id": "t", "key": "approve", "label": "Approve", "from": ["d"], "to": "o", "who": [ { "role": "reviewer" } ] } ] }
+  },
+  {
+   "specVersion": 1, "id": "wf_n", "key": "newDraft", "kind": "automation", "title": "New draft", "entity": "application",
+   "trigger": { "type": "stateEntered", "lifecycle": "intake", "states": ["draft"] },
+   "steps": [ { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "ali" } ], "subject": ["New draft"], "body": [ { "ref": "entity.title" } ] } ]
+  }
+ ],
+ "steps": [
+  {
+   "create": { "entity": "application", "id": "a1", "values": { "title": "Bursary" } },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "draft", "priority": "high" } },
+    "notifications": [ { "channel": "email", "to": ["ali"], "subject": "New draft", "body": "Bursary" } ],
+    "audit": [ { "is": "lifecycle.created" }, { "is": "instance.started", "data": { "run": "onEnter:d", "trigger": { "type": "created", "to": "draft" } } } ]
+   }
+  },
+  {
+   "transition": { "entity": "application", "id": "a0", "transition": "approve", "actor": "rev1" },
+   "expect": {
+    "record": { "entity": "application", "id": "a0", "values": { "status": "approved", "priority": null } },
+    "notificationCount": 1
+   }
+  }
+ ]
+}

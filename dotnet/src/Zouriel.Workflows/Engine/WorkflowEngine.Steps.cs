@@ -664,6 +664,10 @@ public sealed partial class WorkflowEngine
         if (defRec is null || defRec.Version == 0 || defRec.Status == DefinitionStatus.Archived)
             throw new WorkflowException("unknownWorkflow", $"There is no published workflow called '{sub.Workflow}'.");
         var child = await CompiledAsync(x.U, defRec.Id, defRec.Version, ct);
+        // Loop protection (spec §5): workflows that run each other would otherwise go on forever inside one unit of work.
+        if (x.I.Depth + 1 >= x.U.Settings.MaxChainDepth)
+            throw new WorkflowException("subWorkflowDepth",
+                $"'{sub.Workflow}' was not started: workflows starting each other reached the limit of {x.U.Settings.MaxChainDepth} levels (maxChainDepth in settings). Check for workflows that run each other in a loop.");
         var scope = x.Scope(t);
         var (entity, id) = await TargetAsync(scope, sub.Target, ct);
         var input = new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -750,7 +754,7 @@ public sealed partial class WorkflowEngine
         x.U.Log?.Add("step", "failed", step.Id, message);
 
         var retry = step.Retry ?? (step is ActionStep or WebhookStep or NotifyStep or SubWorkflowStep ? x.U.Settings.Defaults?.Retry : null);
-        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" };
+        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" };
         if (retry is { Max: > 0 } && attempt <= retry.Max && retryable)
         {
             var initial = retry.Initial is null ? TimeSpan.FromMinutes(1) : IsoDuration.Parse(retry.Initial).Approximate;

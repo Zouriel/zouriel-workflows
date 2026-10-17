@@ -1,0 +1,35 @@
+{
+ "name": "sub-workflows that run each other (directly or through others) loop forever and are refused",
+ "registry": "../engine/_registry.json",
+ "others": [
+  {
+   "specVersion": 1, "id": "wf_b", "key": "bbb", "kind": "automation", "title": "B",
+   "trigger": { "type": "signal", "signal": "nightly" },
+   "steps": [ { "id": "b1", "type": "subWorkflow", "workflow": "ccc", "wait": false } ]
+  },
+  {
+   "specVersion": 1, "id": "wf_c", "key": "ccc", "kind": "automation", "title": "C",
+   "trigger": { "type": "signal", "signal": "nightly" },
+   "steps": [ { "id": "c1", "type": "subWorkflow", "workflow": "aaa", "wait": false } ]
+  },
+  {
+   "specVersion": 1, "id": "wf_d", "key": "ddd", "kind": "automation", "title": "D",
+   "trigger": { "type": "signal", "signal": "nightly" },
+   "steps": [ { "id": "d1", "type": "setVariables", "values": [] } ]
+  },
+  {
+   "specVersion": 1, "id": "wf_a", "key": "aaa", "kind": "automation", "title": "A (old version)",
+   "trigger": { "type": "manual", "label": "Go" },
+   "steps": [ { "id": "s0", "type": "subWorkflow", "workflow": "ddd", "wait": false } ]
+  }
+ ],
+ "definition": {
+  "specVersion": 1, "id": "wf_a", "key": "aaa", "kind": "automation", "title": "A",
+  "trigger": { "type": "manual", "label": "Go" },
+  "steps": [
+   { "id": "s1", "type": "subWorkflow", "workflow": "bbb", "wait": false },
+   { "id": "s2", "type": "subWorkflow", "workflow": "ddd", "wait": true }
+  ]
+ },
+ "expected": [ { "code": "subWorkflowCycle", "node": "s1" } ]
+}

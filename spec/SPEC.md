@@ -126,9 +126,14 @@ own unit of work: an automation that fails to start is audited as `trigger.faile
 the others the same event starts.
 
 **Loop protection.** Every instance carries `depth` (0 when started by a person or schedule; parent
-depth + 1 when started by a change the engine itself made). Changes made at depth ≥ `maxChainDepth`
-(settings, default 5) do not start instances; the engine writes an audit entry
-`trigger.suppressed` instead. A workflow's own writes never re-trigger the *same* definition unless
+depth + 1 when started by a change the engine itself made). A lifecycle's child runs (§6) carry the
+depth of the move that started them (a move a workflow step applied at depth *d* + 1 starts runs at
+depth *d* + 1), so a lifecycle and an automation feeding each other count up like any other chain.
+Changes made at depth ≥ `maxChainDepth` (settings, default 5) do not start instances; the engine writes
+an audit entry `trigger.suppressed` instead. A `subWorkflow` step whose child would get depth ≥
+`maxChainDepth` does not start it: the step fails with `subWorkflowDepth` (never retried), so the run
+stops in `incident` with a message naming the limit. Lint refuses sub-workflow cycles across the
+published workflows (`subWorkflowCycle`). A workflow's own writes never re-trigger the *same* definition unless
 its trigger sets `"retrigger": true`; this covers transitions its `applyTransition` steps apply
 (`stateEntered`/`transitionApplied` triggers) as well as field writes. Writes a reset makes to take
 back what a workflow did (§6) start no automations at all (the change event carries `suppressTriggers`).
@@ -217,7 +222,11 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   for records that existed before publishing, lazily the first time something changes the record
   through the lifecycle (a transition, a forced state, an observed write) with the record's current
   value. Reading a record never creates anything: the record panel shows the state the instance would
-  have. A value that matches no state puts the instance in `outOfSync`.
+  have. A value that matches no state puts the instance in `outOfSync`. A **new** record enters its
+  state like any move: the state's `onEnter` runs (trigger `type: "created"`, `to`: the state key), its
+  timers are planned, automatic `when` transitions are checked, and `stateEntered` automations for that
+  state start (`trigger.from` is `null`). A record that existed before publishing is only adopted: its
+  timers are planned, nothing runs.
 - **Runs.** `onEnter`, `onExit`, `sla` and transition `steps` each execute as a *child run* of the
   record instance (`parentId` set), pinned to the same version. Runs started by `onEnter`/`sla` of a
   state are cancelled when the record leaves the state, unless the state sets `"keepRunsOnExit":
@@ -372,8 +381,17 @@ decisions already settle completes at once.
 `{ "role": key }` · `{ "group": key }` · `{ "user": id }` · `{ "field": <token path of a user field> }`
 · `{ "managerOf": "initiator"|"assignees"|<token path> }` · `{ "initiator": true }`.
 `to` also accepts `{ "email": template }`. Duplicates are merged. An approval whose assignees
-resolve to nobody fails the step (`noAssignees`). Who "the initiator" is: the person who triggered
-or applied (`null` for system starts).
+resolve to nobody fails the step (`noAssignees`). Who "the initiator" is (for `{ initiator: true }`
+and `managerOf: "initiator"`):
+
+- inside a run (steps, tasks, recipients, `instance.initiator`): the person who started that instance
+  (who triggered the automation or applied the move that started the run; `null` for system starts);
+- in the `who` of a transition, of the reset and of a manual start from a record: the record's
+  initiator, kept on its lifecycle record instance. That is the person who created the record (the
+  signed-in user behind the create), or, when the app or the system created it (or it existed before
+  the lifecycle was published), the first person who applies a transition to it. A record with no
+  initiator yet, or a manual start with no record, matches nobody. It is never the person asking,
+  so `{ initiator: true }` does not let everyone through.
 
 ## 9. Durations and calendars
 
