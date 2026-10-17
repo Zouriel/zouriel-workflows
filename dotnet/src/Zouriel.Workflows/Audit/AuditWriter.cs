@@ -31,12 +31,7 @@ internal sealed record AuditEntry
 /// </summary>
 internal sealed class AuditWriter(IWorkflowSession session, string? tenant, Func<DateTimeOffset> now)
 {
-    public const string GenesisHash = AuditChain.GenesisHash;
-
     private readonly List<AuditRecord> _pending = [];
-
-    /// <summary>Entries written in this unit (chained once <see cref="FlushAsync"/> ran).</summary>
-    public IReadOnlyList<AuditRecord> Pending => _pending;
 
     /// <summary>Queues an entry; its sequence number and hash are assigned when the unit commits.</summary>
     public void Write(AuditEntry e) => _pending.Add(new AuditRecord
@@ -68,7 +63,7 @@ internal sealed class AuditWriter(IWorkflowSession session, string? tenant, Func
         if (_pending.Count == 0) return;
         var head = await session.GetAuditHeadAsync(tenant, ct);
         var seq = head?.Seq ?? 0;
-        var prev = head?.Hash ?? GenesisHash;
+        var prev = head?.Hash ?? AuditChain.GenesisHash;
         foreach (var rec in _pending)
         {
             rec.Seq = ++seq;

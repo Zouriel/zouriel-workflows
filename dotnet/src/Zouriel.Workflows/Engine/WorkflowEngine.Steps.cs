@@ -188,7 +188,9 @@ public sealed partial class WorkflowEngine
 
     private async Task GoToAsync(Exec x, Token t, GoToStep g, CancellationToken ct)
     {
-        var count = x.S.GoTo.GetValueOrDefault($"{t.Id}:{g.Id}");
+        // Counted per item of every enclosing sequential forEach (each item gets its own maxTimes, spec §7).
+        var counter = $"{t.Id}:{g.Id}" + string.Concat(t.Frames.Where(fr => fr.ItemIndex is not null).Select(fr => $":{fr.List}#{fr.ItemIndex}"));
+        var count = x.S.GoTo.GetValueOrDefault(counter);
         if (count >= g.MaxTimes)
         {
             await x.U.AuditAsync(StepAudit(x, g, "skipped", new Dictionary<string, object?> { ["reason"] = "maxTimes", ["count"] = (double)count }), ct);
@@ -198,7 +200,7 @@ public sealed partial class WorkflowEngine
         var loc = x.C.Steps.GetValueOrDefault(g.Target) ?? throw new WorkflowException("goToInvalidTarget", "The step to go back to no longer exists.");
         var depth = t.Frames.FindLastIndex(fr => fr.List == loc.ListId);
         if (depth < 0) throw new WorkflowException("goToInvalidTarget", "Go back can only return to an earlier step on the same path.");
-        x.S.GoTo[$"{t.Id}:{g.Id}"] = count + 1;
+        x.S.GoTo[counter] = count + 1;
         x.S.SetOutput(g.Id, "count", count + 1);
         await x.U.AuditAsync(StepAudit(x, g, "completed", new Dictionary<string, object?> { ["target"] = g.Target, ["count"] = (double)(count + 1) }), ct);
         // Leaving nested lists drops their loop state.
@@ -245,7 +247,8 @@ public sealed partial class WorkflowEngine
                     Advance(t);
                     return;
                 }
-                await AddTimerAsync(x, t, w, BookmarkPurposes.Wait, due.Value, null, ct);
+                // A date beyond the calendar (year 9999) never arrives: the step waits without a timer.
+                if (due != DateTimeOffset.MaxValue) await AddTimerAsync(x, t, w, BookmarkPurposes.Wait, due.Value, null, ct);
                 Wait(t, "timer", rec);
                 break;
             }
@@ -285,8 +288,24 @@ public sealed partial class WorkflowEngine
         await x.U.AuditAsync(StepAudit(x, w, "waiting", new Dictionary<string, object?> { ["until"] = u.Type }), ct);
     }
 
-    /// <summary>When a date or date-time value plus an offset arrives (date values land at <paramref name="at"/>, default 09:00, in the settings time zone).</summary>
+    /// <summary>
+    /// When a date or date-time value plus an offset arrives (date values land at <paramref name="at"/>, default 09:00, in
+    /// the settings time zone). Null when there is no date; <see cref="DateTimeOffset.MaxValue"/> when it lies beyond the
+    /// calendar's range (it never arrives), never an exception.
+    /// </summary>
     internal static DateTimeOffset? DateWaitDue(WorkCalendar calendar, object? value, string? offset, string? at)
+    {
+        try
+        {
+            return DateWaitDueUnchecked(calendar, value, offset, at);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return value is string s && s.Length >= 4 && s[0] is >= '5' and <= '9' ? DateTimeOffset.MaxValue : DateTimeOffset.MinValue;
+        }
+    }
+
+    private static DateTimeOffset? DateWaitDueUnchecked(WorkCalendar calendar, object? value, string? offset, string? at)
     {
         if (value is not string s || s.Length < 10) return null;
         DateTimeOffset baseTime;
@@ -312,7 +331,7 @@ public sealed partial class WorkflowEngine
         {
             var field = Registry.Field(entity, v.Field);
             if (field is null || !field.IsSettable) throw new WorkflowException("fieldNotSettable", $"Workflows cannot change '{v.Field}'.");
-            values[v.Field] = await scope.OperandAsync(v.Value, ct);
+            values[v.Field] = CheckOption(field, await scope.OperandAsync(v.Value, ct));
         }
         var masked = (await x.U.MaskerAsync(entity, id, ct)).MaskMap(values);
         var rec = await BeginStepAsync(x, t, sf, new Dictionary<string, object?> { ["entity"] = entity, ["id"] = id, ["values"] = masked }, ct);
@@ -334,6 +353,19 @@ public sealed partial class WorkflowEngine
         });
         await CompleteStepAsync(x, rec, sf, null, ct);
         Advance(t);
+    }
+
+    /// <summary>
+    /// A value for an enum field must be one of its options (lint only sees constants; a value read from a token is
+    /// checked here): <c>unknownValue</c> otherwise. Empty values clear the field.
+    /// </summary>
+    private static object? CheckOption(FieldDescriptor field, object? value)
+    {
+        if (field.Options is not { Count: > 0 } options || Values.IsEmpty(value)) return value;
+        var text = Values.Text(Conditions.OptionValueOf(value));
+        if (options.All(o => Values.Text(Values.Normalize(o.Value)) != text))
+            throw new WorkflowException("unknownValue", $"'{text}' is not one of {field.Label}'s values.");
+        return value;
     }
 
     internal async Task<(string? Entity, string? Id)> TargetAsync(ValueScope scope, string? target, CancellationToken ct)
@@ -359,7 +391,7 @@ public sealed partial class WorkflowEngine
         {
             var field = desc.Field(v.Field);
             if (field is null || !field.IsSettable) throw new WorkflowException("fieldNotSettable", $"Workflows cannot set '{v.Field}' of {desc.Label}.");
-            values[v.Field] = await scope.OperandAsync(v.Value, ct);
+            values[v.Field] = CheckOption(field, await scope.OperandAsync(v.Value, ct));
         }
         // Lint only knows the lifecycles published when the workflow was; a new record starts in its lifecycle's first state.
         var lifecycleFields = (await x.U.S.ListTriggersAsync(ct)).Where(tr => tr.Type == "lifecycle" && tr.Entity == cr.Entity).Select(tr => tr.Field).ToHashSet();
@@ -434,6 +466,15 @@ public sealed partial class WorkflowEngine
 
     private async Task NotifyAsync(Exec x, Token t, NotifyStep n, CancellationToken ct)
     {
+        // A channel switched off in settings after the workflow was published sends nothing (lint only warned at publish).
+        if (x.U.Settings.Channels?.GetValueOrDefault(n.Channel)?.Enabled == false)
+        {
+            x.S.SetOutput(n.Id, "sent", 0);
+            await x.U.AuditAsync(StepAudit(x, n, "skipped", new Dictionary<string, object?> { ["reason"] = "channelDisabled", ["channel"] = n.Channel }), ct);
+            x.U.Log?.Add("step", "skipped", n.Id, $"The {n.Channel} channel is switched off.");
+            Advance(t);
+            return;
+        }
         var scope = x.Scope(t);
         var recipients = await RecipientsAsync(x, scope, n.To, ct);
         var subject = n.Subject is null ? null : await RenderAsync(scope, n.Subject, ct);
@@ -488,7 +529,7 @@ public sealed partial class WorkflowEngine
         }
         await u.S.AddOutboxAsync(new OutboxRecord
         {
-            Id = NewId(), Kind = OutboxKinds.Notify, Payload = System.Text.Json.JsonSerializer.Serialize(n, Definitions.JsonOptions), CreatedAt = u.Now,
+            Id = OutboxRecord.NewId(u.Now), Kind = OutboxKinds.Notify, Payload = System.Text.Json.JsonSerializer.Serialize(n, Definitions.JsonOptions), CreatedAt = u.Now,
         }, ct);
     }
 
@@ -500,8 +541,13 @@ public sealed partial class WorkflowEngine
     private async Task<(string Url, Dictionary<string, string> Headers, string? Body)> BuildWebhookAsync(Exec x, Token t, WebhookStep wh, CancellationToken ct)
     {
         var scope = x.Scope(t);
+        if (!WebhookStep.Methods.Contains(wh.Method)) throw new WorkflowException("badMethod", $"'{wh.Method}' is not an HTTP method a webhook can use.");
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var path = wh.Path is null ? "" : await RenderAsync(scope, wh.Path, ct, Uri.EscapeDataString);
+        // "." and ".." segments (also percent-encoded) would climb out of the connection's base path once resolved.
+        var pathOnly = path.Split('?', '#')[0];
+        if (pathOnly.Split('/').Any(seg => Uri.UnescapeDataString(seg) is "." or ".."))
+            throw new WorkflowException("webhookOriginNotAllowed", "The webhook path cannot contain '.' or '..' segments.");
         string url;
         if (wh.Connection is not null)
         {
@@ -513,7 +559,10 @@ public sealed partial class WorkflowEngine
                 var secret = await Options.Secrets.GetSecretAsync(conn.SecretName, ct) ?? throw new WorkflowException("missingSecret", $"The secret for '{conn.Label}' is not set up.");
                 headers[conn.Header ?? "Authorization"] = conn.Header is null ? $"Bearer {secret}" : secret;
             }
-            if (!Uri.TryCreate(url, UriKind.Absolute, out var connUri) || connUri.Authority != new Uri(conn.BaseUrl).Authority)
+            var baseUri = new Uri(conn.BaseUrl);
+            var basePath = baseUri.AbsolutePath.TrimEnd('/') + "/";
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var connUri) || connUri.Authority != baseUri.Authority || connUri.Scheme != baseUri.Scheme
+                || !(connUri.AbsolutePath + "/").StartsWith(basePath, StringComparison.Ordinal))
                 throw new WorkflowException("webhookOriginNotAllowed", "The webhook path must stay on the connection's address.");
         }
         else
@@ -525,7 +574,14 @@ public sealed partial class WorkflowEngine
             if (x.U.Settings.Webhooks?.AllowedOrigins?.Contains(origin, StringComparer.OrdinalIgnoreCase) != true)
                 throw new WorkflowException("webhookOriginNotAllowed", $"{origin} is not an allowed address.");
         }
-        foreach (var (k, v) in wh.Headers ?? []) headers[k] = await RenderAsync(scope, v, ct);
+        foreach (var (k, v) in wh.Headers ?? [])
+        {
+            var value = await RenderAsync(scope, v, ct);
+            // A line break in a value would add headers of its own (values come from records).
+            if (!HttpWebhookClient.IsValidHeader(k, value))
+                throw new WorkflowException("badHeader", $"The header '{k}' cannot be sent: its name must be a plain token and its value cannot contain line breaks or other control characters.");
+            headers[k] = value;
+        }
         var body = wh.Body is null ? null : (await SubstituteAsync(scope, wh.Body.DeepClone(), ct))?.ToJsonString();
         return (url, headers, body);
     }
@@ -533,7 +589,9 @@ public sealed partial class WorkflowEngine
     private async Task WebhookAsync(Exec x, Token t, WebhookStep wh, CancellationToken ct)
     {
         var (url, headers, body) = await BuildWebhookAsync(x, t, wh, ct);
-        var key = $"{x.I.Id}:{wh.Id}:{t.Id}:{t.CurrentItem().Index}:{t.Top.Attempt}";
+        // The same for every attempt of this run of the step (retries resend it; the receiver drops repeats), new when a
+        // forEach item or a goTo repeat runs the step again.
+        var key = $"{x.I.Id}:{wh.Id}:{t.Id}:{t.CurrentItem().Index}:{x.S.GoTo.Values.Sum()}";
         var rec = await BeginStepAsync(x, t, wh, new Dictionary<string, object?> { ["method"] = wh.Method, ["url"] = url }, ct);
         WebhookResponse res;
         if (x.U.Simulation)
@@ -639,9 +697,12 @@ public sealed partial class WorkflowEngine
                 outputs = await handler.ExecuteAsync(new WorkflowActionContext
                 {
                     ActionKey = a.Action, Input = input, Entity = x.I.Entity, EntityId = x.I.EntityId, InstanceId = x.I.Id,
-                    IdempotencyKey = $"{x.I.Id}:{a.Id}:{t.Id}:{t.CurrentItem().Index}:{t.Top.Attempt}", Attempt = t.Top.Attempt,
+                    IdempotencyKey = $"{x.I.Id}:{a.Id}:{t.Id}:{t.CurrentItem().Index}:{x.S.GoTo.Values.Sum()}", Attempt = t.Top.Attempt,
                     Initiator = x.I.InitiatorId is null ? null : WorkflowActor.User(x.I.InitiatorId, x.I.InitiatorName),
                 }, cts.Token);
+                // Changes the handler made but did not save are saved here, inside the scope, so they stay the
+                // workflow's: its depth and causation (loop protection, no self-retrigger) and its actor.
+                await x.U.S.SaveRecordChangesAsync(cts.Token);
             }
             if (undoable) await x.U.S.ReleaseSavepointAsync(savepoint, ct);
             return outputs;
@@ -664,6 +725,10 @@ public sealed partial class WorkflowEngine
         if (defRec is null || defRec.Version == 0 || defRec.Status == DefinitionStatus.Archived)
             throw new WorkflowException("unknownWorkflow", $"There is no published workflow called '{sub.Workflow}'.");
         var child = await CompiledAsync(x.U, defRec.Id, defRec.Version, ct);
+        // Loop protection (spec §5): workflows that run each other would otherwise go on forever inside one unit of work.
+        if (x.I.Depth + 1 >= x.U.Settings.MaxChainDepth)
+            throw new WorkflowException("subWorkflowDepth",
+                $"'{sub.Workflow}' was not started: workflows starting each other reached the limit of {x.U.Settings.MaxChainDepth} levels (maxChainDepth in settings). Check for workflows that run each other in a loop.");
         var scope = x.Scope(t);
         var (entity, id) = await TargetAsync(scope, sub.Target, ct);
         var input = new Dictionary<string, object?>(StringComparer.Ordinal);
@@ -750,7 +815,7 @@ public sealed partial class WorkflowEngine
         x.U.Log?.Add("step", "failed", step.Id, message);
 
         var retry = step.Retry ?? (step is ActionStep or WebhookStep or NotifyStep or SubWorkflowStep ? x.U.Settings.Defaults?.Retry : null);
-        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" };
+        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" or "badHeader" or "unknownValue" or "badMethod" };
         if (retry is { Max: > 0 } && attempt <= retry.Max && retryable)
         {
             var initial = retry.Initial is null ? TimeSpan.FromMinutes(1) : IsoDuration.Parse(retry.Initial).Approximate;
@@ -804,7 +869,7 @@ public sealed partial class WorkflowEngine
             var scope = x.Scope(t);
             var people = await RecipientsAsync(x, scope, owners.Owners, ct);
             var channel = Options.TaskNotificationChannel ?? Registry.Channels.FirstOrDefault(c => c.Key is "inApp" or "email")?.Key;
-            if (channel is not null && people.Count > 0)
+            if (channel is not null && people.Count > 0 && x.U.Settings.Channels?.GetValueOrDefault(channel)?.Enabled != false)
             {
                 await QueueNotificationAsync(x.U, new WorkflowNotification(channel, people, $"Workflow needs attention: {x.C.Definition.Title}",
                     $"“{x.C.Definition.Title}” stopped at “{step?.Title ?? step?.Type}”: {message}", RecordLink(x.I.Entity, x.I.EntityId), x.I.Id, x.I.Entity, x.I.EntityId,

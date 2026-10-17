@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Zouriel.Workflows.Audit;
 using Zouriel.Workflows.Changes;
 using Zouriel.Workflows.Expressions;
@@ -15,6 +16,9 @@ public sealed partial class WorkflowEngine
     /// <summary>How long a claimed outbox row or timer stays locked to one worker.</summary>
     public TimeSpan ClaimLock { get; set; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>How many times a timer may fail before it is parked for an admin (default 10, like outbox rows).</summary>
+    public int MaxTimerAttempts { get; set; } = 10;
+
     /// <summary>
     /// Processes committed change events and lifecycle events, and sends queued notifications. Returns how
     /// many rows it claimed. Each automation an event starts runs in its own unit of work: one failing
@@ -29,10 +33,17 @@ public sealed partial class WorkflowEngine
             rows = await s.ClaimOutboxAsync(Now, Now + ClaimLock, batch, ct);
             await s.CommitAsync(ct);
         }
-        foreach (var row in rows.OrderBy(r => r.CreatedAt))
+        foreach (var row in rows.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id, StringComparer.Ordinal))
         {
             // The claim covers the whole batch; once it lapses another worker may take the rest, so stop.
             if (row.LockedUntil is { } until && Now >= until) break;
+            // One record's events in the order they were written: a newer one waits while an older one is pending
+            // (failed and backing off, or not yet done), so a later change is never applied before an earlier one.
+            if (row.RecordKey is not null && await HasEarlierPendingAsync(row, ct))
+            {
+                await DeferOutboxAsync(row, ct);
+                continue;
+            }
             try
             {
                 switch (row.Kind)
@@ -97,6 +108,21 @@ public sealed partial class WorkflowEngine
         }
     }
 
+    private async Task<bool> HasEarlierPendingAsync(OutboxRecord row, CancellationToken ct)
+    {
+        await using var s = await Options.Store.BeginAsync(ct);
+        return await s.HasEarlierPendingOutboxAsync(row, ct);
+    }
+
+    /// <summary>Leaves a row for a later round (an older row of its record is pending); not counted as an attempt.</summary>
+    private async Task DeferOutboxAsync(OutboxRecord row, CancellationToken ct)
+    {
+        await using var s = await Options.Store.BeginAsync(ct);
+        row.LockedUntil = Now + TimeSpan.FromSeconds(30);
+        await s.UpdateOutboxAsync(row, ct);
+        await s.CommitAsync(ct);
+    }
+
     private async Task MarkOutboxAsync(OutboxRecord row, string? error, CancellationToken ct)
     {
         await using var s = await Options.Store.BeginAsync(ct);
@@ -153,7 +179,9 @@ public sealed partial class WorkflowEngine
             if (c is null) continue;
             if (change.Kind == ChangeKinds.Created)
             {
-                await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct, change.Actor);
+                // A new record enters its first state: onEnter runs and stateEntered automations start (spec §6).
+                if (await FindRecordInstanceAsync(u, c.DefinitionId, change.Entity, change.EntityId, ct) is null)
+                    await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct, change.Actor, entering: true, depth: change.Depth);
                 continue;
             }
             var record = await FindRecordInstanceAsync(u, c.DefinitionId, change.Entity, change.EntityId, ct);
@@ -346,7 +374,8 @@ public sealed partial class WorkflowEngine
         var snap = await u.S.Entities.GetAsync(entity, id, ct);
         var value = snap?[trig.Field!];
         var due = DateWaitDue(u.Calendar, value, trig.Offset, trig.At);
-        if (due is null || due <= u.Now) return;
+        // No date, a time already past, or one beyond the calendar's range (never): nothing to plan.
+        if (due is null || due <= u.Now || due == DateTimeOffset.MaxValue) return;
         await u.S.AddBookmarkAsync(new BookmarkRecord
         {
             Id = NewId(), Kind = BookmarkKinds.DateReached, Purpose = BookmarkPurposes.DateReached, DefinitionId = c.DefinitionId, Entity = entity, EntityId = id, DueAt = due,
@@ -375,18 +404,65 @@ public sealed partial class WorkflowEngine
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
-                // Leave it locked for a while and record why; the next claim after the lock retries it.
-                await RunAsync(async u =>
-                {
-                    await u.AuditAsync(new AuditEntry
-                    {
-                        Category = "instance", Action = "timerFailed", SubjectType = "bookmark", SubjectId = b.Id, InstanceId = b.InstanceId, DefinitionId = b.DefinitionId,
-                        Entity = b.Entity, EntityId = b.EntityId, Data = new Dictionary<string, object?> { ["purpose"] = b.Purpose, ["error"] = e.Message },
-                    }, ct);
-                }, ct);
+                await RunAsync(u => TimerFailedAsync(u, b.Id, e is WorkflowException ? e.Message : $"{e.GetType().Name}: {e.Message}", ct), ct);
             }
         }
         return due.Count;
+    }
+
+    /// <summary>
+    /// A timer could not be processed (its unit rolled back, so the bookmark is still there): count the attempt and
+    /// back off 1, 2, 4… minutes up to an hour. After <see cref="MaxTimerAttempts"/> it is parked for an admin and the
+    /// instance shows it: an automation or run token stops in an incident (retry, skip or cancel it as usual); a
+    /// lifecycle record instance (automatic transition or SLA timer), or a task's reminder or escalation (the task stays
+    /// open), gets the error on the instance and an <c>instance.incident</c> entry.
+    /// </summary>
+    private async Task TimerFailedAsync(Uow u, string bookmarkId, string error, CancellationToken ct)
+    {
+        var b = await u.S.GetBookmarkAsync(bookmarkId, ct);
+        if (b is null) return;
+        b.Attempts++;
+        b.Error = error;
+        var parked = b.Attempts >= MaxTimerAttempts;
+        b.LockedUntil = parked ? DateTimeOffset.MaxValue : u.Now + TimeSpan.FromMinutes(Math.Min(60, Math.Pow(2, b.Attempts - 1)));
+        await u.S.UpdateBookmarkAsync(b, ct);
+        await u.AuditAsync(new AuditEntry
+        {
+            Category = "instance", Action = "timerFailed", SubjectType = "bookmark", SubjectId = b.Id, InstanceId = b.InstanceId, DefinitionId = b.DefinitionId,
+            Entity = b.Entity, EntityId = b.EntityId,
+            Data = new Dictionary<string, object?> { ["purpose"] = b.Purpose, ["error"] = error, ["attempt"] = (double)b.Attempts, ["parked"] = parked },
+        }, ct);
+        if (!parked) return;
+        Options.Logger.LogError("Timer {Bookmark} ({Purpose}) failed {Attempts} times and was parked: {Error}", b.Id, b.Purpose, b.Attempts, error);
+        if (b.InstanceId is null) return;
+        var message = $"A timer ({b.Purpose}) failed {b.Attempts} times and was stopped: {error}";
+        var inst = await u.S.GetInstanceAsync(b.InstanceId, ct);
+        if (inst is null || InstanceStatus.IsFinished(inst.Status)) return;
+        if (inst.Kind == InstanceKinds.Record || b.Purpose is BookmarkPurposes.Reminder or BookmarkPurposes.Escalation)
+        {
+            var record = inst.Kind == InstanceKinds.Record
+                ? u.Records.TryGetValue(inst.Id, out var held) ? held : u.Records[inst.Id] = inst
+                : u.Execs.TryGetValue(inst.Id, out var exec) ? exec.I : inst;
+            record.Error = message;
+            record.UpdatedAt = u.Now;
+            await u.S.UpdateInstanceAsync(record, ct);
+            await u.AuditAsync(new AuditEntry
+            {
+                Category = "instance", Action = "incident", SubjectType = "instance", SubjectId = record.Id, InstanceId = record.Id, DefinitionId = record.DefinitionId,
+                Entity = record.Entity, EntityId = record.EntityId, CorrelationId = record.CorrelationId,
+                Data = new Dictionary<string, object?> { ["bookmark"] = b.Id, ["purpose"] = b.Purpose, ["error"] = message },
+            }, ct);
+            return;
+        }
+        var x = await LoadExecAsync(u, inst.Id, ct);
+        var t = b.TokenId is null ? null : x.S.Token(b.TokenId);
+        var step = b.NodeId is null ? null : x.C.Step(b.NodeId);
+        if (t is null || t.Status != TokenStatus.Waiting) return;
+        // The token stops in an incident instead; its timers go (a retry runs the step again and plans new ones).
+        await ClearWaitsAsync(x, t, ct);
+        await u.S.RemoveBookmarkAsync(b.Id, ct);
+        await RaiseIncidentAsync(x, t, step, message, ct);
+        await SaveAsync(x, ct);
     }
 
     /// <summary>Fires one due bookmark (it is removed first; reminders and escalations leave the task open).</summary>
@@ -406,6 +482,8 @@ public sealed partial class WorkflowEngine
         if (b.InstanceId is null) return;
         var x = await LoadExecAsync(u, b.InstanceId, ct);
         if (InstanceStatus.IsFinished(x.I.Status)) return;
+        // A lifecycle archived while the timer waited does nothing to its records (restoring plans the timers again).
+        if (x.I.Kind == InstanceKinds.Record && (await u.S.GetDefinitionAsync(x.I.DefinitionId, ct))?.Status == DefinitionStatus.Archived) return;
         if (b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal)) await FireAutoTransitionAsync(u, x, b.Purpose[BookmarkPurposes.AutoPrefix.Length..], ct);
         else if (b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)) await FireSlaAsync(u, x, b.Purpose[BookmarkPurposes.SlaPrefix.Length..], ct);
         else await FireTokenTimerAsync(x, b, ct);
@@ -442,7 +520,7 @@ public sealed partial class WorkflowEngine
         }, ct);
         var trigger = new TriggerInfo { Type = "sla", Field = x.C.Lifecycle.Field, To = state.Key, At = Values.FormatInstant(u.Now) };
         var list = BookmarkPurposes.SlaPrefix + state.Id;
-        await StartRunAsync(u, x.I, x.C, list, list, trigger, WorkflowActor.System, null, ct);
+        await StartRunAsync(u, x.I, x.C, list, list, trigger, WorkflowActor.System, 0, null, ct);
     }
 
     /// <summary>A waiting token's timer: a wait ran out, a wait timed out, or a retry is due.</summary>
@@ -591,14 +669,23 @@ public sealed partial class WorkflowEngine
             return resumed;
         }, ct);
 
-    /// <summary>Whether a person may start a manual trigger: anyone signed in when it names no one, else its <c>who</c> (or a role the person carries).</summary>
+    /// <summary>
+    /// Whether a person may start a manual trigger: anyone signed in when it names no one, else its <c>who</c> (or a
+    /// role the person carries). "The initiator" in <c>who</c> is the record's initiator (spec §8: whoever started
+    /// its lifecycle), never the person asking; a record without one, or no record, has no initiator.
+    /// </summary>
     internal async Task<bool> MayStartManualAsync(Uow u, Trigger trig, WorkflowActor user, string? entity, string? entityId, CancellationToken ct)
     {
         if (!user.IsUser) return false;
         if (trig.Who is not { Count: > 0 }) return true;
         if (user.Roles is { Count: > 0 } roles && trig.Who.Any(w => w.Role is not null && roles.Contains(w.Role))) return true;
-        return (await ResolveAssigneesAsync(u.Scope(null, null, null, null, entity, entityId), trig.Who, null, user.Id, ct)).Contains(user.Id!);
+        var initiator = entity is null || entityId is null ? null : await RecordInitiatorAsync(u, entity, entityId, ct);
+        return (await ResolveAssigneesAsync(u.Scope(null, null, null, null, entity, entityId), trig.Who, null, initiator, ct)).Contains(user.Id!);
     }
+
+    /// <summary>The record's initiator (spec §8): the person its oldest live lifecycle instance names, or null.</summary>
+    internal static async Task<string?> RecordInitiatorAsync(Uow u, string entity, string id, CancellationToken ct) =>
+        (await LiveRecordInstancesAsync(u, entity, id, ct)).Where(i => i.InitiatorId is not null).OrderBy(i => i.StartedAt).FirstOrDefault()?.InitiatorId;
 
     /// <summary>A person starts a manual-trigger automation from a record (spec §5 <c>manual</c>).</summary>
     public Task<InstanceView> StartManualAsync(string definitionKey, string? entity, string? entityId, Dictionary<string, object?>? input, WorkflowActor user, CancellationToken ct = default)
@@ -618,7 +705,9 @@ public sealed partial class WorkflowEngine
             {
                 var errors = Options.FormValidator.Validate(form, input, u.Today);
                 if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+                input = Options.FormValidator.Clean(form, input, u.Today);
             }
+            else input = [];
             var info = new TriggerInfo { Type = TriggerTypes.Manual, ActorType = user.Type, ActorId = user.Id, ActorName = user.Name, At = Values.FormatInstant(u.Now), EventId = NewId(), Data = input };
             var inst = await StartAutomationAsync(u, c, entity, entityId, info, user, 0, input, null, null, null, ct)
                        ?? throw new WorkflowException("alreadyRunning", $"'{c.Definition.Title}' is already running for this record.");

@@ -192,6 +192,8 @@ public static class WorkflowServiceCollectionExtensions
                 NotifyTaskAssignees = s.NotifyTaskAssignees, FormValidator = sp.GetRequiredService<IFormValidator>(),
                 RecordLinkTemplate = s.RecordLinkTemplate, ActorAccessor = sp.GetService<IWorkflowActorAccessor>(),
                 OwnershipRefreshInterval = s.OwnershipRefreshInterval,
+                Logger = sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Zouriel.Workflows")
+                         ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
             });
             return engine;
         });

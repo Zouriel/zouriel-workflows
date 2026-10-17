@@ -94,8 +94,24 @@ public sealed class WorkCalendar
     /// <summary>The local date (<c>YYYY-MM-DD</c>) of an instant.</summary>
     public string Today(DateTimeOffset now) => DateOnly.FromDateTime(ToLocal(now)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-    /// <summary>Adds a duration. <paramref name="working"/> counts only working time (spec §9).</summary>
+    /// <summary>
+    /// Adds a duration. <paramref name="working"/> counts only working time (spec §9). A result beyond the calendar's
+    /// range (year 9999) is <see cref="DateTimeOffset.MaxValue"/> (never), before year 1 <see cref="DateTimeOffset.MinValue"/>;
+    /// it never throws.
+    /// </summary>
     public DateTimeOffset Add(DateTimeOffset from, IsoDuration d, bool working = false)
+    {
+        try
+        {
+            return AddUnchecked(from, d, working);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return d.Negative ? DateTimeOffset.MinValue : DateTimeOffset.MaxValue;
+        }
+    }
+
+    private DateTimeOffset AddUnchecked(DateTimeOffset from, IsoDuration d, bool working)
     {
         if (working && HasWorkingTime && !d.Negative) return AddWorking(from, d);
         var sign = d.Negative ? -1 : 1;

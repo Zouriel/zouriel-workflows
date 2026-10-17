@@ -103,7 +103,7 @@ public interface INotificationSender
 /// <param name="Url">The full address, already checked against the allowed origins or connection.</param>
 /// <param name="Headers">Headers to send (including a connection's secret header).</param>
 /// <param name="Body">The JSON body, if any.</param>
-/// <param name="IdempotencyKey">Sent as <c>Idempotency-Key</c>; stable for one attempt of one step.</param>
+/// <param name="IdempotencyKey">Sent as <c>Idempotency-Key</c>; the same for every attempt (retry) of one run of a step, new for each forEach item or goTo repeat.</param>
 /// <param name="Timeout">How long the call may take, if limited.</param>
 public sealed record WebhookRequest(string Method, string Url, IReadOnlyDictionary<string, string> Headers, string? Body, string IdempotencyKey, TimeSpan? Timeout);
 
@@ -139,7 +139,10 @@ public sealed class WorkflowActionContext
     public string? EntityId { get; init; }
     /// <summary>The instance running the step.</summary>
     public required string InstanceId { get; init; }
-    /// <summary>Stable for one attempt of one step; use it to make the action safe to repeat.</summary>
+    /// <summary>
+    /// The same for every attempt (retry) of one run of the step, new for each forEach item or goTo repeat; use it to do
+    /// the action only once when an attempt is repeated after a failure or timeout.
+    /// </summary>
     public required string IdempotencyKey { get; init; }
     /// <summary>1-based attempt number (retries count up).</summary>
     public required int Attempt { get; init; }

@@ -374,9 +374,6 @@ public sealed class Operand
     /// <summary>A constant operand.</summary>
     /// <param name="value">The constant (normalised to a workflow value).</param>
     public static Operand Of(object? value) => new() { HasConst = true, Const = Json.Values.Normalize(value) };
-    /// <summary>An operand that reads a token path.</summary>
-    /// <param name="path">The token path.</param>
-    public static Operand OfRef(string path) => new() { Ref = path };
 }
 
 /// <summary>A calculation from the form engine (sum, difference, dates…), with token paths in its arguments.</summary>

@@ -85,9 +85,15 @@ public sealed partial class WorkflowEngine
         return c ?? throw new WorkflowException("unknownLifecycle", $"There is no published lifecycle '{key}' for {entity}.");
     }
 
-    /// <summary>The record's lifecycle instance, created on first use for records that existed before the lifecycle was published.</summary>
+    /// <summary>
+    /// The record's lifecycle instance, created on first use for records that existed before the lifecycle was published.
+    /// <paramref name="entering"/> is true for a record that was just created: it enters its state like any move (spec §6),
+    /// so the state's <c>onEnter</c> runs and <c>stateEntered</c> automations start; a record adopted later only plans its timers.
+    /// The instance's initiator is the person who created the record, or (for app and system creates and adopted records)
+    /// the person whose action created the instance (spec §8).
+    /// </summary>
     internal async Task<InstanceRecord> EnsureRecordInstanceAsync(Uow u, CompiledDefinition c, string entity, string id, CancellationToken ct, WorkflowActor? actor = null,
-        object? initialValue = null)
+        object? initialValue = null, bool entering = false, int depth = 0)
     {
         var existing = await FindRecordInstanceAsync(u, c.DefinitionId, entity, id, ct);
         if (existing is not null) return existing;
@@ -107,7 +113,7 @@ public sealed partial class WorkflowEngine
             Entity = entity, EntityId = id, Status = state is null ? InstanceStatus.OutOfSync : state.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active,
             State = state?.Id, StateEnteredAt = u.Now, Data = "{}", CorrelationId = NewId(), StartedAt = u.Now, UpdatedAt = u.Now,
             InitiatorId = actor?.IsUser == true ? actor.Id : null, InitiatorName = actor?.IsUser == true ? actor.Name : null,
-            EndedAt = state?.IsTerminal == true ? u.Now : null,
+            EndedAt = state?.IsTerminal == true ? u.Now : null, LiveKey = InstanceRecord.RecordKey(c.DefinitionId, entity, id),
         };
         await u.S.AddInstanceAsync(inst, ct);
         u.Records[inst.Id] = inst;
@@ -119,8 +125,18 @@ public sealed partial class WorkflowEngine
             After = state is null ? null : new Dictionary<string, object?> { ["state"] = state.Key },
             Data = new Dictionary<string, object?> { ["version"] = (double)c.Version, ["value"] = value },
         }, ct);
-        if (writeInitial) await WriteStateAsync(u, c, entity, id, state!, actor ?? WorkflowActor.System, 0, inst.Id, ct);
-        if (state is not null && !state.IsTerminal) await PlanStateTimersAsync(u, c, inst, state, ct);
+        if (writeInitial) await WriteStateAsync(u, c, entity, id, state!, actor ?? WorkflowActor.System, depth, inst.Id, ct);
+        if (entering && state is not null)
+        {
+            var who = actor ?? WorkflowActor.System;
+            var trigger = new TriggerInfo
+            {
+                Type = "created", Field = lc.Field, To = state.Key, ActorType = who.Type, ActorId = who.Id, ActorName = who.Name, At = Values.FormatInstant(u.Now),
+            };
+            await QueueLifecycleEventAsync(u, c, entity, id, null, state.Key, null, who, depth, inst.CorrelationId, ct);
+            await EnterStateAsync(u, c, inst, state, who, trigger, depth, 0, ct);
+        }
+        else if (state is not null && !state.IsTerminal) await PlanStateTimersAsync(u, c, inst, state, ct);
         return inst;
     }
 
@@ -213,7 +229,7 @@ public sealed partial class WorkflowEngine
         if (record.State is null || !tr.From.Allows(lc, record.State, tr.To))
             throw new WorkflowException("notInFromState", $"“{tr.Label}” is not possible from the record's current state.");
         var scope = u.Scope(record, new RunState { Input = input }, null, new TriggerInfo { Type = "transition", Transition = tr.Key });
-        if (isPerson && (tr.Hidden == true || !await MayApplyAsync(u, scope, tr, actor, record, ct)))
+        if (isPerson && (tr.Hidden == true || !await MayApplyAsync(scope, tr, actor, record, ct)))
             throw new WorkflowException("notAllowed", $"You are not allowed to “{tr.Label}”.");
         if (!await scope.ConditionAsync(tr.When, ct))
             throw new WorkflowException("guardFailed", $"“{tr.Label}” is not possible right now.");
@@ -221,7 +237,10 @@ public sealed partial class WorkflowEngine
         {
             var errors = Options.FormValidator.Validate(form, input, u.Today);
             if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+            // Only the form's shown fields are kept; calculated ones are worked out here, not taken from the request.
+            input = Options.FormValidator.Clean(form, input, u.Today);
         }
+        else if (isPerson) input = [];
         // Remarks (spec §6): only a person must give required ones; automatic and workflow moves never need them.
         comment = CheckRemarks(tr.ResolvedComment, comment, isPerson && !auto, tr.Label);
         var from = c.StateById(record.State)!;
@@ -231,8 +250,14 @@ public sealed partial class WorkflowEngine
             Type = "transition", Field = lc.Field, From = from.Key, To = to.Key, Transition = tr.Key, ActorType = actor.Type, ActorId = actor.Id,
             ActorName = actor.Name, At = Values.FormatInstant(u.Now), Comment = comment,
         };
-        await ExitStateAsync(u, c, record, from, actor, trigger, ct);
+        await ExitStateAsync(u, c, record, from, actor, trigger, depth, ct);
         await WriteStateAsync(u, c, entity, id, to, actor, depth, record.Id, ct);
+        // A record created by the app or the system has no initiator yet: the first person who moves it is (spec §8).
+        if (isPerson && record.InitiatorId is null)
+        {
+            record.InitiatorId = actor.Id;
+            record.InitiatorName = actor.Name;
+        }
         record.State = to.Id;
         record.StateEnteredAt = u.Now;
         record.Status = to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
@@ -248,7 +273,7 @@ public sealed partial class WorkflowEngine
         }, ct);
         u.Log?.Add("lifecycle", "transitioned", id, $"{from.Label} → {to.Label} ({tr.Label})");
         await QueueLifecycleEventAsync(u, c, entity, id, from.Key, to.Key, tr.Key, actor, depth, record.CorrelationId, ct, comment);
-        await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, actor, input, ct);
+        await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, actor, depth, input, ct);
         // The transition's own steps may have moved the record on already; then that state was entered instead.
         if (record.State == to.Id) await EnterStateAsync(u, c, record, to, actor, trigger, depth, chain, ct, input);
     }
@@ -279,25 +304,32 @@ public sealed partial class WorkflowEngine
         return data;
     }
 
-    internal Task<bool> MayApplyAsync(Uow u, ValueScope scope, Transition tr, WorkflowActor actor, InstanceRecord record, CancellationToken ct) =>
-        IsAmongAsync(scope, tr.Who, actor, ct);
+    /// <summary>
+    /// Whether a person may apply a transition by hand: they are among its <c>who</c>, where "the initiator" is the
+    /// record instance's initiator (spec §8), never the person asking.
+    /// </summary>
+    internal Task<bool> MayApplyAsync(ValueScope scope, Transition tr, WorkflowActor actor, InstanceRecord record, CancellationToken ct) =>
+        IsAmongAsync(scope, tr.Who, actor, record.InitiatorId, ct);
 
-    /// <summary>Whether a signed-in person is one of <paramref name="who"/> (empty = nobody).</summary>
-    private async Task<bool> IsAmongAsync(ValueScope scope, List<Assignee>? who, WorkflowActor actor, CancellationToken ct)
+    /// <summary>
+    /// Whether a signed-in person is one of <paramref name="who"/> (empty = nobody). <paramref name="initiatorId"/> is
+    /// who <c>{ initiator: true }</c> and <c>managerOf: "initiator"</c> mean: the record's or run's own initiator, never the caller.
+    /// </summary>
+    private async Task<bool> IsAmongAsync(ValueScope scope, List<Assignee>? who, WorkflowActor actor, string? initiatorId, CancellationToken ct)
     {
         if (!actor.IsUser || who is not { Count: > 0 }) return false;
-        var allowed = await ResolveAssigneesAsync(scope, who, null, actor.Id, ct);
+        var allowed = await ResolveAssigneesAsync(scope, who, null, initiatorId, ct);
         if (allowed.Contains(actor.Id!)) return true;
         // Roles the caller carries (from their login) count too, so apps need not list every member.
         return actor.Roles is { Count: > 0 } roles && who.Any(w => w.Role is not null && roles.Contains(w.Role));
     }
 
-    private async Task ExitStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State from, WorkflowActor actor, TriggerInfo trigger, CancellationToken ct)
+    private async Task ExitStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State from, WorkflowActor actor, TriggerInfo trigger, int depth, CancellationToken ct)
     {
         foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct))
             if (b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal) || b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)) await u.S.RemoveBookmarkAsync(b.Id, ct);
         if (from.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, from, ct);
-        await StartRunAsync(u, record, c, $"onExit:{from.Id}", $"onExit:{from.Id}", trigger, actor, null, ct);
+        await StartRunAsync(u, record, c, $"onExit:{from.Id}", $"onExit:{from.Id}", trigger, actor, depth, null, ct);
     }
 
     /// <summary>
@@ -318,15 +350,20 @@ public sealed partial class WorkflowEngine
         CancellationToken ct, Dictionary<string, object?>? input = null)
     {
         // onEnter steps can read the answers of the transition that entered the state (input.*).
-        await StartRunAsync(u, record, c, $"onEnter:{to.Id}", $"onEnter:{to.Id}", trigger, actor, input, ct);
+        await StartRunAsync(u, record, c, $"onEnter:{to.Id}", $"onEnter:{to.Id}", trigger, actor, depth, input, ct);
         // The onEnter steps may already have moved the record on; then the new state planned its own timers.
         if (to.IsTerminal || record.State != to.Id) return;
         await PlanStateTimersAsync(u, c, record, to, ct);
         await CheckAutoWhenAsync(u, c, record, depth, chain, ct);
     }
 
-    private async Task PlanStateTimersAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct)
+    /// <summary>
+    /// Plans a state's automatic-transition and SLA timers, counted from <paramref name="from"/> (default now; restoring
+    /// an archived lifecycle counts from when the record entered the state). <paramref name="withSla"/> false leaves the SLA out.
+    /// </summary>
+    private async Task PlanStateTimersAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct, DateTimeOffset? from = null, bool withSla = true)
     {
+        var start = from ?? u.Now;
         var lc = c.Lifecycle;
         foreach (var t in lc.Transitions)
         {
@@ -334,18 +371,50 @@ public sealed partial class WorkflowEngine
             var working = (t.Auto.Calendar ?? c.Definition.Settings?.Calendar) == "working";
             await u.S.AddBookmarkAsync(new BookmarkRecord
             {
-                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.AutoPrefix + t.Id, DueAt = u.Calendar.Add(u.Now, d, working),
+                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.AutoPrefix + t.Id, DueAt = u.Calendar.Add(start, d, working),
                 Entity = record.Entity, EntityId = record.EntityId, DefinitionId = record.DefinitionId, CreatedAt = u.Now,
             }, ct);
         }
-        if (state.Sla is { } sla && IsoDuration.TryParse(sla.Within, out var within))
+        if (withSla && state.Sla is { } sla && IsoDuration.TryParse(sla.Within, out var within))
         {
             var working = (sla.Calendar ?? c.Definition.Settings?.Calendar) == "working";
             await u.S.AddBookmarkAsync(new BookmarkRecord
             {
-                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.SlaPrefix + state.Id, DueAt = u.Calendar.Add(u.Now, within, working),
+                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.SlaPrefix + state.Id, DueAt = u.Calendar.Add(start, within, working),
                 Entity = record.Entity, EntityId = record.EntityId, DefinitionId = record.DefinitionId, CreatedAt = u.Now,
             }, ct);
+        }
+    }
+
+    /// <summary>
+    /// Archiving a lifecycle drops its records' automatic-transition and SLA timers (an archived lifecycle moves nothing);
+    /// restoring plans them again, counted from when each record entered its state (an SLA that already ran is not
+    /// planned again). Timers already due fire on the next round.
+    /// </summary>
+    internal async Task ArchiveRecordTimersAsync(Uow u, string definitionId, bool restore, CancellationToken ct)
+    {
+        for (var skip = 0; ; skip += 500)
+        {
+            var page = await u.S.QueryInstancesAsync(new InstanceQuery
+            {
+                DefinitionId = definitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active], Skip = skip, Take = 500,
+            }, ct);
+            foreach (var found in page)
+            {
+                var record = u.Records.TryGetValue(found.Id, out var held) ? held : u.Records[found.Id] = found;
+                var timers = (await u.S.ListBookmarksAsync(record.Id, ct))
+                    .Where(b => b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal) || b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)).ToList();
+                foreach (var b in timers) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                if (!restore) continue;
+                var c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
+                if (c.StateById(record.State) is not { IsTerminal: false } state) continue;
+                var entered = record.StateEnteredAt ?? u.Now;
+                var slaRan = (await u.S.QueryInstancesAsync(new InstanceQuery { ParentId = record.Id, Kinds = [InstanceKinds.Run], Take = 1000 }, ct))
+                    .Any(r => r.Reason == BookmarkPurposes.SlaPrefix + state.Id && r.StartedAt >= entered)
+                    || (await u.S.QueryAuditAsync(new AuditQuery { InstanceId = record.Id, Category = "lifecycle", Action = "slaBreached", From = entered, Take = 1 }, ct)).Count > 0;
+                await PlanStateTimersAsync(u, c, record, state, ct, entered, withSla: !slaRan);
+            }
+            if (page.Count < 500) return;
         }
     }
 
@@ -376,7 +445,8 @@ public sealed partial class WorkflowEngine
         };
         await u.S.AddOutboxAsync(new OutboxRecord
         {
-            Id = NewId(), Kind = OutboxKinds.Lifecycle, Payload = System.Text.Json.JsonSerializer.Serialize(ev, Definitions.JsonOptions), CreatedAt = u.Now,
+            Id = OutboxRecord.NewId(u.Now), Kind = OutboxKinds.Lifecycle, Payload = System.Text.Json.JsonSerializer.Serialize(ev, Definitions.JsonOptions), CreatedAt = u.Now,
+            RecordKey = OutboxRecord.KeyOf(entity, id),
         }, ct);
     }
 
@@ -422,8 +492,13 @@ public sealed partial class WorkflowEngine
                 Type = "forced", Field = c.Lifecycle.Field, From = from?.Key, To = to.Key, ActorType = admin.Type, ActorId = admin.Id, ActorName = admin.Name,
                 At = Values.FormatInstant(u.Now),
             };
-            if (from is not null && !skipSteps) await ExitStateAsync(u, c, record, from, admin, trigger, ct);
-            else foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+            if (from is not null && !skipSteps) await ExitStateAsync(u, c, record, from, admin, trigger, 0, ct);
+            else
+            {
+                foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                // Skipping steps skips onExit/onEnter, but the record still leaves the state: its onEnter and SLA runs stop.
+                if (from is not null && from.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, from, ct);
+            }
             await WriteStateAsync(u, c, entity, id, to, admin, 0, record.Id, ct);
             record.State = to.Id;
             record.StateEnteredAt = u.Now;
@@ -477,7 +552,9 @@ public sealed partial class WorkflowEngine
             {
                 var errors = Options.FormValidator.Validate(form, input, u.Today);
                 if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+                input = Options.FormValidator.Clean(form, input, u.Today);
             }
+            else input = [];
             comment = CheckRemarks(reset.ResolvedComment, comment, byPerson: true, label);
             var from = c.StateById(record.State);
             var trigger = new TriggerInfo
@@ -490,7 +567,7 @@ public sealed partial class WorkflowEngine
             // What the person chose to take back of the workflow's work (spec §6 reset list).
             var undone = await UndoChosenAsync(u, c, record, undo ?? [], token, user, ct);
             var runExitEnter = reset.RunExitEnter == true;
-            if (from is not null && runExitEnter) await ExitStateAsync(u, c, record, from, user, trigger, ct);
+            if (from is not null && runExitEnter) await ExitStateAsync(u, c, record, from, user, trigger, 0, ct);
             else foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
             await WriteStateAsync(u, c, entity, id, to, user, 0, record.Id, ct);
             record.State = to.Id;
@@ -509,7 +586,7 @@ public sealed partial class WorkflowEngine
             u.Log?.Add("lifecycle", "reset", id, $"{from?.Label ?? "?"} → {to.Label} ({label})");
             await QueueLifecycleEventAsync(u, c, entity, id, from?.Key, to.Key, null, user, 0, record.CorrelationId, ct, comment);
             // The reset steps read the answers (input.*) and may change this record and related ones.
-            await StartRunAsync(u, record, c, "reset", "reset", trigger, user, input, ct);
+            await StartRunAsync(u, record, c, "reset", "reset", trigger, user, 0, input, ct);
             if (record.State == to.Id)
             {
                 if (runExitEnter) await EnterStateAsync(u, c, record, to, user, trigger, 0, 0, ct, input);
@@ -529,7 +606,7 @@ public sealed partial class WorkflowEngine
 
     /// <summary>Whether the viewer may reset the record's workflow (it has a reset and they are in its <c>who</c>).</summary>
     internal async Task<bool> MayResetAsync(Uow u, CompiledDefinition c, InstanceRecord record, WorkflowActor actor, CancellationToken ct) =>
-        c.Lifecycle.Reset is { } reset && await IsAmongAsync(u.Scope(record), reset.Who, actor, ct);
+        c.Lifecycle.Reset is { } reset && await IsAmongAsync(u.Scope(record), reset.Who, actor, record.InitiatorId, ct);
 
     /// <summary>What a reset stops: the record's unfinished runs, and the automations about the record unless the reset keeps them.</summary>
     internal async Task<List<InstanceRecord>> RunningAboutAsync(Uow u, InstanceRecord record, LifecycleReset reset, CancellationToken ct)
@@ -588,7 +665,7 @@ public sealed partial class WorkflowEngine
             Type = "transition", Field = lc.Field, From = from.Key, To = to.Key, Transition = tr.Key, ActorType = change.ActorType, ActorId = change.ActorId,
             ActorName = change.ActorName, At = Values.FormatInstant(u.Now), EventId = change.EventId,
         };
-        await ExitStateAsync(u, c, record, from, change.Actor, trigger, ct);
+        await ExitStateAsync(u, c, record, from, change.Actor, trigger, change.Depth, ct);
         record.State = to.Id;
         record.StateEnteredAt = u.Now;
         record.Status = to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
@@ -603,7 +680,7 @@ public sealed partial class WorkflowEngine
             Data = new Dictionary<string, object?> { ["transition"] = tr.Key, ["label"] = tr.Label, ["observed"] = true },
         }, ct);
         await QueueLifecycleEventAsync(u, c, change.Entity, change.EntityId, from.Key, to.Key, tr.Key, change.Actor, change.Depth, record.CorrelationId, ct);
-        await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, change.Actor, null, ct);
+        await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, change.Actor, change.Depth, null, ct);
         await EnterStateAsync(u, c, record, to, change.Actor, trigger, change.Depth, 0, ct);
     }
 }

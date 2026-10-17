@@ -10,8 +10,11 @@ fixture wins and this text is fixed.
 - Every state, transition, step, branch path, case, outcome and variable has an immutable `id`
   (generated, `[A-Za-z0-9_-]{1,64}`, unique within the definition). Editors never show ids.
 - Many also have an editable `key` (`[a-z][a-zA-Z0-9_]*`). Keys are what people and APIs use
-  (transition keys, state keys, outcome keys). Renaming a key in a draft is allowed; publishing a
-  renamed state or transition key while instances use it is a lint *warning* (`renamedInUse`).
+  (transition keys, state keys, outcome keys). Renaming a key in a draft is allowed; a state or
+  transition key that differs from the published version's while it is in use is a lint *warning*
+  (`renamedInUse`, on the state or transition): records are in the state (their field still holds the
+  old key), or other published workflows name it by the old key (`stateEntered`/`transitionApplied`
+  triggers, `applyTransition` steps).
 - Every reference inside a definition points at an `id`, except **token paths** (below), which point
   at registry keys and step ids.
 
@@ -123,19 +126,30 @@ start it; publishing a later version does not drop changes still waiting to be p
 committed change event starts at most one instance per published trigger (engines enforce it with a
 unique `(triggerId, eventId)`). A change that is rolled back never starts anything. Each start is its
 own unit of work: an automation that fails to start is audited as `trigger.failed` and does not stop
-the others the same event starts.
+the others the same event starts. The change and lifecycle events of one record are processed in the
+order they were written: while an older event of the record is still pending (failed and backing off,
+or parked for an admin), newer ones wait.
 
 **Loop protection.** Every instance carries `depth` (0 when started by a person or schedule; parent
-depth + 1 when started by a change the engine itself made). Changes made at depth ≥ `maxChainDepth`
-(settings, default 5) do not start instances; the engine writes an audit entry
-`trigger.suppressed` instead. A workflow's own writes never re-trigger the *same* definition unless
+depth + 1 when started by a change the engine itself made). A lifecycle's child runs (§6) carry the
+depth of the move that started them (a move a workflow step applied at depth *d* + 1 starts runs at
+depth *d* + 1), so a lifecycle and an automation feeding each other count up like any other chain.
+Changes made at depth ≥ `maxChainDepth` (settings, default 5) do not start instances; the engine writes
+an audit entry `trigger.suppressed` instead. A `subWorkflow` step whose child would get depth ≥
+`maxChainDepth` does not start it: the step fails with `subWorkflowDepth` (never retried), so the run
+stops in `incident` with a message naming the limit. Lint refuses sub-workflow cycles across the
+published workflows (`subWorkflowCycle`). A workflow's own writes never re-trigger the *same* definition unless
 its trigger sets `"retrigger": true`; this covers transitions its `applyTransition` steps apply
 (`stateEntered`/`transitionApplied` triggers) as well as field writes. Writes a reset makes to take
 back what a workflow did (§6) start no automations at all (the change event carries `suppressTriggers`).
 
 **Concurrency** (`settings.concurrency`): `perRecordSerial` (default) — a new instance of the same
 definition for the same record waits in `queued` status until earlier ones finish; `parallel` — no
-queueing; `skipIfRunning` — the new start is dropped (audited as `trigger.skipped`).
+queueing; `skipIfRunning` — the new start is dropped (audited as `trigger.skipped`). Engines enforce
+this in the store, not only by checking first: a running serial instance holds a unique key
+(definition, record) until it finishes, as a lifecycle's live record instance does until it is
+cancelled; a unit that would add a second one fails to commit and is retried, and then queues, skips
+or finds the existing instance.
 
 ## 6. Lifecycles
 
@@ -183,7 +197,11 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
     only). Hosts may additionally require the `workflows.transition` permission.
   - `when`: a guard condition. When false the transition is not offered and cannot be applied.
   - `input`: `{ form: <form definition>, mode?: "create" }`. The answers are validated by the form
-    engine rules (required, built-in checks, visibility) server-side; `input.*` reads them.
+    engine rules (required, built-in checks, visibility, choices among the field's options) server-side;
+    `input.*` reads them. Only the answers to the form's shown fields are kept (answers to hidden fields
+    and keys the form does not have are dropped), calculated fields are worked out again on the server
+    and hidden fields take their `defaultValue`. The same holds for reset, manual-start and task forms;
+    without a form, a person's answers are ignored.
   - `steps`: steps run after the state changes (an automation-style run, §7).
   - `auto`: `{ after: <duration>, calendar? }` (applied by the system after the record has spent that
     long in a `from` state), or `{ when: <condition> }` (applied by the system when the condition
@@ -208,7 +226,7 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   those steps already moved the record on) → commit. Steps
   run until they first wait; the rest continues in the background. If any check fails nothing
   changes and the API returns the error code (`notInFromState`, `notAllowed`, `guardFailed`,
-  `invalidInput`, `commentRequired`, `staleState`, `wrongLifecycle`). The record view lists each transition the
+  `invalidInput`, `commentRequired`, `wrongLifecycle`). The record view lists each transition the
   viewer may apply as `{ key, label, to, toLabel, tone, confirm, form, comment }`, with `comment` the
   resolved remarks setting (never `null`).
 - **Record instance.** A lifecycle has one long-lived instance per record (`status: active` until
@@ -217,7 +235,11 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   for records that existed before publishing, lazily the first time something changes the record
   through the lifecycle (a transition, a forced state, an observed write) with the record's current
   value. Reading a record never creates anything: the record panel shows the state the instance would
-  have. A value that matches no state puts the instance in `outOfSync`.
+  have. A value that matches no state puts the instance in `outOfSync`. A **new** record enters its
+  state like any move: the state's `onEnter` runs (trigger `type: "created"`, `to`: the state key), its
+  timers are planned, automatic `when` transitions are checked, and `stateEntered` automations for that
+  state start (`trigger.from` is `null`). A record that existed before publishing is only adopted: its
+  timers are planned, nothing runs.
 - **Runs.** `onEnter`, `onExit`, `sla` and transition `steps` each execute as a *child run* of the
   record instance (`parentId` set), pinned to the same version. Runs started by `onEnter`/`sla` of a
   state are cancelled when the record leaves the state, unless the state sets `"keepRunsOnExit":
@@ -234,7 +256,8 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   forced. Both are audited.
 - **Force state.** Admins with `workflows.intervene` may move a record to any state with a reason
   (`POST /records/{entity}/{id}/force-state`). No guards or inputs are checked; `onExit`/`onEnter`
-  run unless `skipSteps: true`. Audited as `lifecycle.forced`.
+  run unless `skipSteps: true`. Either way the record leaves its state: the old state's timers are
+  dropped and its `onEnter`/`sla` runs are cancelled (unless `keepRunsOnExit`). Audited as `lifecycle.forced`.
 - **Reset.** `reset?: { label?, to?, who, confirm?, input?: { form }, comment?, states?, runExitEnter?,
   cancelAutomations?, steps? }` lets people start a record's workflow over (`POST /records/{entity}/{id}/reset` with
   `{ input?, comment?, undo? }`). Without `reset` a lifecycle cannot be reset. `comment` is the
@@ -319,13 +342,26 @@ applies to steps that call out (`action`, `webhook`, `notify`, `subWorkflow`). D
 outputs `error` holds the message), or `{ "steps": [...] }` (run these, then continue after the
 step). `timeout` (a duration) fails the attempt if the call takes longer (it counts as a failed
 attempt: retried, then `onError`). A failed `action` attempt undoes the record writes its handler
-made before failing.
+made before failing. Record changes a handler makes and leaves unsaved (on the app's own data context)
+are saved right after it returns, still as the workflow's writes (its actor, depth + 1 and causation),
+never as anonymous writes when the unit commits.
 
 `notify` steps queue the message in the transactional outbox and complete; delivery happens after
 commit and is retried by the outbox (backing off up to an hour, parked for an admin after 10
-attempts). A step's `retry` and `onError` never apply to delivery, so lint warns about them on a
-`notify` step (`notifyDelivery`). Webhook `path` templates URL-encode the values they insert, so a
-value cannot add path segments, a query or another host; webhooks do not follow redirects.
+attempts). A step's `retry` and `onError` cover only what the step itself does (working out the
+recipients and rendering the message), never delivery, so lint warns about them on a `notify` step
+(`notifyDelivery`). A `notify` through a channel switched off in settings (`channels.<key>.enabled:
+false`, also after the workflow was published) sends nothing: the step is audited as `step.skipped`
+(data: `reason: "channelDisabled"`, `channel`) with `sent: 0`. The idempotency key a webhook
+(`Idempotency-Key`) or an action handler gets is the same for every attempt (retry) of one run of the
+step, so a receiver can drop repeats; it differs for each forEach item and each goTo repeat. Webhook `path` templates URL-encode the values they insert, so a
+value cannot add path segments, a query or another host; a path with a `.` or `..` segment (also
+percent-encoded) is refused (`webhookOriginNotAllowed`), and with a connection the final address must
+stay under the connection's base path. Header names must be HTTP tokens and rendered values may not
+contain control characters (a line break would add a header): such a step fails with `badHeader`
+(never retried). Webhooks do not follow redirects, use no proxy, and never connect to loopback,
+private, link-local or other local addresses, IPv6 forms that carry such an IPv4 address (mapped,
+IPv4-compatible, NAT64, 6to4) and Teredo included.
 
 | Type | Shape | Outputs |
 |---|---|---|
@@ -336,7 +372,7 @@ value cannot add path segments, a query or another host; webhooks do not follow 
 | `approval` | `assignees`, `rule: { type: "any"|"all"|"count"|"percent", value? }`, `due` (required), `calendar?`, `reminders?: [duration…]`, `escalation?: { after, assignees, notify? }`, `form?`, `instructions?: template`, `allowDelegation?`, `requireComment?: "never"|"reject"|"always"`, `outcomes: { approved: [...], rejected: [...], timedOut: [...] }` | `outcome` (`approved`/`rejected`/`timedOut`), `decidedBy` (user ids), `comments`, `data` (form answers of the last decision) |
 | `task` | Like `approval` but `outcomes: [{ id, key, label, tone?, steps }]` (1–8), `onTimeout: { steps }`, rule is always first decision wins. | `outcome` (key), `decidedBy`, `comment`, `data` |
 | `wait` | `until`: `{ type: "duration", duration, calendar? }` · `{ type: "date", date: <operand>, offset?, at? }` · `{ type: "condition", when, timeout, onTimeout: { steps } }` · `{ type: "signal", signal, timeout?, onTimeout? }` | `timedOut` (bool), `data` (signal data) |
-| `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
+| `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`; a value for an `enum` field must be one of its options, checked again at run time for values read from tokens: `unknownValue`, never retried; `createRecord` alike). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
 | `createRecord` | `entity: <registry entity>`, `values: [{ field, value: operand }]` (fields must be `settable`, `fieldNotSettable`; constants among an enum field's options, `unknownValue`; not a field a lifecycle controls, this definition's or a published one, `ownedField`: it starts at its initial state; every field the registry marks `required` set, `missingRequiredField`). At run time a field any published lifecycle controls is refused (`ownedField`), since lint only knows the lifecycles published when the workflow was. Needs a gateway that can create records: `notSupported` when it cannot (or cannot make that type), `unknownEntity` when it does not store it. One committed create, like `setFields`. | `id` |
 | `setVariables` | `values: [{ variable: <variable id>, value: operand }]` | — |
 | `applyTransition` | `target?: "self"|<relation path>`, `lifecycle: <definition key>`, `transition: <key>`, `input?: { <key>: operand }`, `comment?: template` (remarks recorded with the move and read as `trigger.comment`; the transition's `required` check does not apply to a workflow), `ifNotAllowed: "fail"|"skip"` | `applied` (bool) |
@@ -344,13 +380,14 @@ value cannot add path segments, a query or another host; webhooks do not follow 
 | `webhook` | `connection?` (named in settings) or `url` (must match an allowed origin), `method`, `path?: template`, `headers?: {name: template}`, `body?: json-with-operands`, `expect?: [status…]` | `status`, `body` |
 | `action` | `action: <registry key>`, `input: { <key>: operand }`. A handler that can also undo (`undo(input, output)`) makes the action undoable by a reset. | the action's declared outputs |
 | `subWorkflow` | `workflow: <automation key>`, `target?`, `wait: bool`, `input?` | `instanceId`, `status`, `outputs` (the child's `vars`) |
-| `goTo` | `target: <step id>`, `maxTimes` (1–50). Jumps back to an earlier step in the same list or an enclosing list on the current path (never into or out of a `parallel` path or `forEach`). When the count is reached the step is skipped. | `count` |
+| `goTo` | `target: <step id>`, `maxTimes` (1–50). Jumps back to an earlier step in the same list or an enclosing list on the current path (never into or out of a `parallel` path or `forEach`). When the count is reached the step is skipped. Inside a `forEach` the count is kept per item. | `count` |
 | `end` | `result: "completed"|"failed"`, `reason?: template` | — |
 
 **Remarks on decisions.** `requireComment` on an `approval` or a `task`: `never` (default; a comment
 is always allowed), `always` (every decision needs one), or `reject`: a comment is needed for an
 approval's `rejected` outcome, and for any task outcome whose `tone` is `danger` (an outcome keyed
-`rejected` counts too). A missing or blank comment fails the decision with `commentRequired` (400).
+`rejected` counts too). A missing or blank comment fails the decision with `commentRequired` (400). Comments are trimmed and
+at most 2000 characters (`invalidInput`).
 The task view lists the outcomes with their `tone`, so clients can tell which ones need a comment. A
 task with `requireComment: "reject"` and no `danger` (or `rejected`) outcome never asks; lint warns
 (`noNegativeOutcome`).
@@ -372,8 +409,17 @@ decisions already settle completes at once.
 `{ "role": key }` · `{ "group": key }` · `{ "user": id }` · `{ "field": <token path of a user field> }`
 · `{ "managerOf": "initiator"|"assignees"|<token path> }` · `{ "initiator": true }`.
 `to` also accepts `{ "email": template }`. Duplicates are merged. An approval whose assignees
-resolve to nobody fails the step (`noAssignees`). Who "the initiator" is: the person who triggered
-or applied (`null` for system starts).
+resolve to nobody fails the step (`noAssignees`). Who "the initiator" is (for `{ initiator: true }`
+and `managerOf: "initiator"`):
+
+- inside a run (steps, tasks, recipients, `instance.initiator`): the person who started that instance
+  (who triggered the automation or applied the move that started the run; `null` for system starts);
+- in the `who` of a transition, of the reset and of a manual start from a record: the record's
+  initiator, kept on its lifecycle record instance. That is the person who created the record (the
+  signed-in user behind the create), or, when the app or the system created it (or it existed before
+  the lifecycle was published), the first person who applies a transition to it. A record with no
+  initiator yet, or a manual start with no record, matches nobody. It is never the person asking,
+  so `{ initiator: true }` does not let everyone through.
 
 ## 9. Durations and calendars
 
@@ -382,7 +428,9 @@ With `calendar: "working"` the duration counts only working time from settings (
 `calendar.hours` `["09:00","17:00"]`, `calendar.holidays` `["2026-12-25", …]`, `timeZone`): days count
 working days (landing at the same time of day, moved forward into working hours), hours count
 working hours. With no calendar in settings, `working` behaves as `calendar`. A duration longer than
-50 years is invalid (`badDuration`).
+50 years is invalid (`badDuration`). A time beyond the calendar's range (after year 9999, e.g. a date
+`9999-12-31` plus an offset) never arrives: a `dateReached` trigger plans nothing for it, a `wait` for
+it waits without a timer; it is never an error.
 
 ## 10. Instances, runs and statuses
 
@@ -412,7 +460,11 @@ Categories and actions:
 - `instance`: `started` (data: trigger), `queued`, `completed`, `failed`, `cancelled` (actor: who
   cancelled it, data: reason), `migrated` (before/after `version`; data: `stateMap`, or `reason:
   "permissions"` when a permissions change moved it), `retried`, `skipped`, `incident`, `timerFailed` (a timer
-  could not be processed; data: purpose, error).
+  could not be processed; data: purpose, error, attempt, parked). A failing timer is retried with backoff (1,
+  2, 4… minutes, up to an hour); after 10 attempts it is parked for an admin and the instance shows it: an
+  automation or run token stops in `incident` (retry, skip or cancel as usual); a lifecycle record
+  instance's automatic-transition or SLA timer, or a task's reminder or escalation (the task stays open),
+  sets the instance's `error` and writes `instance.incident`.
 - `step`: `started`, `completed` (data: outputs, masked), `failed` (data: error, attempt),
   `retryScheduled`, `skipped`, `branchTaken` (data: path), `waiting`.
 - `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked, `comment`
@@ -438,28 +490,48 @@ form answers listed there as `input.key`, are replaced by `"***"` wherever data 
 audit `before`, `after` and `data` (including step outputs and the trigger of `instance.started`), run
 and task views, and test runs. A value is masked under such a key anywhere in the data, and also when
 it equals (or, inside text, contains) the current value of a sensitive field of the record concerned,
-so values copied into variables or messages are hidden too. Fields that are not `readable` never
+or its URL-encoded form (as a webhook path inserts it), so values copied into variables, messages or
+addresses are hidden too. This covers an instance's `error`, task titles and instructions, and the reset
+list (item titles, details and warnings; values of any listed record's sensitive or masked fields show
+as "(hidden)", and a record whose title field is hidden is named by its id). Fields that are not `readable` never
 appear in test runs.
 
 ## 12. Global settings
 
-`schema/settings.schema.json`: `{ version, timeZone, calendar, defaults: { retry, taskDue,
-reminders, concurrency, maxChainDepth, forEachMax }, people: { delegation: bool, escalationDefault },
-channels: { <key>: { enabled, sender?, footer? } }, webhooks: { allowedOrigins: [...], connections:
-[{ key, label, baseUrl, auth: "none"|"secret", secretName? }] }, audit: { retentionDays: { <category>:
-days }, maskedFields: ["entity.field", …] }, paused: [{ entity }] }`. Secrets are never stored in
-settings; a connection names a secret the host resolves.
+`schema/settings.schema.json`: `{ version, timeZone, calendar, defaults: { retry, reminders,
+concurrency, maxChainDepth, forEachMax }, people: { delegation: bool }, channels: { <key>: { enabled,
+footer? } }, webhooks: { allowedOrigins: [...], connections: [{ key, label, baseUrl, auth:
+"none"|"secret", secretName?, header? }] }, audit: { retentionDays: { <category>: days },
+maskedFields: ["entity.field", …] }, paused: [{ entity }] }`. Secrets are never stored in settings; a
+connection names a secret the host resolves.
+
+Saving checks every field and refuses the whole save with `invalidSettings` (the problems listed) when
+one is wrong: a known time zone; working days among `mon`…`sun`, each once; working hours exactly two
+`HH:mm` times, the end after the start; holidays real dates (`YYYY-MM-DD`); retry `max` 0–10, `backoff`
+`fixed`/`exponential`, durations valid; reminders valid durations; `concurrency` one of the three modes;
+`maxChainDepth` 1–20; `forEachMax` 1–500; allowed origins `scheme://host[:port]` only; connections with
+a unique key, an http(s) `baseUrl`, a known `auth`, a `secretName` when `auth` is `secret`, a valid
+`header` name; `retentionDays` at least 1; masked fields shaped `entity.field`/`input.key`; paused
+entries naming an entity. Settings stored before these checks existed are read leniently: a value the
+engine cannot use (hours that are not times, a holiday that is not a date, an unknown day) is ignored
+and the default used (09:00–17:00, Monday–Friday), and the engine logs a warning; it never stops the
+engine from working or the settings from being fixed.
 
 ## 13. Versions and lint
 
 - `status`: `draft` | `published` | `archived`. Publishing validates (all lint errors block; warnings
   don't), increments `version`, stores an immutable copy, re-indexes triggers, and records a diff.
   Archiving removes the definition's triggers (it starts nothing new; running instances finish on their
-  version). Restoring lints the published version against the other published workflows first, like a
+  version). Archiving a lifecycle also drops its records' automatic-transition and SLA timers; restoring
+  plans them again counted from when each record entered its state (an SLA that already ran in that
+  state is not planned again; timers already due fire at once). Restoring lints the published version against the other published workflows first, like a
   publish (`lintErrors`, e.g. a second fallback lifecycle published meanwhile: `lifecycleConflict`), then
   re-indexes its triggers with its original first-publish time.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
-  produce the same codes for the same definition.
+  produce the same codes for the same definition. Among them: a webhook `method` must be one of `GET`,
+  `POST`, `PUT`, `PATCH`, `DELETE` in capitals (`badMethod`, also refused at run
+  time); `subWorkflowCycle` (§5); `renamedInUse` (§1) needs the engine's records, so only engines
+  report it.
 - **Test runs** (`POST /simulate`) report the definition's lint problems with the result. A lifecycle
   tested on a record that would not get it (pinned to another lifecycle for the field, not meeting
   `appliesWhen` with the test values on top, or another lifecycle comes first in publish order) still
@@ -475,11 +547,14 @@ settings; a connection names a secret the host resolves.
   (as when the builder leaves it empty); an approval or task needs someone, so it is refused
   (`lintErrors`, `noAssignees`). A `who` field must be a person field of the record (lint). A change
   that alters nothing publishes nothing (`changed: false`). After publishing, a lifecycle's record
-  instances (not cancelled) move from earlier versions to the new one (states and transitions are
-  unchanged, so they map 1:1; their state, timers and runs stay as they are), each audited as
-  `instance.migrated` with `reason: "permissions"`, so people whose permission was revoked stop acting
-  on existing records at once (`recordsMoved`). Automation runs already in progress, and a record's
+  instances (not cancelled) on the previous published version move to the new one (its states and
+  transitions are that version's, so they map 1:1; their state, timers and runs stay as they are), and
+  so do instances on older versions whose states and transitions are exactly the same; each is audited
+  as `instance.migrated` with `reason: "permissions"`, so people whose permission was revoked stop
+  acting on existing records at once (`recordsMoved`). Instances on an older version whose states or
+  transitions differ stay where they are (moving them could leave them in a state the new version does
+  not have); they are counted as `recordsKept` and need an explicit migration. Automation runs already in progress, and a record's
   child runs, keep their version: their open tasks keep their assignees. The response is the
-  definition summary plus `changed`, `draftSkipped` and `recordsMoved`. Errors: `unknownNode`,
-  `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged` (data: the new
-  `version`, `changes`, `draftSkipped`, `recordsMoved`).
+  definition summary plus `changed`, `draftSkipped`, `recordsMoved` and `recordsKept`. Errors:
+  `unknownNode`, `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged` (data:
+  the new `version`, `changes`, `draftSkipped`, `recordsMoved`, `recordsKept`).

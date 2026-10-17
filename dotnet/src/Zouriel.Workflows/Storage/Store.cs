@@ -184,6 +184,11 @@ public interface IWorkflowSession : IAsyncDisposable
     Task AddBookmarkAsync(BookmarkRecord b, CancellationToken ct = default);
     /// <summary>Removes a bookmark (no error when it is already gone).</summary>
     Task RemoveBookmarkAsync(string id, CancellationToken ct = default);
+    /// <summary>
+    /// Saves changes to a bookmark read in this unit (failed attempts, backoff, parking). Stores that save the rows they
+    /// track need not implement it; the default does nothing.
+    /// </summary>
+    Task UpdateBookmarkAsync(BookmarkRecord b, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>A bookmark by id, or null once removed.</summary>
     Task<BookmarkRecord?> GetBookmarkAsync(string id, CancellationToken ct = default);
     /// <summary>An instance's bookmarks.</summary>
@@ -215,6 +220,13 @@ public interface IWorkflowSession : IAsyncDisposable
     Task<IReadOnlyList<OutboxRecord>> ClaimOutboxAsync(DateTimeOffset now, DateTimeOffset lockUntil, int limit, CancellationToken ct = default);
     /// <summary>Saves an outbox row (processed, failed or re-locked).</summary>
     Task UpdateOutboxAsync(OutboxRecord o, CancellationToken ct = default);
+    /// <summary>
+    /// Whether an unprocessed outbox row of the same <see cref="OutboxRecord.RecordKey"/> was written before
+    /// <paramref name="row"/> (earlier <c>CreatedAt</c>, or the same and a smaller <c>Id</c>), whatever its lock: the
+    /// engine then leaves <paramref name="row"/> for later, so one record's events are processed in order. Stores
+    /// should implement it (indexed on RecordKey, ProcessedAt); the default answers false (no ordering).
+    /// </summary>
+    Task<bool> HasEarlierPendingOutboxAsync(OutboxRecord row, CancellationToken ct = default) => Task.FromResult(false);
 
     /// <summary>
     /// The head of a tenant's audit chain (null before the first entry), locked for the rest of the unit so
@@ -232,6 +244,14 @@ public interface IWorkflowSession : IAsyncDisposable
 
     /// <summary>Deletes housekeeping rows: processed outbox rows and trigger claims older than the given instants.</summary>
     Task<int> CleanupAsync(DateTimeOffset processedOutboxBefore, DateTimeOffset claimsBefore, CancellationToken ct = default);
+
+    /// <summary>
+    /// Saves record changes made in this unit but not saved yet (an app action that changed entities through the host's
+    /// own data context without saving them). The engine calls it inside the action's write scope right after the
+    /// handler returns, so the change hook sees those writes as the workflow's (actor, depth, causation) rather than
+    /// as anonymous writes at commit. Stores that write records at once need nothing; the default does nothing.
+    /// </summary>
+    Task SaveRecordChangesAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     /// <summary>
     /// Starts a savepoint inside the unit (used around app actions so a failing handler's writes are undone).

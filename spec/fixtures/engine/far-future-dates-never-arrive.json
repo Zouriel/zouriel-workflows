@@ -1,0 +1,25 @@
+{
+ "name": "A date beyond the calendar's range (year 9999 plus an offset) never arrives: no date trigger is planned, a wait for it waits, and nothing else the change starts is held up",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": { "application": [] },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "wf_d", "key": "deadline", "kind": "automation", "title": "Deadline", "entity": "application",
+   "trigger": { "type": "dateReached", "field": "deadline", "offset": "P1D" },
+   "steps": [ { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "ali" } ], "body": ["due"] } ]
+  },
+  {
+   "specVersion": 1, "id": "wf_c", "key": "onCreate", "kind": "automation", "title": "Created", "entity": "application",
+   "trigger": { "type": "created" },
+   "steps": [ { "id": "w", "type": "wait", "until": { "type": "date", "date": { "ref": "entity.deadline" }, "offset": "P1D" } } ]
+  }
+ ],
+ "steps": [
+  {
+   "create": { "entity": "application", "id": "a1", "values": { "title": "Q", "deadline": "9999-12-31" } },
+   "expect": { "instances": [ { "definition": "onCreate", "status": "waiting" } ], "bookmarks": 0 }
+  },
+  { "advance": "P30D", "expect": { "instances": [ { "definition": "onCreate", "status": "waiting" } ], "notificationCount": 0 } }
+ ]
+}

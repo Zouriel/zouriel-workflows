@@ -336,7 +336,7 @@ public static class Linter
                 var here = env with { Upstream = upstream, EnclosingLists = lists };
                 LintStep(s, here, listId, i);
                 if (s is NotifyStep && (s.Retry is not null || s.OnError is not null))
-                    Warn("notifyDelivery", s.Id, "Notifications are delivered after the step through the outbox, which retries on its own; retry and on-error settings here have no effect.");
+                    Warn("notifyDelivery", s.Id, "Retry and on-error here only cover working out the recipients and the message; delivery happens after the step through the outbox, which retries on its own.");
                 if (s.Retry is { } r)
                 {
                     if (r.Max is < 0 or > 10) Error("badRetry", s.Id, "Retries can be 0 to 10.");
@@ -569,8 +569,36 @@ public static class Linter
                 else if (child.IsLifecycle) Error("notAutomation", sub.Id, $"'{child.Title}' is a lifecycle; only automations can be run as steps.");
                 else if (child.Entity is not null && child.Entity != TargetEntity(sub.Target, env, sub.Id))
                     Error("workflowEntity", sub.Id, $"'{child.Title}' is about a different record type.");
+                else if (CycleThrough(sub.Workflow) is { } path)
+                    Error("subWorkflowCycle", sub.Id, $"'{Name(sub)}' runs '{child.Title}', which leads back to this workflow ({string.Join(" → ", path)}). Workflows that run each other never stop; use 'Go back' for repeats.");
             }
             foreach (var v in sub.Input?.Values ?? Enumerable.Empty<Operand>()) CheckOperand(v, sub.Id, env);
+        }
+
+        private Dictionary<string, List<string>>? _subGraph;
+
+        /// <summary>
+        /// The chain of workflow keys from <paramref name="start"/> back to this definition through sub-workflow steps of
+        /// the published workflows (this definition in place of its own published version), or null when there is none.
+        /// </summary>
+        private List<string>? CycleThrough(string start)
+        {
+            static IEnumerable<string> Calls(Engine.CompiledDefinition c) =>
+                c.Lists.Values.SelectMany(l => l).OfType<SubWorkflowStep>().Select(s => s.Workflow).Distinct();
+            _subGraph ??= ctx.OtherPublished.Where(d => d.Id != def.Id && !d.IsLifecycle)
+                .Select(d => (d.Key, Calls: Calls(new Engine.CompiledDefinition(d, d.Id, 0)).ToList()))
+                .Append((def.Key, Calls: Calls(_compiled).ToList()))
+                .GroupBy(x => x.Key).ToDictionary(g => g.Key, g => g.Last().Calls);
+            var seen = new HashSet<string>();
+            List<string>? Walk(string key, List<string> trail)
+            {
+                if (key == def.Key) return [def.Key, .. trail];
+                if (!seen.Add(key) || !_subGraph.TryGetValue(key, out var next)) return null;
+                foreach (var n in next)
+                    if (Walk(n, [.. trail, n]) is { } found) return found;
+                return null;
+            }
+            return Walk(start, [start]);
         }
 
         private void LintGoTo(GoToStep g, Env env, string listId, int index)
@@ -643,6 +671,8 @@ public static class Linter
 
         private void LintWebhook(WebhookStep wh, Env env)
         {
+            if (!WebhookStep.Methods.Contains(wh.Method))
+                Error("badMethod", wh.Id, $"'{wh.Method}' is not an HTTP method a webhook can use ({string.Join(", ", WebhookStep.Methods)}, in capitals).");
             if (wh.Connection is not null)
             {
                 if (ctx.Settings.Webhooks?.Connections?.Any(c => c.Key == wh.Connection) != true)

@@ -62,7 +62,8 @@ internal sealed class Masker
         return keys;
     }
 
-    private static bool IsSensitive(FieldDescriptor f, string entity, GlobalSettings settings) =>
+    /// <summary>Whether a field's values are hidden: marked <c>sensitive</c> in the registry or listed in <c>settings.audit.maskedFields</c>.</summary>
+    public static bool IsSensitive(FieldDescriptor f, string entity, GlobalSettings settings) =>
         f.IsSensitive || (settings.Audit?.MaskedFields ?? []).Contains($"{entity}.{f.Key}");
 
     private static void CollectValues(object? v, List<string> into)
@@ -80,7 +81,11 @@ internal sealed class Masker
                 return;
             case var other:
                 var text = Values.Text(other);
-                if (text.Length >= MinValueLength) into.Add(text);
+                if (text.Length < MinValueLength) return;
+                into.Add(text);
+                // Values inserted into webhook paths are URL-encoded ("a@b.c" as "a%40b.c"); hide that form too.
+                var encoded = Uri.EscapeDataString(text);
+                if (encoded != text) into.Add(encoded);
                 return;
         }
     }

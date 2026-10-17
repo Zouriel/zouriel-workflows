@@ -54,10 +54,14 @@ public sealed class HttpWebhookClient : IWebhookClient, IDisposable
         _options = options ?? new HttpWebhookClientOptions();
     }
 
-    /// <summary>The guarded handler: no redirects, and connections only to addresses the options allow.</summary>
+    /// <summary>
+    /// The guarded handler: no redirects, no proxy (a proxy would make the connection, so the private-network check
+    /// would only see the proxy's address), and connections only to addresses the options allow.
+    /// </summary>
     public static SocketsHttpHandler CreateHandler(HttpWebhookClientOptions options) => new()
     {
         AllowAutoRedirect = false,
+        UseProxy = false,
         ConnectTimeout = options.ConnectTimeout,
         ConnectCallback = async (ctx, ct) =>
         {
@@ -80,10 +84,17 @@ public sealed class HttpWebhookClient : IWebhookClient, IDisposable
         },
     };
 
-    /// <summary>True for loopback, private, link-local, carrier-grade NAT, unique-local, multicast, reserved and unspecified addresses.</summary>
+    /// <summary>
+    /// True for loopback, private, link-local, carrier-grade NAT, unique-local, multicast, reserved and unspecified
+    /// addresses, and for IPv6 forms that carry an IPv4 address (mapped, IPv4-compatible, NAT64 <c>64:ff9b::/96</c> and
+    /// <c>64:ff9b:1::/48</c>, 6to4 <c>2002::/16</c>) when that IPv4 address is one of them. Teredo (<c>2001::/32</c>)
+    /// tunnels are refused outright: where they lead cannot be told from the address.
+    /// </summary>
     public static bool IsPrivate(IPAddress a)
     {
         if (a.IsIPv4MappedToIPv6) a = a.MapToIPv4();
+        if (a.AddressFamily == AddressFamily.InterNetworkV6 && EmbeddedIPv4(a) is { } inner) return IsPrivate(inner);
+        if (a.AddressFamily == AddressFamily.InterNetworkV6 && a.GetAddressBytes() is [0x20, 0x01, 0x00, 0x00, ..]) return true;
         if (IPAddress.IsLoopback(a)) return true;
         if (a.AddressFamily == AddressFamily.InterNetwork)
         {
@@ -112,14 +123,49 @@ public sealed class HttpWebhookClient : IWebhookClient, IDisposable
         return true;
     }
 
+    /// <summary>The IPv4 address an IPv6 address carries (IPv4-compatible, IPv4-translated, NAT64, 6to4), or null.</summary>
+    private static IPAddress? EmbeddedIPv4(IPAddress a)
+    {
+        var b = a.GetAddressBytes();
+        // ::a.b.c.d (IPv4-compatible, not :: or ::1) and ::ffff:0:a.b.c.d (IPv4-translated).
+        if (b.Take(10).All(x => x == 0) && ((b[10] == 0 && b[11] == 0 && (b[12] | b[13] | b[14]) != 0) || (b[10] == 0xff && b[11] == 0xff)))
+            return new IPAddress(b[12..16]);
+        if (b.Take(8).All(x => x == 0) && b[8] == 0xff && b[9] == 0xff && b[10] == 0 && b[11] == 0) return new IPAddress(b[12..16]);
+        // 64:ff9b::/96 (well-known NAT64 prefix) and 64:ff9b:1::/48 (local-use NAT64, IPv4 in the last 32 bits).
+        if (b[0] == 0x00 && b[1] == 0x64 && b[2] == 0xff && b[3] == 0x9b && (b.Skip(4).Take(8).All(x => x == 0) || (b[4] == 0 && b[5] == 1)))
+            return new IPAddress(b[12..16]);
+        // 2002:AABB:CCDD::/48 (6to4) carries A.B.C.D in bytes 2-5.
+        if (b[0] == 0x20 && b[1] == 0x02) return new IPAddress(b[2..6]);
+        return null;
+    }
+
+    /// <summary>
+    /// Whether a header name is an HTTP token and its value has no control characters (CR and LF above all, which
+    /// would start another header). Webhook headers are rendered from records, so they are checked before sending.
+    /// </summary>
+    public static bool IsValidHeader(string name, string value) =>
+        name.Length > 0 && name.All(c => c > ' ' && c < 127 && !"()<>@,;:\\\"/[]?={}".Contains(c))
+        && value.All(c => c == '\t' || (c >= ' ' && c != (char)127));
+
     /// <inheritdoc />
     public async Task<WebhookResponse> SendAsync(WebhookRequest request, CancellationToken ct = default)
     {
         using var msg = new HttpRequestMessage(new HttpMethod(request.Method), request.Url);
         if (request.Body is not null && request.Method != "GET")
             msg.Content = new StringContent(request.Body, System.Text.Encoding.UTF8, "application/json");
-        foreach (var (k, v) in request.Headers) msg.Headers.TryAddWithoutValidation(k, v);
-        msg.Headers.TryAddWithoutValidation("Idempotency-Key", request.IdempotencyKey);
+        foreach (var (k, v) in request.Headers.Append(new("Idempotency-Key", request.IdempotencyKey)))
+        {
+            if (!IsValidHeader(k, v)) throw new ArgumentException($"The webhook header '{k}' has characters a header cannot hold.");
+            // Checked above (the injection risk); values are passed as given so headers with free-form values keep
+            // working. Content headers (Content-Type…) belong to the body; without a body they are left out.
+            if (k.StartsWith("Content-", StringComparison.OrdinalIgnoreCase))
+            {
+                if (msg.Content is null) continue;
+                msg.Content.Headers.Remove(k);
+                msg.Content.Headers.TryAddWithoutValidation(k, v);
+            }
+            else msg.Headers.TryAddWithoutValidation(k, v);
+        }
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         if (request.Timeout is { } t) cts.CancelAfter(t);
         using var res = await _http.SendAsync(msg, HttpCompletionOption.ResponseHeadersRead, cts.Token);

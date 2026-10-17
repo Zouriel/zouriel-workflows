@@ -1,0 +1,27 @@
+{
+ "name": "Forcing a state with skipSteps runs no onExit/onEnter, but the runs the old state started (onEnter, SLA) stop like on any exit",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": { "application": [] },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "lc_f", "key": "lcf", "kind": "lifecycle", "title": "LC", "entity": "application",
+   "lifecycle": { "field": "status", "mode": "enforce",
+    "states": [ { "id": "d0", "key": "draft", "label": "Draft", "category": "initial" },
+                { "id": "d", "key": "submitted", "label": "Sub", "category": "active",
+                  "onEnter": [ { "id": "w", "type": "wait", "until": { "type": "duration", "duration": "P1D" } },
+                               { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "ali" } ], "body": ["still submitted"] } ] },
+                { "id": "o", "key": "approved", "label": "OK", "category": "terminal" } ],
+    "transitions": [ { "id": "t1", "key": "submit", "label": "Submit", "from": ["d0"], "to": "d", "who": [ { "role": "reviewer" } ] },
+                     { "id": "t2", "key": "approve", "label": "Approve", "from": ["d"], "to": "o", "who": [ { "role": "reviewer" } ] } ] }
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Q" } } },
+  { "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "rev1" },
+    "expect": { "instanceKinds": ["run"], "instances": [ { "reason": "onEnter:d", "status": "waiting" } ] } },
+  { "forceState": { "entity": "application", "id": "a1", "state": "approved", "reason": "test", "skipSteps": true, "actor": "admin" },
+    "expect": { "instanceKinds": ["run"], "instances": [ { "reason": "onEnter:d", "status": "cancelled" } ], "bookmarks": 0 } },
+  { "advance": "P2D", "expect": { "notificationCount": 0 } }
+ ]
+}

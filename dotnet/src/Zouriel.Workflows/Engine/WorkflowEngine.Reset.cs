@@ -1,3 +1,4 @@
+using Zouriel.Workflows.Audit;
 using Zouriel.Workflows.Changes;
 using Zouriel.Workflows.Json;
 using Zouriel.Workflows.Registry;
@@ -143,15 +144,17 @@ public sealed partial class WorkflowEngine
         {
             var desc = Registry.Entity(e);
             var snap = await u.S.Entities.GetAsync(e, rid, ct);
-            var title = desc?.TitleField is { } tf && snap is not null ? Values.Text(snap[tf]) : null;
+            // A title field whose values are hidden names the record by its id instead.
+            var title = desc?.TitleField is { } tf && snap is not null && !Sensitive(e, tf) ? Values.Text(snap[tf]) : null;
             return $"{desc?.Label ?? e} “{(string.IsNullOrEmpty(title) ? rid : title)}”";
         }
-        bool Sensitive(string e, string field) => Registry.Field(e, field)?.Sensitive == true;
+        // Hidden values (spec §11): sensitive registry fields and the settings' masked fields, of any record listed.
+        bool Sensitive(string e, string field) => Registry.Field(e, field) is { } fd && Masker.IsSensitive(fd, e, u.Settings);
         // Values as people read them: option labels, people's names, related records' titles.
         async Task<string> ShowAsync(string e, string field, object? v)
         {
             var f = Registry.Field(e, field);
-            if (f?.Sensitive == true) return "(hidden)";
+            if (Sensitive(e, field)) return "(hidden)";
             if (Values.IsEmpty(v)) return "nothing";
             if (f?.Type == FieldTypes.User) return (await Options.Identity.GetUserAsync(Values.Text(v), ct))?.Name ?? Values.Text(v);
             if (f?.Type == FieldTypes.Relation && f.Entity is not null) return await RecordNameAsync(f.Entity, Values.Text(v));
@@ -253,6 +256,16 @@ public sealed partial class WorkflowEngine
                     kind == "message" ? "Already sent; it can't be taken back." : "Already called; it can't be taken back."), entity, id));
             }
             prints.Add(null);
+        }
+        // Titles and details quote values (message subjects, related records' names): hide the sensitive ones of the
+        // record reset and of the record each item is about.
+        var mine = await u.MaskerAsync(entity, id, ct);
+        for (var k = 0; k < plan.Count; k++)
+        {
+            var p = plan[k];
+            var theirs = p.Entity == entity && p.Id == id ? mine : await u.MaskerAsync(p.Entity, p.Id, ct);
+            string? Hide(string? text) => theirs.MaskText(mine.MaskText(text));
+            plan[k] = p with { Item = p.Item with { Title = Hide(p.Item.Title)!, Detail = Hide(p.Item.Detail), Warning = Hide(p.Item.Warning) } };
         }
         var token = TokenOf(plan.Select((p, i) => (object?)new Dictionary<string, object?>
         {

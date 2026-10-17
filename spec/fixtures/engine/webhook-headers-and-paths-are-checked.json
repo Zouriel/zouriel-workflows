@@ -1,0 +1,38 @@
+{
+ "name": "Webhook values from records cannot inject headers (line breaks) or climb out of a connection's path ('..' segments): the step fails with a clear error and nothing is called",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "settings": { "version": 1, "webhooks": { "connections": [ { "key": "erp", "label": "ERP", "baseUrl": "https://erp.example.com/api" } ] } },
+ "records": { "application": [] },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "wf_h", "key": "header", "kind": "automation", "title": "Header", "entity": "application",
+   "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+   "steps": [ { "id": "h", "type": "webhook", "connection": "erp", "method": "POST", "path": ["/apps"], "headers": { "X-Title": [ { "ref": "entity.title" } ] } } ]
+  },
+  {
+   "specVersion": 1, "id": "wf_p", "key": "path", "kind": "automation", "title": "Path", "entity": "application",
+   "trigger": { "type": "fieldChanged", "field": "stage", "to": ["done"] },
+   "steps": [ { "id": "p", "type": "webhook", "connection": "erp", "method": "POST", "path": ["/apps/", { "ref": "entity.notes" }, "/admin"] } ]
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Hi\r\nX-Admin: yes", "notes": ".." } } },
+  {
+   "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+   "expect": {
+    "webhooks": [],
+    "instances": [ { "definition": "header", "status": "incident",
+      "error": "The header 'X-Title' cannot be sent: its name must be a plain token and its value cannot contain line breaks or other control characters." } ]
+   }
+  },
+  {
+   "change": { "entity": "application", "id": "a1", "values": { "stage": "done" } },
+   "expect": {
+    "webhooks": [],
+    "instances": [ { "definition": "header", "status": "incident" },
+                   { "definition": "path", "status": "incident", "error": "The webhook path cannot contain '.' or '..' segments." } ]
+   }
+  }
+ ]
+}

@@ -64,6 +64,7 @@ public sealed partial class WorkflowEngine
             Id = id, DefinitionId = c.DefinitionId, DefinitionKey = def.Key, Version = c.Version, Kind = InstanceKinds.Automation, ParentId = parentId,
             Reason = reason, Entity = entity, EntityId = entityId, Status = queued ? InstanceStatus.Queued : InstanceStatus.Running,
             Data = state.ToJson(), TriggerJson = trigger.ToJson(), Depth = depth, InitiatorId = initiator.IsUser ? initiator.Id : null,
+            LiveKey = !queued && entityId is not null && concurrency != "parallel" ? InstanceRecord.SerialKey(c.DefinitionId, entity, entityId) : null,
             InitiatorName = initiator.IsUser ? initiator.Name : null, CorrelationId = correlationId ?? id, StartedAt = u.Now, UpdatedAt = u.Now,
         };
         await u.S.AddInstanceAsync(inst, ct);
@@ -79,9 +80,13 @@ public sealed partial class WorkflowEngine
         return inst;
     }
 
-    /// <summary>Starts a child run of a lifecycle record (transition steps, onEnter, onExit, SLA). Returns null when the list is empty.</summary>
+    /// <summary>
+    /// Starts a child run of a lifecycle record (transition steps, onEnter, onExit, SLA). Returns null when the list is empty.
+    /// <paramref name="depth"/> is the loop protection depth of the move that started it (spec §5), so writes the run
+    /// makes count one deeper than that move, never from 0 again.
+    /// </summary>
     internal async Task<InstanceRecord?> StartRunAsync(Uow u, InstanceRecord record, CompiledDefinition c, string listId, string reason,
-        TriggerInfo trigger, WorkflowActor initiator, Dictionary<string, object?>? input, CancellationToken ct)
+        TriggerInfo trigger, WorkflowActor initiator, int depth, Dictionary<string, object?>? input, CancellationToken ct)
     {
         if (!c.Lists.TryGetValue(listId, out var list) || list.Count == 0) return null;
         var id = NewId();
@@ -92,7 +97,7 @@ public sealed partial class WorkflowEngine
         {
             Id = id, DefinitionId = c.DefinitionId, DefinitionKey = c.Definition.Key, Version = c.Version, Kind = InstanceKinds.Run, ParentId = record.Id,
             Reason = reason, Entity = record.Entity, EntityId = record.EntityId, Status = InstanceStatus.Running, Data = state.ToJson(),
-            TriggerJson = trigger.ToJson(), Depth = record.Depth, InitiatorId = initiator.IsUser ? initiator.Id : null,
+            TriggerJson = trigger.ToJson(), Depth = depth, InitiatorId = initiator.IsUser ? initiator.Id : null,
             InitiatorName = initiator.IsUser ? initiator.Name : null, CorrelationId = record.CorrelationId, StartedAt = u.Now, UpdatedAt = u.Now,
         };
         await u.S.AddInstanceAsync(inst, ct);
@@ -325,6 +330,7 @@ public sealed partial class WorkflowEngine
         foreach (var t in x.S.Tokens.Where(t => t.Status is TokenStatus.Active or TokenStatus.Waiting).ToList()) await CancelTokenAsync(x, t, ct);
         x.Ended = true;
         x.I.Status = status;
+        x.I.LiveKey = null;
         x.I.Error = error ?? x.I.Error;
         x.I.EndedAt = x.U.Now;
         x.U.Finished.Add(x.I);
@@ -349,6 +355,7 @@ public sealed partial class WorkflowEngine
                 if (!InstanceStatus.IsFinished(run.Status)) await CancelInstanceAsync(u, run, actor, reason, ct);
             foreach (var b in await u.S.ListBookmarksAsync(inst.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
             inst.Status = InstanceStatus.Cancelled;
+            inst.LiveKey = null;
             inst.EndedAt = u.Now;
             inst.UpdatedAt = u.Now;
             await u.S.UpdateInstanceAsync(inst, ct);
@@ -388,6 +395,8 @@ public sealed partial class WorkflowEngine
             if (stillBusy > 0) continue;
             var x = await LoadExecAsync(u, queued.Id, ct);
             x.I.Status = InstanceStatus.Running;
+            if (x.I.EntityId is not null && (x.C.Definition.Settings?.Concurrency ?? u.Settings.DefaultConcurrency) != "parallel")
+                x.I.LiveKey = InstanceRecord.SerialKey(x.I.DefinitionId, x.I.Entity, x.I.EntityId);
             await u.AuditAsync(new AuditEntry
             {
                 Category = "instance", Action = "started", SubjectType = "instance", SubjectId = x.I.Id, InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId,
