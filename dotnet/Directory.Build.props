@@ -11,7 +11,8 @@
     <RepositoryUrl>https://github.com/Zouriel/zouriel-workflows</RepositoryUrl>
     <PackageProjectUrl>https://zouriel.com/uilib/</PackageProjectUrl>
   </PropertyGroup>
-  <PropertyGroup Condition="$(MSBuildProjectDirectory.Contains('/src/'))">
+  <!-- Library projects: those under this folder's src/ (not any path that happens to contain "/src/"). -->
+  <PropertyGroup Condition="$(MSBuildProjectDirectory.StartsWith('$(MSBuildThisFileDirectory)src'))">
     <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1573</NoWarn>
