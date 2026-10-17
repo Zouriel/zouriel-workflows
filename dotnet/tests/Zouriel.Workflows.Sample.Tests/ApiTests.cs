@@ -130,6 +130,54 @@ public sealed class ApiTests : IClassFixture<ApiTests.App>
     }
 
     [Fact]
+    public async Task The_reset_list_is_only_for_the_reset_s_people_and_a_list_that_changed_since_is_refused()
+    {
+        var created = await Json(await As("sara").PostAsJsonAsync("/api/demo/applications", new { title = "Reset grant", amount = 700, programmeId = 1 }));
+        var id = created["id"]!.GetValue<int>();
+        await SettleAsync();
+        await Json(await As("sara").PostAsJsonAsync($"/api/workflows/records/application/{id}/transitions/submit", new { }));
+        await Json(await As("omar").PostAsJsonAsync($"/api/workflows/records/application/{id}/transitions/startReview", new { }));
+        await SettleAsync();
+        var path = $"/api/workflows/records/application/{id}/reset";
+        var reviewer = $"field:application:{id}:reviewer";
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await As("sara").GetAsync(path)).StatusCode);
+        var list = await Json(await As("hana").GetAsync(path));
+        Assert.Equal("Start over", list["reset"]!["label"]!.GetValue<string>());
+        var item = list["items"]!.AsArray().Single(i => i!["id"]!.GetValue<string>() == reviewer)!;
+        Assert.True(item["selected"]!.GetValue<bool>());
+        var token = list["token"]!.GetValue<string>();
+        Assert.False(string.IsNullOrEmpty(token));
+
+        // Someone picks another reviewer after the list was opened: the old list no longer holds.
+        await Json(await As("hana").PatchAsJsonAsync($"/api/demo/applications/{id}", new { reviewer = "rana" }));
+        await SettleAsync();
+        var reason = new { reason = "The wrong programme was chosen." };
+        var stale = await As("hana").PostAsJsonAsync(path, new { input = reason, undo = new[] { reviewer }, token });
+        Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
+        Assert.Equal("resetChanged", JsonNode.Parse(await stale.Content.ReadAsStringAsync())!["code"]!.GetValue<string>());
+
+        var fresh = (await Json(await As("hana").GetAsync(path)))["token"]!.GetValue<string>();
+        Assert.NotEqual(token, fresh);
+        var noReason = await As("hana").PostAsJsonAsync(path, new { undo = new[] { reviewer }, token = fresh });
+        Assert.Equal(HttpStatusCode.BadRequest, noReason.StatusCode);
+        Assert.Equal("invalidInput", JsonNode.Parse(await noReason.Content.ReadAsStringAsync())!["code"]!.GetValue<string>());
+
+        var done = await Json(await As("hana").PostAsJsonAsync(path, new { input = reason, undo = new[] { reviewer }, token = fresh }));
+        Assert.Equal("Draft", done["state"]!.GetValue<string>());
+        var app = await Json(await As("hana").GetAsync($"/api/demo/applications/{id}"));
+        Assert.Null(app["reviewer"]?.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("Invoice INV-00042 for 1500.5.", "")]
+    [InlineData("Keep this. Invoice INV-00042 for 1500.5. And this.", "Keep this. And this.")]
+    [InlineData("Invoice INV-00042 for 900. Invoice INV-00043 for 12.25.", "Invoice INV-00043 for 12.25.")]
+    [InlineData("Invoice INV-000420 for 1.", "Invoice INV-000420 for 1.")]
+    public void Undoing_an_invoice_removes_exactly_its_sentence(string notes, string expected) =>
+        Assert.Equal(expected, CreateInvoice.WithoutInvoice(notes, "INV-00042"));
+
+    [Fact]
     public async Task Nothing_is_paid_when_the_sign_off_runs_out_of_time()
     {
         var def = JsonNode.Parse((await (await As("hana").GetAsync("/api/workflows/definitions/wf_finance")).Content.ReadAsStringAsync()))!["draft"]!;

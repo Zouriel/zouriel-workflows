@@ -19,7 +19,12 @@ public sealed class CreateInvoice(SampleDb db) : IUndoableWorkflowAction
         if (!context.Simulation && context.EntityId is not null && int.TryParse(context.EntityId, out var id))
         {
             var app = await db.Applications.FindAsync([id], ct);
-            if (app is not null) app.Notes = $"{app.Notes} Invoice {number} for {context.Input.GetValueOrDefault("amount")}.".Trim();
+            if (app is not null)
+            {
+                app.Notes = $"{app.Notes} Invoice {number} for {Amount(context.Input)}.".Trim();
+                // Saved here, while the workflow's write scope is active, so the change is the workflow's.
+                await db.SaveChangesAsync(ct);
+            }
         }
         return new Dictionary<string, object?> { ["invoiceNo"] = number };
     }
@@ -29,9 +34,22 @@ public sealed class CreateInvoice(SampleDb db) : IUndoableWorkflowAction
     {
         if (context.EntityId is null || !int.TryParse(context.EntityId, out var id) || context.Output.GetValueOrDefault("invoiceNo") is not string number) return;
         var app = await db.Applications.FindAsync([id], ct);
-        if (app?.Notes is { } notes)
-            app.Notes = System.Text.RegularExpressions.Regex.Replace(notes, $@"\s*Invoice {number} for [^.]*\.", "").Trim();
+        if (app?.Notes is not { } notes) return;
+        app.Notes = WithoutInvoice(notes, number);
+        // Saved inside the reset's write scope, so the write starts no automations (spec §6).
+        await db.SaveChangesAsync(ct);
     }
+
+    /// <summary>
+    /// The notes without the sentence an invoice added, whatever the amount looks like ("for 1500.5."): up to the full
+    /// stop that ends it. Running it twice (a retried reset) finds nothing the second time.
+    /// </summary>
+    public static string WithoutInvoice(string notes, string number) =>
+        System.Text.RegularExpressions.Regex.Replace(notes, $@"\s*Invoice {System.Text.RegularExpressions.Regex.Escape(number)} for \S*?\.(?=\s|$)", "").Trim();
+
+    /// <summary>The amount as the note shows it (invariant, so the undo can find it again).</summary>
+    internal static string Amount(IReadOnlyDictionary<string, object?> input) =>
+        Convert.ToString(input.GetValueOrDefault("amount"), System.Globalization.CultureInfo.InvariantCulture) ?? "";
 }
 
 /// <summary>Registers and seeds the sample app.</summary>
