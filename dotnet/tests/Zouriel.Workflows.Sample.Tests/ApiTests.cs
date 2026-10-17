@@ -54,6 +54,18 @@ public sealed class ApiTests : IClassFixture<ApiTests.App>
     }
 
     [Fact]
+    public async Task Me_says_what_the_caller_may_do()
+    {
+        var hana = await Json(await As("hana").GetAsync("/api/workflows/me"));
+        Assert.Equal("hana", hana["id"]!.GetValue<string>());
+        Assert.True(hana["can"]!["edit"]!.GetValue<bool>());
+        Assert.True(hana["can"]!["settings"]!.GetValue<bool>());
+        var ali = await Json(await As("ali").GetAsync("/api/workflows/me"));
+        Assert.False(ali["can"]!["edit"]!.GetValue<bool>());
+        Assert.False(ali["can"]!["intervene"]!.GetValue<bool>());
+    }
+
+    [Fact]
     public async Task Editing_needs_the_admin_policy_and_drafts_are_validated()
     {
         var bad = new JsonObject { ["specVersion"] = 1, ["id"] = "wf_x", ["key"] = "x", ["kind"] = "automation", ["title"] = "X", ["entity"] = "nope", ["steps"] = new JsonArray() };
@@ -106,6 +118,21 @@ public sealed class ApiTests : IClassFixture<ApiTests.App>
         var csv = await As("hana").GetAsync("/api/workflows/audit/export?format=csv&entity=application&entityId=" + id);
         Assert.Equal("text/csv", csv.Content.Headers.ContentType!.MediaType);
         Assert.Contains("lifecycle", await csv.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Nothing_is_paid_when_the_sign_off_runs_out_of_time()
+    {
+        var def = JsonNode.Parse((await (await As("hana").GetAsync("/api/workflows/definitions/wf_finance")).Content.ReadAsStringAsync()))!["draft"]!;
+        var result = await Json(await As("hana").PostAsJsonAsync("/api/workflows/simulate", new
+        {
+            definition = def,
+            request = new { entityId = "2", events = new object[] { new { type = "advance", duration = "P10D" } } },
+        }));
+        var log = result["log"]!.AsArray().Select(l => $"{l!["kind"]}.{l["action"]}").ToList();
+        Assert.DoesNotContain("action.finance.createInvoice", log);
+        var run = result["instances"]!.AsArray().Single(i => i!["definitionKey"]!.GetValue<string>() == "financeSignOff")!;
+        Assert.Equal("failed", run["status"]!.GetValue<string>());
     }
 
     [Fact]

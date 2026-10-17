@@ -54,6 +54,22 @@ public sealed class WorkflowApiOptions
     public int MaxSimulationEvents { get; set; } = 50;
 }
 
+/// <summary>Reply of <c>GET /me</c>: the signed-in actor and what the API's policies let them do.</summary>
+/// <param name="Type"><c>user</c>, or <c>anonymous</c> when the API allows callers who are not signed in.</param>
+/// <param name="Id">The user id.</param>
+/// <param name="Name">Their display name.</param>
+/// <param name="Roles">Their roles.</param>
+/// <param name="Can">Which kinds of operation they may perform.</param>
+public sealed record MeResponse(string Type, string? Id, string? Name, IReadOnlyList<string> Roles, MePermissions Can);
+
+/// <summary>What the caller may do, one flag per policy of <see cref="WorkflowApiOptions"/> (true when no policy is set).</summary>
+/// <param name="Edit">Create and edit drafts, validate, test runs, read settings.</param>
+/// <param name="Publish">Publish, archive, restore, roll back and delete.</param>
+/// <param name="Settings">Change global settings and purge the audit log.</param>
+/// <param name="Intervene">Cancel, retry, skip, migrate, force state, reassign.</param>
+/// <param name="Audit">Read and verify the audit log.</param>
+public sealed record MePermissions(bool Edit, bool Publish, bool Settings, bool Intervene, bool Audit);
+
 /// <summary>Body of <c>POST /definitions/{id}/publish</c>.</summary>
 /// <param name="Note">What changed, shown in the version list.</param>
 public sealed record PublishBody(string? Note);
@@ -205,7 +221,15 @@ public static class WorkflowApi
             Results.Ok(await identity.SearchUsersAsync(q, Math.Clamp(take ?? 20, 1, 100), ct))), o.ViewPolicy);
         Secure(g.MapGet("/directory/users/{id}", async (string id, IWorkflowIdentity identity, CancellationToken ct) =>
             await identity.GetUserAsync(id, ct) is { } u ? Results.Ok(u) : Results.NotFound()), o.ViewPolicy);
-        Secure(g.MapGet("/me", (HttpContext http) => Results.Ok(Actor(http))), o.ViewPolicy);
+        // Who is asking and what they may do, so a UI can hide or lock what the server would refuse.
+        Secure(g.MapGet("/me", async (HttpContext http, IAuthorizationService auth) =>
+        {
+            var me = Actor(http);
+            var can = new MePermissions(
+                await AllowedAsync(http, auth, o.EditPolicy), await AllowedAsync(http, auth, o.PublishPolicy), await AllowedAsync(http, auth, o.SettingsPolicy),
+                await AllowedAsync(http, auth, o.InterventionPolicy), await AllowedAsync(http, auth, o.AuditPolicy));
+            return Results.Ok(new MeResponse(me.Type, me.Id, me.Name, me.Roles ?? [], can));
+        }), o.ViewPolicy);
     }
 
     private static void MapDefinitions(RouteGroupBuilder g, WorkflowApiOptions o)
