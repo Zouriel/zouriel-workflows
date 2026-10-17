@@ -37,7 +37,7 @@
           { "kind": "field", "id": "f_reason", "key": "reason", "type": "select", "label": "Reason", "required": true,
             "options": [ { "id": "o1", "value": "Incomplete documents", "label": "Incomplete documents" }, { "id": "o2", "value": "Not eligible", "label": "Not eligible" },
                          { "id": "o3", "value": "No budget left", "label": "No budget left" } ] } ] } ] } } },
-      { "id": "tr_back", "key": "sendBack", "label": "Send back for changes", "from": ["st_review", "st_submitted"], "to": "st_draft", "who": [ { "role": "reviewer" } ], "tone": "warning" },
+      { "id": "tr_back", "key": "sendBack", "label": "Send back for changes", "from": ["st_review", "st_submitted"], "to": "st_draft", "who": [ { "role": "reviewer" } ], "tone": "warning", "comment": "required" },
       { "id": "tr_withdraw", "key": "withdraw", "label": "Withdraw", "from": "*", "to": "st_withdrawn", "who": [ { "field": "entity.applicant" }, { "role": "head" } ],
         "confirm": "Withdraw this application?" },
       { "id": "tr_expire", "key": "expire", "label": "Expire unsent drafts", "from": ["st_draft"], "to": "st_withdrawn", "auto": { "after": "P30D" }, "hidden": true }
