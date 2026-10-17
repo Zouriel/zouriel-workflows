@@ -222,4 +222,27 @@ public sealed class SecurityTests : IClassFixture<SecurityTests.SecureApp>
     [InlineData("\tx", "\"'\tx\"")]
     [InlineData("plain", "\"plain\"")]
     public void Csv_cells_cannot_run_as_formulas(string value, string expected) => Assert.Equal(expected, WorkflowApi.Csv(value));
+
+    [Fact]
+    public void The_schema_leaves_out_fields_workflows_cannot_use()
+    {
+        var registry = new Registry.WorkflowRegistry
+        {
+            Entities =
+            [
+                new Registry.EntityDescriptor
+                {
+                    Key = "person", Label = "Person",
+                    Fields =
+                    [
+                        new Registry.FieldDescriptor { Key = "name", Label = "Name" },
+                        new Registry.FieldDescriptor { Key = "secretNote", Label = "Secret", Readable = false },
+                        new Registry.FieldDescriptor { Key = "hiddenButSettable", Label = "Write only", Readable = false, Settable = true },
+                    ],
+                },
+            ],
+        };
+        var fields = WorkflowApi.PublicRegistry(registry).Entities[0].Fields.Select(f => f.Key).ToList();
+        Assert.Equal(["name", "hiddenButSettable"], fields);
+    }
 }

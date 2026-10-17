@@ -165,6 +165,20 @@ public static class WorkflowApi
         return g;
     }
 
+    /// <summary>
+    /// The registry as editors see it: fields workflows can neither read, watch, set nor own are left out
+    /// (they could not be used in a definition anyway, and their names may be private).
+    /// </summary>
+    internal static WorkflowRegistry PublicRegistry(WorkflowRegistry r) => new()
+    {
+        SpecVersion = r.SpecVersion, Actions = r.Actions, Signals = r.Signals, Channels = r.Channels, Roles = r.Roles, Groups = r.Groups,
+        Entities = r.Entities.Select(e => new EntityDescriptor
+        {
+            Key = e.Key, Label = e.Label, PluralLabel = e.PluralLabel, TitleField = e.TitleField, ClrType = e.ClrType, IdGetter = e.IdGetter,
+            Fields = e.Fields.Where(f => f.IsReadable || f.IsWatchable || f.IsSettable || f.IsLifecycle).ToList(),
+        }).ToList(),
+    };
+
     /// <summary>The caller as a workflow actor: only the signed-in principal counts (anything else is anonymous, which the engine refuses where it matters).</summary>
     public static WorkflowActor Actor(HttpContext http) =>
         http.RequestServices.GetRequiredService<IWorkflowActorAccessor>().Current ?? new WorkflowActor("anonymous", null, "Anonymous");
@@ -173,7 +187,7 @@ public static class WorkflowApi
 
     private static void MapSchemaAndSettings(RouteGroupBuilder g, WorkflowApiOptions o)
     {
-        Secure(g.MapGet("/schema", (WorkflowRegistry registry) => Results.Ok(new SchemaResponse(1, registry,
+        Secure(g.MapGet("/schema", (WorkflowRegistry registry) => Results.Ok(new SchemaResponse(1, PublicRegistry(registry),
             Linter.StepLabels.Select(kv => new StepDescriptor(kv.Key, kv.Value, Linter.StepOutputs.GetValueOrDefault(kv.Key, []))).ToList()))), o.ViewPolicy);
         // Settings name webhook connections and secrets: editors only.
         Secure(g.MapGet("/settings", async (WorkflowEngine e, CancellationToken ct) =>
