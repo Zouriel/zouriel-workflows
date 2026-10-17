@@ -59,7 +59,7 @@ public sealed class TestApp : IAsyncDisposable
     public RecordingNotifications Notifications { get; } = new();
     public WorkflowEngine Engine => Services.GetRequiredService<WorkflowEngine>();
 
-    public TestApp(Action<DbContextOptionsBuilder> provider, bool sqlite = false)
+    public TestApp(Action<DbContextOptionsBuilder> provider, bool sqlite = false, string? tenant = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IWorkflowIdentity>(Identity);
@@ -72,7 +72,7 @@ public sealed class TestApp : IAsyncDisposable
         services.AddScoped(sp => new AppDb(sp.GetRequiredService<DbContextOptions<AppDb>>(), sqlite));
         services.AddWorkflowsCore(wf => wf
             .UseEntityFrameworkCore<AppDb>()
-            .Configure(s => s.Time = Clock)
+            .Configure(s => { s.Time = Clock; s.Tenant = tenant; })
             .Entity<Programme>("programme", e => e.Title(p => p.Name).Field(p => p.Name, f => f.Settable()).Field(p => p.CoordinatorId, f => f.Key("coordinator").User()))
             .Entity<Application>("application", e => e
                 .Label("Application").Title(a => a.Title)

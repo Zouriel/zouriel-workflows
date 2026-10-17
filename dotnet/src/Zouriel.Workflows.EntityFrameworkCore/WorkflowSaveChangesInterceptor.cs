@@ -90,6 +90,17 @@ public sealed class WorkflowSaveChangesInterceptor(WorkflowEngine engine) : Save
         return Task.CompletedTask;
     }
 
+    /// <inheritdoc />
+    /// <remarks>A cancelled save wrote nothing, like a failed one: forget what it prepared, or a retried save adds its change events twice.</remarks>
+    public override void SaveChangesCanceled(DbContextEventData eventData) => Fail(eventData.Context);
+
+    /// <inheritdoc />
+    public override Task SaveChangesCanceledAsync(DbContextEventData eventData, CancellationToken ct = default)
+    {
+        Fail(eventData.Context);
+        return Task.CompletedTask;
+    }
+
     private void Fail(DbContext? db)
     {
         if (db is null || !_pending.TryGetValue(db, out var p)) return;

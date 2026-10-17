@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.EntityFrameworkCore;
 using Zouriel.Workflows.Engine;
+using Zouriel.Workflows.Storage;
 
 namespace Zouriel.Workflows.Sample;
 
@@ -18,6 +20,8 @@ public sealed class Sandbox(string id, ServiceProvider services, OffsetTimeProvi
     public DateTimeOffset LastUsed { get; set; } = DateTimeOffset.UtcNow;
     /// <summary>Held while its background work runs, so two runs never overlap.</summary>
     public SemaphoreSlim Work { get; } = new(1, 1);
+    /// <summary>The start of the current minute of background work, and how many outbox rows and timers ran in it.</summary>
+    internal (DateTimeOffset Since, int Used) Budget { get; set; } = (DateTimeOffset.UtcNow, 0);
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
@@ -36,7 +40,9 @@ public sealed class PlaygroundFullException() : Exception("The playground is ful
 /// The public playground gives every browser session its own sandbox, created on first use and
 /// removed after it has been idle for a while, so visitors never see or break each other's data.
 /// Session ids are issued by the server (<see cref="IssueSessionId"/>) and signed, so a visitor cannot
-/// pick, guess or take over someone else's sandbox.
+/// pick, guess or take over someone else's sandbox. A reset issues a new id and retires the old one.
+/// Each sandbox has quotas (records, instances, background work per minute) so one visitor cannot use up
+/// the server: a sandbox at its limits refuses new work until it is reset.
 /// </summary>
 public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager> log) : BackgroundService
 {
@@ -48,9 +54,11 @@ public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager
     private readonly TimeSpan _idle = TimeSpan.FromMinutes(int.TryParse(config["Playground:IdleMinutes"], out var i) ? i : 120);
     // Signs issued ids. Set Playground:Secret to keep sessions valid across restarts and instances.
     private readonly byte[] _secret = config["Playground:Secret"] is { Length: >= 16 } s ? Encoding.UTF8.GetBytes(s) : RandomNumberGenerator.GetBytes(32);
-
-    /// <summary>How many sandboxes exist (or are being created).</summary>
-    public int Count => _boxes.Count;
+    private readonly int _maxRecords = int.TryParse(config["Playground:MaxRecords"], out var r) ? r : 2000;
+    private readonly int _maxInstances = int.TryParse(config["Playground:MaxInstances"], out var n) ? n : 2000;
+    private readonly int _maxBackgroundPerMinute = int.TryParse(config["Playground:MaxBackgroundPerMinute"], out var b) ? b : 3000;
+    /// <summary>Ids given up by a reset, until they would have gone idle anyway (they must not bring a sandbox back).</summary>
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _retired = new();
 
     /// <summary>A new session id: 128 random bits plus a signature, both base64url.</summary>
     public string IssueSessionId()
@@ -58,6 +66,9 @@ public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager
         var random = RandomNumberGenerator.GetBytes(IdBytes);
         return $"{Base64Url(random)}.{Base64Url(Sign(random))}";
     }
+
+    /// <summary>True when <paramref name="id"/> was issued by this server and has not been given up by a reset.</summary>
+    public bool IsUsable(string? id) => IsIssued(id) && !_retired.ContainsKey(id!);
 
     /// <summary>True when <paramref name="id"/> was issued by this server (its signature checks out).</summary>
     public bool IsIssued(string? id)
@@ -90,7 +101,7 @@ public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager
     /// <summary>The sandbox of an issued session id, created on first use (evicting the least recently used when full).</summary>
     public async Task<Sandbox> GetAsync(string id, CancellationToken ct)
     {
-        if (!IsIssued(id)) throw new ArgumentException("This session id was not issued by the playground.");
+        if (!IsUsable(id)) throw new ArgumentException("This session id was not issued by the playground, or was reset.");
         if (!_boxes.TryGetValue(id, out var lazy))
         {
             // Admission is serialised so the cap holds when many new sessions arrive at once.
@@ -137,11 +148,27 @@ public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager
         return new Sandbox(id, provider, clock, path);
     }
 
-    /// <summary>Forgets a sandbox now and disposes it a little later, so requests still using it can finish.</summary>
-    public Task ResetAsync(string id)
+    /// <summary>
+    /// Starts over: retires <paramref name="id"/> (it no longer opens a sandbox), forgets its sandbox and returns a
+    /// new session id, whose sandbox is created on first use.
+    /// </summary>
+    public string Reset(string id)
     {
+        var now = DateTimeOffset.UtcNow;
+        _retired[id] = now + _idle;
+        foreach (var (old, until) in _retired)
+            if (until < now) _retired.TryRemove(old, out _);
         Forget(id);
-        return Task.CompletedTask;
+        return IssueSessionId();
+    }
+
+    /// <summary>Whether a sandbox holds more records or instances than a sandbox may (it then refuses new work).</summary>
+    public async Task<bool> OverQuotaAsync(Sandbox box)
+    {
+        await using var scope = box.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<SampleDb>();
+        var records = await db.Applications.CountAsync() + await db.Documents.CountAsync() + await db.Programmes.CountAsync();
+        return records >= _maxRecords || await db.Set<InstanceRecord>().CountAsync() >= _maxInstances;
     }
 
     private void Forget(string id)
@@ -186,7 +213,7 @@ public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager
                 var box = lazy.Value.Result;
                 if (DateTimeOffset.UtcNow - box.LastUsed > _idle)
                 {
-                    await ResetAsync(id);
+                    Forget(id);
                     continue;
                 }
                 await RunBackgroundAsync(box, stoppingToken);
@@ -202,17 +229,29 @@ public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager
         }
     }
 
-    /// <summary>Runs a sandbox's outbox and timers until nothing is left (at most 20 rounds).</summary>
+    /// <summary>
+    /// Runs a sandbox's outbox and timers until nothing is left (at most 20 rounds), within its budget of background
+    /// work per minute: a sandbox whose workflows keep making work waits for the next minute instead of
+    /// taking the server's time. A sandbox over its record or instance quota runs nothing.
+    /// </summary>
     public async Task RunBackgroundAsync(Sandbox box, CancellationToken ct)
     {
         if (!await box.Work.WaitAsync(0, ct)) return;
         try
         {
+            if (await OverQuotaAsync(box)) return;
             var engine = box.Services.GetRequiredService<WorkflowEngine>();
             for (var n = 0; n < 20; n++)
             {
+                var now = DateTimeOffset.UtcNow;
+                if (now - box.Budget.Since >= TimeSpan.FromMinutes(1)) box.Budget = (now, 0);
+                var left = _maxBackgroundPerMinute - box.Budget.Used;
+                if (left <= 0) break;
                 await engine.RefreshOwnershipAsync(ct);
-                if (await engine.ProcessOutboxAsync(100, ct) + await engine.ProcessTimersAsync(100, ct) == 0) break;
+                var done = await engine.ProcessOutboxAsync(Math.Min(100, left), ct);
+                if (left - done > 0) done += await engine.ProcessTimersAsync(Math.Min(100, left - done), ct);
+                box.Budget = (box.Budget.Since, box.Budget.Used + done);
+                if (done == 0) break;
             }
             await engine.FlushBackgroundAsync();
         }
@@ -228,21 +267,12 @@ public sealed class SandboxManager(IConfiguration config, ILogger<SandboxManager
 }
 
 /// <summary>
-/// The playground's webhook client: it records what would have been sent and answers 200 with
-/// <c>{"playground":true}</c>, without any network call.
+/// The playground's webhook client: it answers 200 with <c>{"playground":true}</c> without any network call
+/// (the run's audit still shows what would have been sent).
 /// </summary>
 public sealed class PlaygroundWebhooks : IWebhookClient
 {
-    private readonly ConcurrentQueue<WebhookRequest> _calls = new();
-
-    /// <summary>The most recent calls (at most 100).</summary>
-    public IReadOnlyList<WebhookRequest> Calls => _calls.ToList();
-
     /// <inheritdoc />
-    public Task<WebhookResponse> SendAsync(WebhookRequest request, CancellationToken ct = default)
-    {
-        _calls.Enqueue(request);
-        while (_calls.Count > 100 && _calls.TryDequeue(out _)) { }
-        return Task.FromResult(new WebhookResponse(200, "{\"playground\":true}"));
-    }
+    public Task<WebhookResponse> SendAsync(WebhookRequest request, CancellationToken ct = default) =>
+        Task.FromResult(new WebhookResponse(200, "{\"playground\":true}"));
 }

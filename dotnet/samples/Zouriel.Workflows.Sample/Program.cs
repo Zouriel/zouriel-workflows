@@ -42,8 +42,10 @@ builder.Services.AddRateLimiter(o =>
     o.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
         RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions { PermitLimit = 600, Window = TimeSpan.FromMinutes(1) }));
     // New playground sessions are expensive (a database and a seed run each): a few per visitor per hour.
+    // Resets issue a new session, so they count here too.
+    var sessionsPerHour = builder.Configuration.GetValue("Playground:SessionsPerHour", 20);
     o.AddPolicy(DemoEndpoints.SessionRateLimit, ctx =>
-        RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromHours(1) }));
+        RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions { PermitLimit = sessionsPerHour, Window = TimeSpan.FromHours(1) }));
 });
 // The REST API's description, served at /openapi/v1.json (spec/api/openapi.json is exported from it).
 builder.Services.AddOpenApi();
@@ -89,8 +91,9 @@ static async Task RunInSandboxAsync(HttpContext ctx, Func<Task> next)
         return;
     }
     var boxes = ctx.RequestServices.GetRequiredService<SandboxManager>();
-    var id = ctx.Request.Headers["X-Playground-Session"].FirstOrDefault() ?? ctx.Request.Query["session"].FirstOrDefault();
-    if (!boxes.IsIssued(id))
+    // Header only: a session id in the query string would leak through logs, history and Referer headers.
+    var id = ctx.Request.Headers["X-Playground-Session"].FirstOrDefault();
+    if (!boxes.IsUsable(id))
     {
         ctx.Response.StatusCode = 400;
         await ctx.Response.WriteAsJsonAsync(new { code = "noSession", message = $"Get a session with POST {DemoEndpoints.SessionPath} and send it as the X-Playground-Session header." });
@@ -105,6 +108,13 @@ static async Task RunInSandboxAsync(HttpContext ctx, Func<Task> next)
     {
         ctx.Response.StatusCode = 503;
         await ctx.Response.WriteAsJsonAsync(new { code = "busy", message = e.Message });
+        return;
+    }
+    // A sandbox at its limits still answers reads (and a reset), but refuses new work.
+    if (!HttpMethods.IsGet(ctx.Request.Method) && !path.StartsWithSegments("/api/playground/reset") && await boxes.OverQuotaAsync(box))
+    {
+        ctx.Response.StatusCode = 429;
+        await ctx.Response.WriteAsJsonAsync(new { code = "quota", message = "This sandbox has reached its limits. Reset it to start again." });
         return;
     }
     await using var scope = box.Services.CreateAsyncScope();

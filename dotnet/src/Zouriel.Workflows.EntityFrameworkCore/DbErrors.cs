@@ -39,6 +39,7 @@ internal static class DbErrors
     {
         if (e is WorkflowException) return null;
         if (e is DbUpdateConcurrencyException) return new WorkflowConcurrencyException(e.Message);
+        if (IsBusy(e)) return new WorkflowConcurrencyException($"The database was locked by another unit: {Innermost(e).Message}");
         if (IsDeadlock(e)) return new WorkflowConcurrencyException($"The database chose this unit as a deadlock victim: {Innermost(e).Message}");
         if (e is DbUpdateException u && IsUniqueViolation(e) && u.Entries.Count > 0 && u.Entries.All(x => IsWorkflowType(x.Metadata.ClrType)))
             return new WorkflowConcurrencyException($"Another unit wrote the same workflow row: {Innermost(e).Message}");
@@ -50,6 +51,9 @@ internal static class DbErrors
         SqlState(x) == "23505"
         || SqlServerNumber(x) is 2601 or 2627
         || (Int(x, "SqliteErrorCode") == 19 && Int(x, "SqliteExtendedErrorCode") is 1555 or 2067));
+
+    /// <summary>True when SQLite could not take a lock (SQLITE_BUSY 5, SQLITE_LOCKED 6, including extended codes such as BUSY_SNAPSHOT).</summary>
+    public static bool IsBusy(Exception e) => Causes(e).Any(x => Int(x, "SqliteErrorCode") is 5 or 6);
 
     /// <summary>True for a deadlock or serialization failure (Postgres 40P01/40001, SQL Server 1205).</summary>
     public static bool IsDeadlock(Exception e) => Causes(e).Any(x => SqlState(x) is "40P01" or "40001" || SqlServerNumber(x) == 1205);

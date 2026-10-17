@@ -46,13 +46,46 @@ public sealed class WorkflowApiOptions
     public string? SignalPolicy { get; set; }
     /// <summary>Serve the API to callers who are not signed in (only for demos behind other protection).</summary>
     public bool AllowAnonymous { get; set; }
-    /// <summary>The largest JSON body accepted (definitions, validation, test runs). Default 2 MB.</summary>
+    /// <summary>The largest JSON body accepted by any endpoint (definitions, validation, test runs, transitions, signals…). Default 2 MB.</summary>
     public int MaxBodyBytes { get; set; } = 2 * 1024 * 1024;
     /// <summary>The largest form answers accepted with one task decision. Default 256 KB.</summary>
     public int MaxDecisionDataBytes { get; set; } = 256 * 1024;
-    /// <summary>The most events one test run may replay. Default 50.</summary>
-    public int MaxSimulationEvents { get; set; } = 50;
+    /// <summary>
+    /// The most events one test run may replay. Default (and upper bound) <see cref="WorkflowEngine.MaxSimulationEvents"/>,
+    /// which the engine enforces itself; set it lower to keep test runs cheaper.
+    /// </summary>
+    public int MaxSimulationEvents { get; set; } = WorkflowEngine.MaxSimulationEvents;
 }
+
+/// <summary>Reply of <c>GET /settings</c>.</summary>
+/// <param name="Settings">The global settings (spec/schema/settings.schema.json).</param>
+/// <param name="Revision">Their revision, to send back with <c>PUT /settings</c>.</param>
+public sealed record SettingsResponse(JsonNode? Settings, int Revision);
+
+/// <summary>Reply of <c>PUT /settings</c>.</summary>
+/// <param name="Revision">The new revision.</param>
+public sealed record RevisionResponse(int Revision);
+
+/// <summary>Reply of <c>POST /signals/{key}</c>.</summary>
+/// <param name="Resumed">How many waiting workflows the signal resumed.</param>
+public sealed record SignalResponse(int Resumed);
+
+/// <summary>Reply of <c>POST /audit/purge</c>.</summary>
+/// <param name="Purged">How many entries were deleted.</param>
+public sealed record PurgeResponse(int Purged);
+
+/// <summary>A range of sequence numbers a purge deleted on purpose.</summary>
+/// <param name="From">The first deleted sequence number.</param>
+/// <param name="To">The last deleted sequence number.</param>
+public sealed record SeqGap(long From, long To);
+
+/// <summary>Reply of <c>POST /audit/verify</c>.</summary>
+/// <param name="Valid">True when every entry checked out.</param>
+/// <param name="Checked">How many entries were checked.</param>
+/// <param name="BrokenAtSeq">The first entry that did not, if any.</param>
+/// <param name="Problem">What was wrong with it.</param>
+/// <param name="PurgedGaps">Gaps explained by purge checkpoints.</param>
+public sealed record AuditVerifyResponse(bool Valid, long Checked, long? BrokenAtSeq, string? Problem, IReadOnlyList<SeqGap> PurgedGaps);
 
 /// <summary>Reply of <c>GET /me</c>: the signed-in actor and what the API's policies let them do.</summary>
 /// <param name="Type"><c>user</c>, or <c>anonymous</c> when the API allows callers who are not signed in.</param>
@@ -238,23 +271,24 @@ public static class WorkflowApi
     private static void MapSchemaAndSettings(RouteGroupBuilder g, WorkflowApiOptions o)
     {
         Secure(g.MapGet("/schema", (WorkflowRegistry registry) => Results.Ok(new SchemaResponse(1, PublicRegistry(registry),
-            Linter.StepLabels.Select(kv => new StepDescriptor(kv.Key, kv.Value, Linter.StepOutputs.GetValueOrDefault(kv.Key, []))).ToList()))), o.ViewPolicy);
+            Linter.StepLabels.Select(kv => new StepDescriptor(kv.Key, kv.Value, Linter.StepOutputs.GetValueOrDefault(kv.Key, []))).ToList())))
+            .Produces<SchemaResponse>(), o.ViewPolicy);
         // Settings name webhook connections and secrets: editors only.
         Secure(g.MapGet("/settings", async (WorkflowEngine e, CancellationToken ct) =>
         {
             var (s, rev) = await e.GetSettingsAsync(ct);
-            return Results.Ok(new { settings = JsonNode.Parse(s.ToJson()), revision = rev });
-        }), o.EditPolicy);
+            return Results.Ok(new SettingsResponse(JsonNode.Parse(s.ToJson()), rev));
+        }).Produces<SettingsResponse>(), o.EditPolicy);
         Secure(g.MapPut("/settings", async (HttpContext http, WorkflowEngine e, CancellationToken ct) =>
         {
             var body = await ReadBodyAsync<SettingsBody>(http, o.MaxBodyBytes, ct);
-            return Results.Ok(new { revision = await e.SaveSettingsAsync(GlobalSettings.Parse(body.Settings.ToJsonString()), body.Revision, Actor(http), ct) });
-        }), o.SettingsPolicy);
+            return Results.Ok(new RevisionResponse(await e.SaveSettingsAsync(GlobalSettings.Parse(body.Settings?.ToJsonString()), body.Revision, Actor(http), ct)));
+        }).Accepts<SettingsBody>(Json).Produces<RevisionResponse>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.SettingsPolicy);
         Secure(g.MapGet("/triggers", (WorkflowEngine e, CancellationToken ct) => e.ListTriggersAsync(ct)), o.ViewPolicy);
         Secure(g.MapGet("/directory/users", async (string? q, int? take, IWorkflowIdentity identity, CancellationToken ct) =>
-            Results.Ok(await identity.SearchUsersAsync(q, Math.Clamp(take ?? 20, 1, 100), ct))), o.ViewPolicy);
+            Results.Ok(await identity.SearchUsersAsync(q, Math.Clamp(take ?? 20, 1, 100), ct))).Produces<IReadOnlyList<WorkflowUser>>(), o.ViewPolicy);
         Secure(g.MapGet("/directory/users/{id}", async (string id, IWorkflowIdentity identity, CancellationToken ct) =>
-            await identity.GetUserAsync(id, ct) is { } u ? Results.Ok(u) : Results.NotFound()), o.ViewPolicy);
+            await identity.GetUserAsync(id, ct) is { } u ? Results.Ok(u) : Results.NotFound()).Produces<WorkflowUser>().Produces(StatusCodes.Status404NotFound), o.ViewPolicy);
         // Who is asking and what they may do, so a UI can hide or lock what the server would refuse.
         Secure(g.MapGet("/me", async (HttpContext http, IAuthorizationService auth) =>
         {
@@ -263,48 +297,65 @@ public static class WorkflowApi
                 await AllowedAsync(http, auth, o.EditPolicy), await AllowedAsync(http, auth, o.PublishPolicy), await AllowedAsync(http, auth, o.SettingsPolicy),
                 await AllowedAsync(http, auth, o.InterventionPolicy), await AllowedAsync(http, auth, o.AuditPolicy));
             return Results.Ok(new MeResponse(me.Type, me.Id, me.Name, me.Roles ?? [], can));
-        }), o.ViewPolicy);
+        }).Produces<MeResponse>(), o.ViewPolicy);
     }
 
     private static void MapDefinitions(RouteGroupBuilder g, WorkflowApiOptions o)
     {
-        Secure(g.MapGet("/definitions", (WorkflowEngine e, CancellationToken ct) => e.ListDefinitionsAsync(ct)), o.ViewPolicy);
+        Secure(g.MapGet("/definitions", (WorkflowEngine e, CancellationToken ct) => e.ListDefinitionsAsync(ct)).Produces<IReadOnlyList<DefinitionSummary>>(), o.ViewPolicy);
         Secure(g.MapPost("/definitions", async (HttpContext http, WorkflowEngine e, CancellationToken ct) =>
-            Results.Ok(await e.CreateDefinitionAsync(await ReadJsonTextAsync(http, o.MaxBodyBytes, ct), Actor(http), ct))), o.EditPolicy);
-        Secure(g.MapGet("/definitions/{id}", (string id, WorkflowEngine e, CancellationToken ct) => e.GetDefinitionAsync(id, ct)), o.ViewPolicy);
+            Results.Ok(await e.CreateDefinitionAsync(await ReadJsonTextAsync(http, o.MaxBodyBytes, ct), Actor(http), ct)))
+            .Accepts<JsonObject>(Json).WithDescription(DefinitionBodyDescription).Produces<DefinitionSummary>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.EditPolicy);
+        Secure(g.MapGet("/definitions/{id}", (string id, WorkflowEngine e, CancellationToken ct) => e.GetDefinitionAsync(id, ct)).Produces<DefinitionDetail>(), o.ViewPolicy);
         Secure(g.MapPut("/definitions/{id}", async (string id, HttpContext http, WorkflowEngine e, CancellationToken ct) =>
-            Results.Ok(await e.SaveDraftAsync(id, await ReadJsonTextAsync(http, o.MaxBodyBytes, ct), Actor(http), ct))), o.EditPolicy);
+            Results.Ok(await e.SaveDraftAsync(id, await ReadJsonTextAsync(http, o.MaxBodyBytes, ct), Actor(http), ct)))
+            .Accepts<JsonObject>(Json).WithDescription(DefinitionBodyDescription).Produces<DefinitionSummary>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.EditPolicy);
         Secure(g.MapDelete("/definitions/{id}", async (string id, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
         {
             await e.DeleteDefinitionAsync(id, Actor(http), ct);
             return Results.NoContent();
-        }), o.PublishPolicy);
-        Secure(g.MapPost("/definitions/{id}/publish", async (string id, PublishBody? body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.PublishAsync(id, body?.Note, Actor(http), ct))), o.PublishPolicy);
+        }).Produces(StatusCodes.Status204NoContent).Produces<WorkflowError>(StatusCodes.Status409Conflict), o.PublishPolicy);
+        Secure(g.MapPost("/definitions/{id}/publish", async (string id, HttpContext http, WorkflowEngine e, CancellationToken ct) =>
+        {
+            var body = await ReadOptionalBodyAsync<PublishBody>(http, o.MaxBodyBytes, ct);
+            return Results.Ok(await e.PublishAsync(id, body?.Note, Actor(http), ct));
+        }).Accepts<PublishBody>(Json).Produces<DefinitionSummary>().Produces<WorkflowError>(StatusCodes.Status400BadRequest), o.PublishPolicy);
         // Changing who may do steps publishes straight away (only those changes; drafts keep their edits).
-        Secure(g.MapPost("/definitions/{id}/permissions", async (string id, PermissionsBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-                Results.Ok(await e.UpdatePermissionsAsync(id, (body.Changes ?? []).Select(c => (c.Node, c.Who ?? [])).ToList(), body.Note, Actor(http), ct)))
+        Secure(g.MapPost("/definitions/{id}/permissions", async (string id, HttpContext http, WorkflowEngine e, CancellationToken ct) =>
+            {
+                var body = await ReadBodyAsync<PermissionsBody>(http, o.MaxBodyBytes, ct);
+                return Results.Ok(await e.UpdatePermissionsAsync(id, (body.Changes ?? []).Select(c => (c.Node, c.Who ?? [])).ToList(), body.Note, Actor(http), ct));
+            })
+            .Accepts<PermissionsBody>(Json)
             .Produces<PermissionsSummary>()
             .Produces<WorkflowError>(StatusCodes.Status400BadRequest)
             .Produces<WorkflowError>(StatusCodes.Status409Conflict), o.PublishPolicy);
         Secure(g.MapPost("/definitions/{id}/archive", async (string id, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.ArchiveAsync(id, Actor(http), ct))), o.PublishPolicy);
+            Results.Ok(await e.ArchiveAsync(id, Actor(http), ct))).Produces<DefinitionSummary>(), o.PublishPolicy);
         Secure(g.MapPost("/definitions/{id}/restore", async (string id, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.RestoreAsync(id, Actor(http), ct))), o.PublishPolicy);
-        Secure(g.MapPost("/definitions/{id}/rollback", async (string id, RollbackBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.RollbackAsync(id, body.Version, Actor(http), ct))), o.PublishPolicy);
+            Results.Ok(await e.RestoreAsync(id, Actor(http), ct))).Produces<DefinitionSummary>(), o.PublishPolicy);
+        Secure(g.MapPost("/definitions/{id}/rollback", async (string id, HttpContext http, WorkflowEngine e, CancellationToken ct) =>
+        {
+            var body = await ReadBodyAsync<RollbackBody>(http, o.MaxBodyBytes, ct);
+            return Results.Ok(await e.RollbackAsync(id, body.Version, Actor(http), ct));
+        }).Accepts<RollbackBody>(Json).Produces<DefinitionSummary>(), o.PublishPolicy);
         Secure(g.MapGet("/definitions/{id}/versions/{version:int}", (string id, int version, WorkflowEngine e, CancellationToken ct) => e.GetVersionAsync(id, version, ct)), o.ViewPolicy);
         Secure(g.MapGet("/definitions/{id}/diff", (string id, WorkflowEngine e, CancellationToken ct) => e.DiffDraftAsync(id, ct)), o.ViewPolicy);
         Secure(g.MapPost("/validate", async (HttpContext http, WorkflowEngine e, CancellationToken ct) =>
-            Results.Ok(await e.ValidateAsync(await ReadJsonTextAsync(http, o.MaxBodyBytes, ct), ct))), o.EditPolicy);
-        Secure(g.MapPost("/simulate", async (HttpContext http, WorkflowEngine e, CancellationToken ct) =>
+            Results.Ok(await e.ValidateAsync(await ReadJsonTextAsync(http, o.MaxBodyBytes, ct), ct)))
+            .Accepts<JsonObject>(Json).WithDescription(DefinitionBodyDescription).Produces<IReadOnlyList<LintProblem>>(), o.EditPolicy);
+        Secure(g.MapPost("/simulate", async (HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
         {
             var body = await ReadBodyAsync<SimulateBody>(http, o.MaxBodyBytes, ct);
             var request = body.Request ?? new SimulationRequest();
-            if (request.Events?.Count > o.MaxSimulationEvents)
-                throw new WorkflowException("tooManyEvents", $"A test run can replay at most {o.MaxSimulationEvents} events.");
-            return Results.Ok(await e.SimulateAsync(body.Definition.ToJsonString(), request, Actor(http), ct));
-        }), o.EditPolicy);
+            var limit = Math.Min(o.MaxSimulationEvents, WorkflowEngine.MaxSimulationEvents);
+            if (request.Events?.Count > limit)
+                throw new WorkflowException("tooManyEvents", $"A test run can replay at most {limit} events.");
+            // A test run reads the real record it starts from: the caller must be allowed to see it.
+            if (request.EntityId is not null && (body.Definition as JsonObject)?["entity"] is JsonValue ev && ev.TryGetValue<string>(out var entity))
+                await RequireRecordAsync(entity, request.EntityId, access, http, ct);
+            return Results.Ok(await e.SimulateAsync(body.Definition?.ToJsonString() ?? "null", request, Actor(http), ct));
+        }).Accepts<SimulateBody>(Json).Produces<SimulationResult>().Produces<WorkflowError>(StatusCodes.Status400BadRequest), o.EditPolicy);
     }
 
     private static void MapInstances(RouteGroupBuilder g, WorkflowApiOptions o)
@@ -312,35 +363,55 @@ public static class WorkflowApi
         Secure(g.MapGet("/instances", async (string? definitionId, string? definitionKey, string? entity, string? entityId, string? status, string? kind, string? parentId,
             int? skip, int? take, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
-            var page = await e.QueryInstancesAsync(new InstanceQuery
+            var me = Actor(http);
+            var query = new InstanceQuery
             {
                 DefinitionId = definitionId, DefinitionKey = definitionKey, Entity = entity, EntityId = entityId, ParentId = parentId,
-                Statuses = Split(status), Kinds = Split(kind) ?? [InstanceKinds.Automation, InstanceKinds.Record], Skip = Math.Max(0, skip ?? 0), Take = Math.Clamp(take ?? 50, 1, 500),
-            }, ct);
-            // Instances the caller may not see are left out of the page (the total still counts them).
-            var me = Actor(http);
-            var visible = new List<InstanceView>();
-            foreach (var i in page.Items)
-                if (await access.CanViewInstanceAsync(me, i, ct)) visible.Add(i);
-            return Results.Ok(new Page<InstanceView>(visible, page.Total));
-        }), o.ViewPolicy);
+                Statuses = Split(status), Kinds = Split(kind) ?? [InstanceKinds.Automation, InstanceKinds.Record],
+            };
+            // Instances the caller may not see are left out of the items and of the total.
+            return Results.Ok(await VisiblePageAsync(
+                (s, t) => e.QueryInstancesAsync(new InstanceQuery
+                {
+                    DefinitionId = query.DefinitionId, DefinitionKey = query.DefinitionKey, Entity = query.Entity, EntityId = query.EntityId,
+                    ParentId = query.ParentId, Statuses = query.Statuses, Kinds = query.Kinds, Skip = s, Take = t,
+                }, ct),
+                i => access.CanViewInstanceAsync(me, i, ct), access, Math.Max(0, skip ?? 0), Math.Clamp(take ?? 50, 1, 500)));
+        }).Produces<Page<InstanceView>>().WithDescription(VisibleTotalDescription), o.ViewPolicy);
         Secure(g.MapGet("/instances/{id}", async (string id, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await VisibleInstanceAsync(id, e, access, http, ct))), o.ViewPolicy);
+            Results.Ok(await VisibleInstanceAsync(id, e, access, http, ct))).Produces<InstanceView>(), o.ViewPolicy);
         Secure(g.MapGet("/instances/{id}/definition", async (string id, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
             await VisibleInstanceAsync(id, e, access, http, ct);
             return Results.Ok(await e.GetInstanceDefinitionAsync(id, ct));
-        }), o.ViewPolicy);
+        }).Produces<JsonObject>(), o.ViewPolicy);
         Secure(g.MapGet("/instances/{id}/audit", (string id, int? take, WorkflowEngine e, CancellationToken ct) =>
             e.QueryAuditAsync(new AuditQuery { InstanceId = id, FromSeq = 1, Take = Math.Clamp(take ?? 500, 1, 5000) }, ct)), o.AuditPolicy);
-        Secure(g.MapPost("/instances/{id}/cancel", async (string id, ReasonBody? body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.CancelAsync(id, body?.Reason ?? "", Actor(http), ct))), o.InterventionPolicy);
-        Secure(g.MapPost("/instances/{id}/retry", async (string id, RetryBody? body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.RetryAsync(id, Actor(http), body?.Target, ct))), o.InterventionPolicy);
-        Secure(g.MapPost("/instances/{id}/skip", async (string id, SkipBody? body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.SkipAsync(id, Map(body?.Outputs), Actor(http), body?.Target, ct))), o.InterventionPolicy);
-        Secure(g.MapPost("/instances/{id}/migrate", async (string id, MigrateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.MigrateAsync(id, body.Version, body.StateMap, Actor(http), ct))), o.InterventionPolicy);
+        // Interventions act on what the caller could see: the instance must pass the access policy too.
+        Secure(g.MapPost("/instances/{id}/cancel", async (string id, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadOptionalBodyAsync<ReasonBody>(http, o.MaxBodyBytes, ct);
+            await VisibleInstanceAsync(id, e, access, http, ct);
+            return Results.Ok(await e.CancelAsync(id, body?.Reason ?? "", Actor(http), ct));
+        }).Accepts<ReasonBody>(Json).Produces<InstanceView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.InterventionPolicy);
+        Secure(g.MapPost("/instances/{id}/retry", async (string id, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadOptionalBodyAsync<RetryBody>(http, o.MaxBodyBytes, ct);
+            await VisibleInstanceAsync(id, e, access, http, ct);
+            return Results.Ok(await e.RetryAsync(id, Actor(http), body?.Target, ct));
+        }).Accepts<RetryBody>(Json).Produces<InstanceView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.InterventionPolicy);
+        Secure(g.MapPost("/instances/{id}/skip", async (string id, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadOptionalBodyAsync<SkipBody>(http, o.MaxBodyBytes, ct);
+            await VisibleInstanceAsync(id, e, access, http, ct);
+            return Results.Ok(await e.SkipAsync(id, Map(body?.Outputs), Actor(http), body?.Target, ct));
+        }).Accepts<SkipBody>(Json).Produces<InstanceView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.InterventionPolicy);
+        Secure(g.MapPost("/instances/{id}/migrate", async (string id, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadBodyAsync<MigrateBody>(http, o.MaxBodyBytes, ct);
+            await VisibleInstanceAsync(id, e, access, http, ct);
+            return Results.Ok(await e.MigrateAsync(id, body.Version, body.StateMap, Actor(http), ct));
+        }).Accepts<MigrateBody>(Json).Produces<InstanceView>(), o.InterventionPolicy);
     }
 
     private static void MapTasks(RouteGroupBuilder g, WorkflowApiOptions o)
@@ -352,34 +423,35 @@ public static class WorkflowApi
             var all = scope == "all";
             if (all && !await AllowedAsync(http, auth, o.InterventionPolicy)) return Results.Forbid();
             if (!all && me.Id is null) return Results.Ok(new Page<TaskView>([], 0));
-            var page = await e.QueryTasksAsync(new TaskQuery
-            {
-                AssigneeId = all ? null : me.Id, Entity = entity, EntityId = entityId,
-                Statuses = Split(status) ?? (all ? null : [Storage.TaskStatus.Open]), Skip = Math.Max(0, skip ?? 0), Take = Math.Clamp(take ?? 50, 1, 500),
-            }, me, ct);
-            var visible = new List<TaskView>();
-            foreach (var t in page.Items)
-                if (await access.CanViewTaskAsync(me, t, ct)) visible.Add(t);
-            return Results.Ok(new Page<TaskView>(visible, page.Total));
-        }), o.ViewPolicy);
+            var statuses = Split(status) ?? (all ? null : [Storage.TaskStatus.Open]);
+            // Tasks the caller may not see are left out of the items and of the total.
+            return Results.Ok(await VisiblePageAsync(
+                (s, t) => e.QueryTasksAsync(new TaskQuery { AssigneeId = all ? null : me.Id, Entity = entity, EntityId = entityId, Statuses = statuses, Skip = s, Take = t }, me, ct),
+                t => access.CanViewTaskAsync(me, t, ct), access, Math.Max(0, skip ?? 0), Math.Clamp(take ?? 50, 1, 500)));
+        }).Produces<Page<TaskView>>().WithDescription(VisibleTotalDescription), o.ViewPolicy);
         Secure(g.MapGet("/tasks/{id}", async (string id, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
-        {
-            var me = Actor(http);
-            var task = await e.GetTaskAsync(id, me, ct);
-            return await access.CanViewTaskAsync(me, task, ct) ? Results.Ok(task) : NotAllowed("You cannot see this task.");
-        }), o.ViewPolicy);
-        Secure(g.MapPost("/tasks/{id}/decide", async (string id, HttpContext http, WorkflowEngine e, CancellationToken ct) =>
+            Results.Ok(await VisibleTaskAsync(id, e, access, http, ct))).Produces<TaskView>(), o.ViewPolicy);
+        Secure(g.MapPost("/tasks/{id}/decide", async (string id, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
         {
             var body = await ReadBodyAsync<DecideBody>(http, o.MaxBodyBytes, ct);
             var data = Map(body.Data);
             if (Encoding.UTF8.GetByteCount(Values.Serialize(data)) > o.MaxDecisionDataBytes)
                 throw new WorkflowException("tooLarge", $"The answers are too large (at most {o.MaxDecisionDataBytes / 1024} KB).");
+            await VisibleTaskAsync(id, e, access, http, ct);
             return Results.Ok(await e.DecideAsync(id, Actor(http), body.Outcome, body.Comment, data, ct));
-        }), o.ViewPolicy);
-        Secure(g.MapPost("/tasks/{id}/delegate", async (string id, DelegateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.DelegateAsync(id, Actor(http), body.To, body.Note, ct))), o.ViewPolicy);
-        Secure(g.MapPost("/tasks/{id}/reassign", async (string id, ReassignBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.ReassignAsync(id, Actor(http), body.Assignees, body.Reason, ct))), o.InterventionPolicy);
+        }).Accepts<DecideBody>(Json).Produces<TaskView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.ViewPolicy);
+        Secure(g.MapPost("/tasks/{id}/delegate", async (string id, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadBodyAsync<DelegateBody>(http, o.MaxBodyBytes, ct);
+            await VisibleTaskAsync(id, e, access, http, ct);
+            return Results.Ok(await e.DelegateAsync(id, Actor(http), body.To, body.Note, ct));
+        }).Accepts<DelegateBody>(Json).Produces<TaskView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.ViewPolicy);
+        Secure(g.MapPost("/tasks/{id}/reassign", async (string id, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadBodyAsync<ReassignBody>(http, o.MaxBodyBytes, ct);
+            await VisibleTaskAsync(id, e, access, http, ct);
+            return Results.Ok(await e.ReassignAsync(id, Actor(http), body.Assignees ?? [], body.Reason, ct));
+        }).Accepts<ReassignBody>(Json).Produces<TaskView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.InterventionPolicy);
     }
 
     private static void MapRecords(RouteGroupBuilder g, WorkflowApiOptions o)
@@ -388,18 +460,19 @@ public static class WorkflowApi
         {
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.GetRecordAsync(entity, id, Actor(http), ct));
-        }), o.ViewPolicy);
+        }).Produces<RecordView>(), o.ViewPolicy);
         Secure(g.MapGet("/records/{entity}/{id}/history", async (string entity, string id, int? take, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await RecordHistoryAsync(e, entity, id, Math.Clamp(take ?? 200, 1, 2000), ct));
-        }), o.ViewPolicy);
-        Secure(g.MapPost("/records/{entity}/{id}/transitions/{key}", async (string entity, string id, string key, TransitionBody? body, WorkflowEngine e,
-            IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
+        }).Produces<IReadOnlyList<AuditRecord>>(), o.ViewPolicy);
+        Secure(g.MapPost("/records/{entity}/{id}/transitions/{key}", async (string entity, string id, string key, HttpContext http, WorkflowEngine e,
+            IWorkflowAccessPolicy access, CancellationToken ct) =>
         {
+            var body = await ReadOptionalBodyAsync<TransitionBody>(http, o.MaxBodyBytes, ct);
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.ApplyTransitionAsync(entity, id, key, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Comment));
-        }), o.ViewPolicy);
+        }).Accepts<TransitionBody>(Json).Produces<RecordView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.ViewPolicy);
         // Starting a record's workflow over: the lifecycle's reset.who decides who may (spec §6 reset).
         // What a reset would take back, for the people it allows (the reset list).
         Secure(g.MapGet("/records/{entity}/{id}/reset", async (string entity, string id, string? lifecycle, WorkflowEngine e,
@@ -408,24 +481,38 @@ public static class WorkflowApi
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.GetResetPreviewAsync(entity, id, Actor(http), lifecycle, ct));
         }).Produces<ResetPreview>().WithDescription(ResetListDescription), o.ViewPolicy);
-        Secure(g.MapPost("/records/{entity}/{id}/reset", async (string entity, string id, ResetBody? body, WorkflowEngine e,
-            IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
+        Secure(g.MapPost("/records/{entity}/{id}/reset", async (string entity, string id, HttpContext http, WorkflowEngine e,
+            IWorkflowAccessPolicy access, CancellationToken ct) =>
         {
+            var body = await ReadOptionalBodyAsync<ResetBody>(http, o.MaxBodyBytes, ct);
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Undo, body?.Token, body?.Comment));
-        }).WithDescription(ResetDescription), o.ViewPolicy);
-        Secure(g.MapPost("/records/{entity}/{id}/force-state", async (string entity, string id, ForceStateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.ForceStateAsync(entity, id, body.State, body.Reason, body.SkipSteps, Actor(http), body.Lifecycle, ct))), o.InterventionPolicy);
-        Secure(g.MapPost("/records/{entity}/{id}/manual/{workflow}", async (string entity, string id, string workflow, InputBody? body, WorkflowEngine e,
-            IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
+        }).Accepts<ResetBody>(Json).Produces<RecordView>().Produces<WorkflowError>(StatusCodes.Status409Conflict).WithDescription(ResetDescription), o.ViewPolicy);
+        Secure(g.MapPost("/records/{entity}/{id}/force-state", async (string entity, string id, HttpContext http, WorkflowEngine e,
+            IWorkflowAccessPolicy access, CancellationToken ct) =>
         {
+            var body = await ReadBodyAsync<ForceStateBody>(http, o.MaxBodyBytes, ct);
+            await RequireRecordAsync(entity, id, access, http, ct);
+            return Results.Ok(await e.ForceStateAsync(entity, id, body.State, body.Reason, body.SkipSteps, Actor(http), body.Lifecycle, ct));
+        }).Accepts<ForceStateBody>(Json).Produces<RecordView>(), o.InterventionPolicy);
+        Secure(g.MapPost("/records/{entity}/{id}/manual/{workflow}", async (string entity, string id, string workflow, HttpContext http, WorkflowEngine e,
+            IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadOptionalBodyAsync<InputBody>(http, o.MaxBodyBytes, ct);
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.StartManualAsync(workflow, entity, id, Map(body?.Input), Actor(http), ct));
-        }), o.ViewPolicy);
-        Secure(g.MapPost("/manual/{workflow}", async (string workflow, InputBody? body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.StartManualAsync(workflow, null, null, Map(body?.Input), Actor(http), ct))), o.ViewPolicy);
-        var signal = g.MapPost("/signals/{key}", async (string key, SignalBody? body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(new { resumed = await e.SignalAsync(key, body?.Entity, body?.EntityId, Map(body?.Data), Actor(http), ct) }));
+        }).Accepts<InputBody>(Json).Produces<InstanceView>().Produces<WorkflowError>(StatusCodes.Status409Conflict), o.ViewPolicy);
+        Secure(g.MapPost("/manual/{workflow}", async (string workflow, HttpContext http, WorkflowEngine e, CancellationToken ct) =>
+        {
+            var body = await ReadOptionalBodyAsync<InputBody>(http, o.MaxBodyBytes, ct);
+            return Results.Ok(await e.StartManualAsync(workflow, null, null, Map(body?.Input), Actor(http), ct));
+        }).Accepts<InputBody>(Json).Produces<InstanceView>(), o.ViewPolicy);
+        var signal = g.MapPost("/signals/{key}", async (string key, HttpContext http, WorkflowEngine e, IWorkflowAccessPolicy access, CancellationToken ct) =>
+        {
+            var body = await ReadOptionalBodyAsync<SignalBody>(http, o.MaxBodyBytes, ct);
+            if (body?.Entity is { } entity && body.EntityId is { } entityId) await RequireRecordAsync(entity, entityId, access, http, ct);
+            return Results.Ok(new SignalResponse(await e.SignalAsync(key, body?.Entity, body?.EntityId, Map(body?.Data), Actor(http), ct)));
+        }).Accepts<SignalBody>(Json).Produces<SignalResponse>();
         var signalPolicy = o.SignalPolicy ?? o.InterventionPolicy;
         if (signalPolicy is not null) signal.RequireAuthorization(signalPolicy);
         else signal.AddEndpointFilter((_, _) => ValueTask.FromResult<object?>(NotAllowed("Signals cannot be raised through the API here.")));
@@ -440,15 +527,15 @@ public static class WorkflowApi
                 Category = category, Action = action, Entity = entity, EntityId = entityId, InstanceId = instanceId, DefinitionId = definitionId, ActorId = actorId,
                 From = from, To = to, Before = before, Take = Math.Clamp(take ?? 100, 1, 1000),
             }, ct)), o.AuditPolicy);
-        Secure(g.MapGet("/audit/export", ExportAuditAsync), o.AuditExportPolicy ?? o.AuditPolicy);
+        Secure(g.MapGet("/audit/export", ExportAuditAsync).Produces<IReadOnlyList<AuditRecord>>(StatusCodes.Status200OK, Json, "text/csv"), o.AuditExportPolicy ?? o.AuditPolicy);
         Secure(g.MapPost("/audit/verify", async (long? fromSeq, WorkflowEngine e, CancellationToken ct) =>
         {
             var r = await e.VerifyAuditAsync(fromSeq ?? 1, ct);
-            return Results.Ok(new { r.Valid, r.Checked, r.BrokenAtSeq, r.Problem, purgedGaps = r.PurgedGaps.Select(x => new { from = x.From, to = x.To }) });
-        }), o.AuditPolicy);
+            return Results.Ok(new AuditVerifyResponse(r.Valid, r.Checked, r.BrokenAtSeq, r.Problem, r.PurgedGaps.Select(x => new SeqGap(x.From, x.To)).ToList()));
+        }).Produces<AuditVerifyResponse>(), o.AuditPolicy);
         // Purging deletes evidence: it needs the settings policy, not just the right to read the log.
         Secure(g.MapPost("/audit/purge", async (WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(new { purged = await e.PurgeAuditAsync(Actor(http), ct) })), o.SettingsPolicy);
+            Results.Ok(new PurgeResponse(await e.PurgeAuditAsync(Actor(http), ct)))).Produces<PurgeResponse>(), o.SettingsPolicy);
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -463,16 +550,65 @@ public static class WorkflowApi
         "`resetChanged` when the list has changed since it was opened, as does an id no longer listed. 400 `notUndoable` for an item that " +
         "cannot be taken back, `invalidInput` for the form. Writes that take things back start no automations.";
 
+    private const string Json = "application/json";
+
+    private const string DefinitionBodyDescription = "The body is a workflow definition (spec/schema/definition.schema.json).";
+
+    private const string VisibleTotalDescription =
+        "Items the caller may not see (IWorkflowAccessPolicy) are left out of `items` and of `total`, and `skip`/`take` count visible items. " +
+        "With a restrictive policy the server checks at most the first 5000 matches; past that, `total` also counts the unchecked rest.";
+
+    /// <summary>How many matches a filtered list checks against a restrictive access policy before estimating the rest.</summary>
+    private const int AccessScanLimit = 5000;
+    private const int AccessScanBatch = 250;
+
+    /// <summary>
+    /// One page of the items the caller may see, with a total that counts only visible items. With the allow-all
+    /// policy the store's own paging is used; otherwise matches are read in batches and checked one by one.
+    /// </summary>
+    internal static async Task<Page<T>> VisiblePageAsync<T>(Func<int, int, Task<Page<T>>> query, Func<T, ValueTask<bool>> visible,
+        IWorkflowAccessPolicy access, int skip, int take)
+    {
+        if (access is AllowAllWorkflowAccessPolicy) return await query(skip, take);
+        var items = new List<T>();
+        var seen = 0;
+        for (var offset = 0; ;)
+        {
+            var batch = await query(offset, AccessScanBatch);
+            foreach (var item in batch.Items)
+            {
+                if (!await visible(item)) continue;
+                if (seen >= skip && items.Count < take) items.Add(item);
+                seen++;
+            }
+            offset += batch.Items.Count;
+            if (batch.Items.Count < AccessScanBatch || offset >= batch.Total) return new Page<T>(items, seen);
+            if (offset >= AccessScanLimit) return new Page<T>(items, seen + (batch.Total - offset));
+        }
+    }
+
     private static RouteHandlerBuilder Secure(RouteHandlerBuilder r, string? policy) => policy is null ? r : r.RequireAuthorization(policy);
 
     private static async Task<bool> AllowedAsync(HttpContext http, IAuthorizationService auth, string? policy) =>
         policy is null || (await auth.AuthorizeAsync(http.User, policy)).Succeeded;
 
-    private static IResult NotAllowed(string message) => Results.Json(new { code = "notAllowed", message }, statusCode: 403);
+    private static IResult NotAllowed(string message) => Error("notAllowed", message, 403);
+
+    /// <summary>An error in the standard shape (<see cref="WorkflowError"/>).</summary>
+    private static IResult Error(string code, string message, int status, object? details = null) =>
+        Results.Json(new { code, message, details }, Model.Definitions.JsonOptions, statusCode: status);
 
     private static async Task RequireRecordAsync(string entity, string id, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct)
     {
         if (!await access.CanViewRecordAsync(Actor(http), entity, id, ct)) throw new WorkflowException("notAllowed", "You cannot see this record.");
+    }
+
+    private static async Task<TaskView> VisibleTaskAsync(string id, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct)
+    {
+        var me = Actor(http);
+        var task = await e.GetTaskAsync(id, me, ct);
+        if (!await access.CanViewTaskAsync(me, task, ct)) throw new WorkflowException("notAllowed", "You cannot see this task.");
+        return task;
     }
 
     private static async Task<InstanceView> VisibleInstanceAsync(string id, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct)
@@ -531,19 +667,32 @@ public static class WorkflowApi
         {
             return Problem(e);
         }
+        catch (BadHttpRequestException e) when (e.StatusCode == StatusCodes.Status413PayloadTooLarge)
+        {
+            return Error("tooLarge", "The request is too large.", 413);
+        }
         catch (Exception e) when (e is JsonException or BadHttpRequestException)
         {
-            return Results.Json(new { code = "invalidJson", message = e.Message }, statusCode: 400);
+            return Error("invalidJson", $"The request body is not valid JSON for this endpoint: {e.Message}", 400);
         }
         catch (Exception e) when (e is FormatException or OverflowException or ArgumentOutOfRangeException)
         {
             // Values the request carried that the engine could not use (e.g. a duration out of range).
-            return Results.Json(new { code = "invalidInput", message = e.Message }, statusCode: 400);
+            return Error("invalidInput", e.Message, 400);
         }
     }
 
     /// <summary>Reads the request body as JSON text, refusing bodies over <paramref name="limit"/> bytes before parsing them.</summary>
     private static async Task<string> ReadJsonTextAsync(HttpContext http, int limit, CancellationToken ct)
+    {
+        var text = await ReadTextAsync(http, limit, ct);
+        // Validate it is one JSON value before the engine sees it.
+        using (JsonDocument.Parse(text)) { }
+        return text;
+    }
+
+    /// <summary>The raw body as text, refused once it passes <paramref name="limit"/> bytes (whatever Content-Length claimed).</summary>
+    private static async Task<string> ReadTextAsync(HttpContext http, int limit, CancellationToken ct)
     {
         if (http.Request.ContentLength > limit) throw TooLarge(limit);
         using var buffer = new MemoryStream();
@@ -554,15 +703,19 @@ public static class WorkflowApi
             if (buffer.Length + read > limit) throw TooLarge(limit);
             buffer.Write(chunk, 0, read);
         }
-        var text = Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
-        // Validate it is one JSON value before the engine sees it.
-        using (JsonDocument.Parse(text)) { }
-        return text;
+        return Encoding.UTF8.GetString(buffer.GetBuffer(), 0, (int)buffer.Length);
     }
 
-    private static async Task<T> ReadBodyAsync<T>(HttpContext http, int limit, CancellationToken ct) =>
-        JsonSerializer.Deserialize<T>(await ReadJsonTextAsync(http, limit, ct), WebJson)
-        ?? throw new WorkflowException("invalidJson", "The request body is empty.");
+    /// <summary>A required typed body: size-capped, and malformed or empty JSON is a 400 <c>invalidJson</c>.</summary>
+    private static async Task<T> ReadBodyAsync<T>(HttpContext http, int limit, CancellationToken ct) where T : class =>
+        await ReadOptionalBodyAsync<T>(http, limit, ct) ?? throw new WorkflowException("invalidJson", "The request needs a JSON body.");
+
+    /// <summary>An optional typed body: an empty body (or <c>null</c>) gives null; otherwise as <see cref="ReadBodyAsync{T}"/>.</summary>
+    private static async Task<T?> ReadOptionalBodyAsync<T>(HttpContext http, int limit, CancellationToken ct) where T : class
+    {
+        var text = await ReadTextAsync(http, limit, ct);
+        return string.IsNullOrWhiteSpace(text) ? null : JsonSerializer.Deserialize<T>(text, WebJson);
+    }
 
     private static WorkflowException TooLarge(int limit) => new("tooLarge", $"The request is too large (at most {limit / (1024 * 1024.0):0.#} MB).");
 
@@ -578,11 +731,11 @@ public static class WorkflowApi
         {
             "notAllowed" => 403,
             "notFound" or "noRecord" or "definitionNotFound" => 404,
-            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" or "resetChanged" or "wrongLifecycle" => 409,
+            "notInIncident" or "alreadyRunning" or "alreadyAssigned" or "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" or "resetChanged" or "wrongLifecycle" => 409,
             "tooLarge" => 413,
             _ => 400,
         };
-        return Results.Json(new { code = e.Code, message = e.Message, details = e.Details }, Model.Definitions.JsonOptions, statusCode: status);
+        return Error(e.Code, e.Message, status, e.Details);
     }
 
     private const string CsvHeader = "seq,at,actorType,actorId,actorName,category,action,subjectType,subjectId,entity,entityId,instanceId,definitionId,before,after,data,correlationId,prevHash,hash\n";

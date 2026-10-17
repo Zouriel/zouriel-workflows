@@ -18,15 +18,34 @@ namespace Zouriel.Workflows.EntityFrameworkCore;
 /// commit (or roll back) with the workflow state.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Row claims (timers, outbox) and the audit chain head are locked with <c>FOR UPDATE SKIP LOCKED</c> on
 /// PostgreSQL and <c>UPDLOCK, READPAST</c> on SQL Server. SQLite serialises writers itself. Other providers
 /// fall back to unlocked queries (a warning is logged once): run a single worker there, or two workers
 /// may claim the same row and the audit chain may fork.
+/// </para>
+/// <para>
+/// On SQLite a unit begins as a deferred (read) transaction, so units that only read (API views) never hold
+/// the database's single write lock and never block the app's own writes. The unit takes the write lock
+/// before its first write; if another writer committed since the unit started reading, its reads are stale
+/// and the unit is retried (<see cref="WorkflowConcurrencyException"/>). Right after such a conflict new
+/// units begin with the write lock for a moment, so a busy database queues writers instead of retrying them.
+/// </para>
+/// <para>
+/// Audit queries, purges and verification only see the audit chain of <paramref name="tenant"/> (the
+/// engine's <c>WorkflowEngineSettings.Tenant</c>), so apps sharing one audit table stay apart.
+/// </para>
 /// </remarks>
 /// <typeparam name="TContext">The app's DbContext, which must call <c>modelBuilder.AddWorkflows()</c>.</typeparam>
-public sealed class EfWorkflowStore<TContext>(IServiceScopeFactory scopes, WorkflowRegistry registry) : IWorkflowStore where TContext : DbContext
+/// <param name="scopes">Creates the DI scope (and DbContext) of each unit of work.</param>
+/// <param name="registry">The workflow registry.</param>
+/// <param name="tenant">The audit chain this store reads and purges (null = the default chain).</param>
+public sealed class EfWorkflowStore<TContext>(IServiceScopeFactory scopes, WorkflowRegistry registry, string? tenant = null) : IWorkflowStore where TContext : DbContext
 {
     private static int _warnedUnknownProvider;
+    /// <summary>How long after a write conflict new SQLite units take the write lock as they begin.</summary>
+    private static readonly long ImmediateAfterConflictMs = 2000;
+    private long _immediateUntil;
 
     /// <summary>Opens a unit of work: a DI scope, its DbContext and a database transaction.</summary>
     public async Task<IWorkflowSession> BeginAsync(CancellationToken ct = default)
@@ -41,20 +60,86 @@ public sealed class EfWorkflowStore<TContext>(IServiceScopeFactory scopes, Workf
             else System.Diagnostics.Trace.TraceWarning($"{text} Provider: {db.Database.ProviderName}");
         }
         var time = scope.ServiceProvider.GetService<WorkflowEngineSettings>()?.Time ?? TimeProvider.System;
-        var tx = await DbErrors.MapAsync(() => db.Database.BeginTransactionAsync(ct));
-        return new EfWorkflowSession(db, tx, scope, registry, time);
+        var sqlite = EfWorkflowSession.ProviderOf(db) == EfWorkflowSession.Provider.Sqlite;
+        var immediate = !sqlite || Environment.TickCount64 < Interlocked.Read(ref _immediateUntil);
+        var tx = await DbErrors.MapAsync(() => immediate ? db.Database.BeginTransactionAsync(ct) : BeginDeferredAsync(db, ct));
+        return new EfWorkflowSession(db, tx, scope, registry, time, tenant, writeLocked: immediate,
+            onWriteConflict: () => Interlocked.Exchange(ref _immediateUntil, Environment.TickCount64 + ImmediateAfterConflictMs));
+    }
+
+    /// <summary>
+    /// A SQLite transaction that takes no lock until it writes (<c>BEGIN DEFERRED</c>). EF's own
+    /// BeginTransaction begins IMMEDIATE, which holds the write lock even for units that only read.
+    /// Microsoft.Data.Sqlite is called by reflection so this package needs no provider reference.
+    /// </summary>
+    private static async Task<IDbContextTransaction> BeginDeferredAsync(DbContext db, CancellationToken ct)
+    {
+        await db.Database.OpenConnectionAsync(ct);
+        var connection = db.Database.GetDbConnection();
+        var begin = connection.GetType().GetMethod("BeginTransaction", [typeof(bool)]);
+        if (begin?.Invoke(connection, [true]) is not System.Data.Common.DbTransaction deferred)
+            return await db.Database.BeginTransactionAsync(ct);
+        return (await db.Database.UseTransactionAsync(deferred, ct))!;
     }
 }
 
-internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, AsyncServiceScope scope, WorkflowRegistry registry, TimeProvider time) : IWorkflowSession
+internal sealed class EfWorkflowSession : IWorkflowSession
 {
+    private readonly DbContext db;
+    private readonly IDbContextTransaction tx;
+    private readonly AsyncServiceScope scope;
+    private readonly TimeProvider time;
+    private readonly string _tenantKey;
+    private readonly Action _onWriteConflict;
     private bool _committed;
-    private readonly Provider _provider = ProviderOf(db);
+    private bool _writeLocked;
+    private readonly Provider _provider;
     private readonly Dictionary<string, HashSet<object>> _savepoints = [];
 
-    public IEntityGateway Entities { get; } = new EfEntityGateway(db, registry);
+    public EfWorkflowSession(DbContext db, IDbContextTransaction tx, AsyncServiceScope scope, WorkflowRegistry registry, TimeProvider time,
+        string? tenant = null, bool writeLocked = true, Action? onWriteConflict = null)
+    {
+        (this.db, this.tx, this.scope, this.time) = (db, tx, scope, time);
+        _provider = ProviderOf(db);
+        _tenantKey = tenant ?? "";
+        _writeLocked = writeLocked || _provider != Provider.Sqlite;
+        _onWriteConflict = onWriteConflict ?? (() => { });
+        Entities = new EfEntityGateway(db, registry, WriteLockAsync);
+    }
+
+    public IEntityGateway Entities { get; }
     public IServiceProvider Services => scope.ServiceProvider;
-    internal DbContext Db => db;
+
+    /// <summary>
+    /// Takes SQLite's write lock before the unit's first write (a no-op elsewhere, and once taken). The unit has
+    /// usually read already, so its snapshot must still be the newest: when another writer committed since,
+    /// SQLite refuses the lock and the unit is retried with fresh reads. Waiting cannot help then, so the
+    /// attempt gives up after a second instead of the connection's whole busy timeout.
+    /// </summary>
+    internal async Task WriteLockAsync(CancellationToken ct)
+    {
+        if (_writeLocked) return;
+        var et = db.Model.FindEntityType(typeof(SettingsRecord))!;
+        var key = Column(et, nameof(SettingsRecord.Key));
+        // A write that changes nothing still makes SQLite take the write lock for this transaction.
+        var sql = $"UPDATE {Table(et)} SET {key} = {key} WHERE 1 = 0";
+        var timeout = db.Database.GetCommandTimeout();
+        db.Database.SetCommandTimeout(1);
+        try
+        {
+            await db.Database.ExecuteSqlRawAsync(sql, ct);
+        }
+        catch (Exception e) when (DbErrors.IsBusy(e))
+        {
+            _onWriteConflict();
+            throw new WorkflowConcurrencyException("Another unit wrote to the database since this one started reading; retry.");
+        }
+        finally
+        {
+            db.Database.SetCommandTimeout(timeout);
+        }
+        _writeLocked = true;
+    }
 
     internal enum Provider { Postgres, SqlServer, Sqlite, Other }
 
@@ -70,6 +155,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     private async Task FlushAsync(CancellationToken ct)
     {
         if (!db.ChangeTracker.HasChanges()) return;
+        await WriteLockAsync(ct);
         await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
     }
 
@@ -86,10 +172,11 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     public async Task<DefinitionRecord?> GetDefinitionAsync(string id, CancellationToken ct = default) { await FlushAsync(ct); return await Set<DefinitionRecord>().FirstOrDefaultAsync(d => d.Id == id, ct); }
     public async Task<DefinitionRecord?> GetDefinitionByKeyAsync(string key, CancellationToken ct = default) { await FlushAsync(ct); return await Set<DefinitionRecord>().FirstOrDefaultAsync(d => d.Key == key, ct); }
     public async Task<IReadOnlyList<DefinitionRecord>> ListDefinitionsAsync(CancellationToken ct = default) { await FlushAsync(ct); return await Set<DefinitionRecord>().ToListAsync(ct); }
-    public Task AddDefinitionAsync(DefinitionRecord d, CancellationToken ct = default) { Set<DefinitionRecord>().Add(d); return Task.CompletedTask; }
-    public Task UpdateDefinitionAsync(DefinitionRecord d, CancellationToken ct = default) { d.RowVersion++; Upsert(d); return Task.CompletedTask; }
+    public async Task AddDefinitionAsync(DefinitionRecord d, CancellationToken ct = default) { await WriteLockAsync(ct); Set<DefinitionRecord>().Add(d); }
+    public async Task UpdateDefinitionAsync(DefinitionRecord d, CancellationToken ct = default) { await WriteLockAsync(ct); d.RowVersion++; Upsert(d); }
     public async Task DeleteDefinitionAsync(string id, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         var d = await GetDefinitionAsync(id, ct);
         if (d is not null) Set<DefinitionRecord>().Remove(d);
     }
@@ -106,12 +193,13 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         return await Set<DefinitionVersionRecord>().AsNoTracking().Where(v => v.DefinitionId == definitionId).OrderBy(v => v.Version).ToListAsync(ct);
     }
 
-    public Task AddVersionAsync(DefinitionVersionRecord v, CancellationToken ct = default) { Set<DefinitionVersionRecord>().Add(v); return Task.CompletedTask; }
+    public async Task AddVersionAsync(DefinitionVersionRecord v, CancellationToken ct = default) { await WriteLockAsync(ct); Set<DefinitionVersionRecord>().Add(v); }
 
     public async Task<IReadOnlyList<TriggerRecord>> ListTriggersAsync(CancellationToken ct = default) { await FlushAsync(ct); return await Set<TriggerRecord>().AsNoTracking().ToListAsync(ct); }
 
     public async Task ReplaceTriggersAsync(string definitionId, IReadOnlyList<TriggerRecord> triggers, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         await FlushAsync(ct);
         Set<TriggerRecord>().RemoveRange(await Set<TriggerRecord>().Where(t => t.DefinitionId == definitionId).ToListAsync(ct));
         Set<TriggerRecord>().AddRange(triggers);
@@ -119,6 +207,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
 
     public async Task<bool> TryClaimTriggerEventAsync(string definitionId, string eventId, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         await FlushAsync(ct);
         if (await Set<TriggerClaimRecord>().AnyAsync(c => c.DefinitionId == definitionId && c.EventId == eventId, ct)) return false;
         Set<TriggerClaimRecord>().Add(new TriggerClaimRecord { DefinitionId = definitionId, EventId = eventId, ClaimedAt = time.GetUtcNow() });
@@ -164,11 +253,11 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         return await Set<InstanceRecord>().Where(i => i.DefinitionId == definitionId && (i.Kind == InstanceKinds.Automation || i.Kind == InstanceKinds.Record))
             .GroupBy(i => i.Version).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.Count, ct);
     }
-    public Task AddInstanceAsync(InstanceRecord i, CancellationToken ct = default) { Set<InstanceRecord>().Add(i); return Task.CompletedTask; }
-    public Task UpdateInstanceAsync(InstanceRecord i, CancellationToken ct = default) { i.RowVersion++; Upsert(i); return Task.CompletedTask; }
+    public async Task AddInstanceAsync(InstanceRecord i, CancellationToken ct = default) { await WriteLockAsync(ct); Set<InstanceRecord>().Add(i); }
+    public async Task UpdateInstanceAsync(InstanceRecord i, CancellationToken ct = default) { await WriteLockAsync(ct); i.RowVersion++; Upsert(i); }
 
-    public Task AddStepAsync(StepRecord s, CancellationToken ct = default) { Set<StepRecord>().Add(s); return Task.CompletedTask; }
-    public Task UpdateStepAsync(StepRecord s, CancellationToken ct = default) { Upsert(s); return Task.CompletedTask; }
+    public async Task AddStepAsync(StepRecord s, CancellationToken ct = default) { await WriteLockAsync(ct); Set<StepRecord>().Add(s); }
+    public async Task UpdateStepAsync(StepRecord s, CancellationToken ct = default) { await WriteLockAsync(ct); Upsert(s); }
 
     public async Task<IReadOnlyList<StepRecord>> ListStepsAsync(string instanceId, CancellationToken ct = default)
     {
@@ -178,16 +267,17 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
 
     // ── Bookmarks ─────────────────────────────────────────────────────────
 
-    public Task AddBookmarkAsync(BookmarkRecord b, CancellationToken ct = default)
+    public async Task AddBookmarkAsync(BookmarkRecord b, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         var tracked = Set<BookmarkRecord>().Local.FirstOrDefault(x => x.Id == b.Id);
         if (tracked is not null && db.Entry(tracked).State == EntityState.Deleted) db.Entry(tracked).State = EntityState.Unchanged;
         else Set<BookmarkRecord>().Add(b);
-        return Task.CompletedTask;
     }
 
     public async Task RemoveBookmarkAsync(string id, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         var b = Set<BookmarkRecord>().Local.FirstOrDefault(x => x.Id == id) ?? await Set<BookmarkRecord>().FirstOrDefaultAsync(x => x.Id == id, ct);
         if (b is not null) Set<BookmarkRecord>().Remove(b);
     }
@@ -219,6 +309,8 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
             due = await Set<BookmarkRecord>().Where(b => b.DueAt != null && b.DueAt <= now && (b.LockedUntil == null || b.LockedUntil <= now))
                 .OrderBy(b => b.DueAt).Take(limit).ToListAsync(ct);
         }
+        // Taking the write lock also proves the rows read are current: had another worker claimed them since, the lock fails and the unit retries.
+        if (due.Count > 0) await WriteLockAsync(ct);
         foreach (var b in due) b.LockedUntil = lockUntil;
         return due;
     }
@@ -250,15 +342,23 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         if (q.Entity is not null) x = x.Where(t => t.Entity == q.Entity);
         if (q.EntityId is not null) x = x.Where(t => t.EntityId == q.EntityId);
         if (q.Statuses is not null) { var s = q.Statuses.ToList(); x = x.Where(t => s.Contains(t.Status)); }
-        // Assignees are a JSON array of ids; match the quoted id inside it.
-        if (q.AssigneeId is not null) { var needle = $"\"{q.AssigneeId}\""; x = x.Where(t => t.Assignees.Contains(needle)); }
+        // Assignees are a JSON array of ids; match the id as a JSON string inside it. The needle is written by
+        // the same serializer as the column, which escapes characters such as + ' and non-ASCII letters.
+        if (q.AssigneeId is not null) { var needles = AssigneeNeedles([q.AssigneeId]); x = x.Where(t => needles.Any(n => t.Assignees.Contains(n))); }
         if (q.AssigneeAnyOf is { Count: > 0 })
         {
-            var needles = q.AssigneeAnyOf.Select(a => $"\"{a}\"").ToList();
+            var needles = AssigneeNeedles(q.AssigneeAnyOf);
             x = x.Where(t => needles.Any(n => t.Assignees.Contains(n)));
         }
         return x;
     }
+
+    /// <summary>
+    /// Each id as the assignee column stores it (<see cref="Values.Serialize"/>), plus the plain quoted form when that
+    /// differs, so rows written unescaped by an older version are still found.
+    /// </summary>
+    internal static List<string> AssigneeNeedles(IEnumerable<string> ids) =>
+        ids.SelectMany(id => new[] { Values.Serialize(id), $"\"{id}\"" }).Distinct(StringComparer.Ordinal).ToList();
 
     public async Task<IReadOnlyList<TaskRecord>> QueryTasksAsync(TaskQuery q, CancellationToken ct = default)
     {
@@ -267,13 +367,13 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     }
 
     public async Task<int> CountTasksAsync(TaskQuery q, CancellationToken ct = default) { await FlushAsync(ct); return await Filter(q).CountAsync(ct); }
-    public Task AddTaskAsync(TaskRecord t, CancellationToken ct = default) { Set<TaskRecord>().Add(t); return Task.CompletedTask; }
-    public Task UpdateTaskAsync(TaskRecord t, CancellationToken ct = default) { t.RowVersion++; Upsert(t); return Task.CompletedTask; }
+    public async Task AddTaskAsync(TaskRecord t, CancellationToken ct = default) { await WriteLockAsync(ct); Set<TaskRecord>().Add(t); }
+    public async Task UpdateTaskAsync(TaskRecord t, CancellationToken ct = default) { await WriteLockAsync(ct); t.RowVersion++; Upsert(t); }
 
     // ── Outbox ────────────────────────────────────────────────────────────
 
-    public Task AddOutboxAsync(OutboxRecord o, CancellationToken ct = default) { Set<OutboxRecord>().Add(o); return Task.CompletedTask; }
-    public Task UpdateOutboxAsync(OutboxRecord o, CancellationToken ct = default) { Upsert(o); return Task.CompletedTask; }
+    public async Task AddOutboxAsync(OutboxRecord o, CancellationToken ct = default) { await WriteLockAsync(ct); Set<OutboxRecord>().Add(o); }
+    public async Task UpdateOutboxAsync(OutboxRecord o, CancellationToken ct = default) { await WriteLockAsync(ct); Upsert(o); }
 
     public async Task<IReadOnlyList<OutboxRecord>> ClaimOutboxAsync(DateTimeOffset now, DateTimeOffset lockUntil, int limit, CancellationToken ct = default)
     {
@@ -296,6 +396,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
             rows = await Set<OutboxRecord>().Where(o => o.ProcessedAt == null && (o.LockedUntil == null || o.LockedUntil <= now))
                 .OrderBy(o => o.CreatedAt).ThenBy(o => o.Id).Take(limit).ToListAsync(ct);
         }
+        if (rows.Count > 0) await WriteLockAsync(ct);
         foreach (var r in rows) r.LockedUntil = lockUntil;
         return rows;
     }
@@ -306,7 +407,8 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     {
         // The engine asks for the head once, right before committing. The unit's own pending rows are
         // written first, so every unit takes its row locks before the head lock (one lock order, fewer
-        // deadlocks) and the head stays locked only for the commit itself.
+        // deadlocks) and the head stays locked only for the commit itself. On SQLite the write lock is the head lock.
+        await WriteLockAsync(ct);
         await FlushAsync(ct);
         var key = tenant ?? "";
         var local = Set<AuditHeadRecord>().Local.FirstOrDefault(h => h.TenantKey == key);
@@ -336,6 +438,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
 
     public async Task SetAuditHeadAsync(string? tenant, AuditHead head, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         var key = tenant ?? "";
         var row = Set<AuditHeadRecord>().Local.FirstOrDefault(h => h.TenantKey == key) ?? await Set<AuditHeadRecord>().FirstOrDefaultAsync(h => h.TenantKey == key, ct);
         if (row is null) Set<AuditHeadRecord>().Add(new AuditHeadRecord { TenantKey = key, Seq = head.Seq, Hash = head.Hash });
@@ -346,17 +449,17 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         }
     }
 
-    public Task AddAuditAsync(AuditRecord a, CancellationToken ct = default)
+    public async Task AddAuditAsync(AuditRecord a, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         Set<AuditRecord>().Add(a);
         db.Entry(a).Property(WorkflowModelBuilderExtensions.AuditTenantKey).CurrentValue = a.Tenant ?? "";
-        return Task.CompletedTask;
     }
 
     public async Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default)
     {
         await FlushAsync(ct);
-        var x = Set<AuditRecord>().AsNoTracking().AsQueryable();
+        var x = TenantAudit().AsNoTracking();
         if (q.Category is not null) x = x.Where(a => a.Category == q.Category);
         if (q.Action is not null) x = x.Where(a => a.Action == q.Action);
         if (q.Entity is not null) x = x.Where(a => a.Entity == q.Entity);
@@ -372,8 +475,16 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         return await x.Take(q.Take).ToListAsync(ct);
     }
 
+    /// <summary>The audit entries of this store's tenant: other tenants' chains in a shared table are never read or purged here.</summary>
+    private IQueryable<AuditRecord> TenantAudit()
+    {
+        var key = _tenantKey;
+        return Set<AuditRecord>().Where(a => EF.Property<string>(a, WorkflowModelBuilderExtensions.AuditTenantKey) == key);
+    }
+
     public async Task<AuditPurgeResult> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         await FlushAsync(ct);
         // Page through the victims' sequence numbers so the checkpoint records exactly what went, however many.
         const int page = 10_000;
@@ -381,7 +492,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         long after = 0;
         while (true)
         {
-            var batch = await Set<AuditRecord>().AsNoTracking().Where(a => a.Category == category && a.At < before && a.Seq > after)
+            var batch = await TenantAudit().AsNoTracking().Where(a => a.Category == category && a.At < before && a.Seq > after)
                 .OrderBy(a => a.Seq).Select(a => a.Seq).Take(page).ToListAsync(ct);
             seqs.AddRange(batch);
             if (batch.Count < page) break;
@@ -390,12 +501,13 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         var count = 0;
         var ranges = SeqRange.Compress(seqs);
         foreach (var r in ranges)
-            count += await Set<AuditRecord>().Where(a => a.Category == category && a.Seq >= r.From && a.Seq <= r.To).ExecuteDeleteAsync(ct);
+            count += await TenantAudit().Where(a => a.Category == category && a.Seq >= r.From && a.Seq <= r.To).ExecuteDeleteAsync(ct);
         return new AuditPurgeResult(count, ranges);
     }
 
     public async Task<int> CleanupAsync(DateTimeOffset processedOutboxBefore, DateTimeOffset claimsBefore, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         await FlushAsync(ct);
         var n = await Set<OutboxRecord>().Where(o => o.ProcessedAt != null && o.ProcessedAt < processedOutboxBefore).ExecuteDeleteAsync(ct);
         n += await Set<TriggerClaimRecord>().Where(c => c.ClaimedAt < claimsBefore).ExecuteDeleteAsync(ct);
@@ -412,6 +524,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
 
     public async Task SaveSettingsAsync(SettingsRecord s, CancellationToken ct = default)
     {
+        await WriteLockAsync(ct);
         var existing = await GetSettingsAsync(ct);
         if (existing is null)
         {
@@ -429,6 +542,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
 
     public async Task CommitAsync(CancellationToken ct = default)
     {
+        if (db.ChangeTracker.HasChanges()) await WriteLockAsync(ct);
         await DbErrors.MapAsync(async () =>
         {
             await db.SaveChangesAsync(ct);
@@ -507,7 +621,10 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
 }
 
 /// <summary>Reads and writes the app's own entities through the registry's CLR bindings.</summary>
-internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) : IEntityGateway
+/// <param name="db">The unit's DbContext.</param>
+/// <param name="registry">The registry's CLR bindings.</param>
+/// <param name="writeLock">Takes the unit's write lock before a write (SQLite; see <see cref="EfWorkflowSession.WriteLockAsync"/>).</param>
+internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry, Func<CancellationToken, Task> writeLock) : IEntityGateway
 {
     private EntityDescriptor Entity(string key) =>
         registry.Entity(key) is { ClrType: not null } e ? e : throw new WorkflowException("unknownEntity", $"'{key}' is not bound to an EF Core entity.");
@@ -583,14 +700,33 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
     {
         var e = Entity(entity);
         var obj = await FindAsync(e, id, ct) ?? throw new WorkflowException("noRecord", $"{e.Label} {id} does not exist.");
+        await writeLock(ct);
         foreach (var (k, v) in values)
         {
             var f = e.Field(k) ?? throw new WorkflowException("unknownField", $"'{k}' is not a field of {e.Label}.");
             if (f.Setter is null) throw new WorkflowException("fieldNotSettable", $"{f.Label} cannot be changed by workflows.");
             f.Setter(obj, v);
         }
-        // Saved now (inside the unit's transaction) so the change hook runs while the workflow's write scope is active.
-        await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
+        try
+        {
+            // Saved now (inside the unit's transaction) so the change hook runs while the workflow's write scope is active.
+            await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
+        }
+        catch
+        {
+            // EF rolled the database back to its own savepoint, but the tracker still holds the refused values: the
+            // unit's next save (the incident the step fails into, the commit) would write them again and fail too.
+            Revert(db.Entry(obj));
+            throw;
+        }
+    }
+
+    /// <summary>Puts a tracked record back to the values it was loaded with, so a refused write is not retried by the next save.</summary>
+    private static void Revert(Microsoft.EntityFrameworkCore.ChangeTracking.EntityEntry entry)
+    {
+        if (entry.State != EntityState.Modified) return;
+        entry.CurrentValues.SetValues(entry.OriginalValues);
+        entry.State = EntityState.Unchanged;
     }
 
     public async Task<string> CreateAsync(string entity, IReadOnlyDictionary<string, object?> values, CancellationToken ct = default)
@@ -615,6 +751,7 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
             if (f.Setter is null) throw new WorkflowException("fieldNotSettable", $"{f.Label} cannot be set by workflows.");
             f.Setter(obj, v);
         }
+        await writeLock(ct);
         db.Add(obj);
         try
         {
@@ -635,6 +772,7 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
         var e = Entity(entity);
         // Like the in-memory gateway: a record that is not there is an error, not a silent success.
         var obj = await FindAsync(e, id, ct) ?? throw new WorkflowException("noRecord", $"{e.Label} {id} does not exist.");
+        await writeLock(ct);
         db.Remove(obj);
         try
         {

@@ -22,7 +22,7 @@ public static class WorkflowEfExtensions
     public static WorkflowBuilder UseEntityFrameworkCore<TContext>(this WorkflowBuilder builder) where TContext : DbContext
     {
         builder.Services.AddSingleton(sp => new WorkflowSaveChangesInterceptor(sp.GetRequiredService<WorkflowEngine>()));
-        return builder.UseStore((sp, engine) => new EfWorkflowStore<TContext>(sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<WorkflowRegistry>()));
+        return builder.UseStore((sp, engine) => new EfWorkflowStore<TContext>(sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<WorkflowRegistry>(), engine.Options.Tenant));
     }
 
     /// <summary>Adds the workflow change interceptor to a DbContext's options.</summary>

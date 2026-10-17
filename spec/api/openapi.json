@@ -13,7 +13,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchemaResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -25,7 +32,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsResponse"
+                }
+              }
+            }
           }
         }
       },
@@ -33,9 +47,36 @@
         "tags": [
           "Workflows"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -90,7 +131,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowUser"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -112,7 +163,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowUser"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found"
           }
         }
       }
@@ -124,7 +185,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -154,9 +222,37 @@
         "tags": [
           "Workflows"
         ],
+        "description": "The body is a workflow definition (spec/schema/definition.schema.json).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionSummary"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -193,6 +289,7 @@
         "tags": [
           "Workflows"
         ],
+        "description": "The body is a workflow definition (spec/schema/definition.schema.json).",
         "parameters": [
           {
             "name": "id",
@@ -203,9 +300,36 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionSummary"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       },
@@ -224,8 +348,18 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "OK"
+          "204": {
+            "description": "No Content"
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -249,21 +383,32 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/PublishBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/PublishBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -344,7 +489,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionSummary"
+                }
+              }
+            }
           }
         }
       }
@@ -366,7 +518,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionSummary"
+                }
+              }
+            }
           }
         }
       }
@@ -398,7 +557,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionSummary"
+                }
+              }
+            }
           }
         }
       }
@@ -479,9 +645,30 @@
         "tags": [
           "Workflows"
         ],
+        "description": "The body is a workflow definition (spec/schema/definition.schema.json).",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LintProblem"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -491,9 +678,36 @@
         "tags": [
           "Workflows"
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimulateBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimulationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -503,6 +717,7 @@
         "tags": [
           "Workflows"
         ],
+        "description": "Items the caller may not see (IWorkflowAccessPolicy) are left out of `items` and of `total`, and `skip`/`take` count visible items. With a restrictive policy the server checks at most the first 5000 matches; past that, `total` also counts the unchecked rest.",
         "parameters": [
           {
             "name": "definitionId",
@@ -580,7 +795,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageOfInstanceView"
+                }
+              }
+            }
           }
         }
       }
@@ -602,7 +824,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
           }
         }
       }
@@ -624,7 +853,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonObject"
+                }
+              }
+            }
           }
         }
       }
@@ -692,21 +928,32 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/ReasonBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/ReasonBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -730,21 +977,32 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/RetryBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/RetryBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -768,21 +1026,32 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SkipBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/SkipBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -814,7 +1083,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
           }
         }
       }
@@ -824,6 +1100,7 @@
         "tags": [
           "Workflows"
         ],
+        "description": "Items the caller may not see (IWorkflowAccessPolicy) are left out of `items` and of `total`, and `skip`/`take` count visible items. With a restrictive policy the server checks at most the first 5000 matches; past that, `total` also counts the unchecked rest.",
         "parameters": [
           {
             "name": "scope",
@@ -880,7 +1157,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PageOfTaskView"
+                }
+              }
+            }
           }
         }
       }
@@ -902,7 +1186,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskView"
+                }
+              }
+            }
           }
         }
       }
@@ -922,9 +1213,36 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideBody"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -956,7 +1274,24 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -988,7 +1323,24 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -1018,7 +1370,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordView"
+                }
+              }
+            }
           }
         }
       }
@@ -1060,7 +1419,17 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditRecord"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1100,21 +1469,32 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/TransitionBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/TransitionBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -1190,21 +1570,32 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/ResetBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/ResetBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -1244,7 +1635,14 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordView"
+                }
+              }
+            }
           }
         }
       }
@@ -1284,21 +1682,32 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/InputBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/InputBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -1322,21 +1731,22 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/InputBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/InputBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstanceView"
+                }
+              }
+            }
           }
         }
       }
@@ -1360,21 +1770,22 @@
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/SignalBody"
-                  }
-                ]
+                "$ref": "#/components/schemas/SignalBody"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1545,7 +1956,25 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditRecord"
+                  }
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditRecord"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -1571,7 +2000,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditVerifyResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1583,7 +2019,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1591,6 +2034,55 @@
   },
   "components": {
     "schemas": {
+      "ActionDescriptor": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The action key (e.g. `finance.createInvoice`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "The name shown to people."
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Optional explanation."
+          },
+          "category": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Groups actions in the step picker."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type it works on; null = any."
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParamDescriptor"
+            },
+            "description": "Its inputs."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParamDescriptor"
+            },
+            "description": "Its outputs (`steps.&lt;id&gt;.&lt;key&gt;`)."
+          }
+        },
+        "description": "An app action `action` steps may call, with typed inputs and outputs."
+      },
       "AuditRecord": {
         "type": "object",
         "properties": {
@@ -1721,6 +2213,85 @@
           }
         },
         "description": "One hash-chained audit entry (spec \u00a711)."
+      },
+      "AuditVerifyResponse": {
+        "required": [
+          "valid",
+          "checked",
+          "brokenAtSeq",
+          "problem",
+          "purgedGaps"
+        ],
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "description": "True when every entry checked out."
+          },
+          "checked": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "How many entries were checked.",
+            "format": "int64"
+          },
+          "brokenAtSeq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "description": "The first entry that did not, if any.",
+            "format": "int64"
+          },
+          "problem": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "What was wrong with it."
+          },
+          "purgedGaps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeqGap"
+            },
+            "description": "Gaps explained by purge checkpoints."
+          }
+        },
+        "description": "Reply of `POST /audit/verify`."
+      },
+      "DecideBody": {
+        "required": [
+          "outcome",
+          "comment",
+          "data"
+        ],
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "The chosen outcome key."
+          },
+          "comment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "An optional (or required) comment."
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "The task form's answers."
+          }
+        },
+        "description": "Body of `POST /tasks/{id}/decide`."
       },
       "DefinitionDetail": {
         "required": [
@@ -1919,6 +2490,131 @@
         },
         "description": "Body of `POST /tasks/{id}/delegate`."
       },
+      "EntityDescriptor": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The entity key definitions use."
+          },
+          "label": {
+            "type": "string",
+            "description": "The singular name shown to people."
+          },
+          "pluralLabel": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The plural name; null uses the label."
+          },
+          "titleField": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The field whose value names a record (in tasks and messages)."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldDescriptor"
+            },
+            "description": "The registered fields."
+          }
+        },
+        "description": "A record type the app registered, with the fields workflows may use."
+      },
+      "FieldDescriptor": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The field key token paths use."
+          },
+          "label": {
+            "type": "string",
+            "description": "The name shown to people."
+          },
+          "type": {
+            "type": "string",
+            "description": "One of FieldTypes."
+          },
+          "options": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FieldOption"
+            },
+            "description": "The options of an enum field."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For relations and collections: the related entity's key."
+          },
+          "readable": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "False hides the field from tokens; null or true = readable."
+          },
+          "watchable": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "True lets triggers and condition waits watch it."
+          },
+          "settable": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "True lets `setFields` write it."
+          },
+          "lifecycle": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "True lets a lifecycle own it (enum fields only)."
+          },
+          "sensitive": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "True masks its values in audit, views and test runs."
+          },
+          "required": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "True when the app requires a value."
+          }
+        },
+        "description": "A field of an entity and what workflows may do with it (spec \u00a72 flags)."
+      },
+      "FieldOption": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "The stored value."
+          },
+          "label": {
+            "type": "string",
+            "description": "The text shown to people (and rendered by templates)."
+          }
+        },
+        "description": "One option of an enum field."
+      },
       "ForceStateBody": {
         "required": [
           "state",
@@ -1974,10 +2670,233 @@
         },
         "description": "Body of manual-start requests."
       },
+      "InstanceView": {
+        "required": [
+          "id",
+          "definitionId",
+          "definitionKey",
+          "title",
+          "version",
+          "kind",
+          "parentId",
+          "reason",
+          "entity",
+          "entityId",
+          "entityTitle",
+          "status",
+          "state",
+          "stateLabel",
+          "error",
+          "errorStepId",
+          "initiatorId",
+          "initiatorName",
+          "startedAt",
+          "updatedAt",
+          "endedAt",
+          "trigger",
+          "steps",
+          "tokens",
+          "outputs",
+          "variables",
+          "tasks"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The instance id."
+          },
+          "definitionId": {
+            "type": "string",
+            "description": "The definition it runs."
+          },
+          "definitionKey": {
+            "type": "string",
+            "description": "That definition's key."
+          },
+          "title": {
+            "type": "string",
+            "description": "The definition's title in the pinned version."
+          },
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The definition version the instance is pinned to.",
+            "format": "int32"
+          },
+          "kind": {
+            "type": "string",
+            "description": "One of InstanceKinds: automation, record or run."
+          },
+          "parentId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For child runs and waited-for sub-workflows: the instance that started it."
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For runs: which list it runs (`transition:ID`, `onEnter:ID`\u2026); for sub-workflows, the parent step."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type the instance is about, if any."
+          },
+          "entityId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's id, if any."
+          },
+          "entityTitle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's title (its registry title field), when it can be read."
+          },
+          "status": {
+            "type": "string",
+            "description": "One of InstanceStatus (spec \u00a710)."
+          },
+          "state": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For record instances: the current state key."
+          },
+          "stateLabel": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "That state's label."
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The error of the incident (or failure) the instance shows."
+          },
+          "errorStepId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The step that failed, for that incident."
+          },
+          "initiatorId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The person who started it (null for system starts)."
+          },
+          "initiatorName": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "That person's name."
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "When it started (ISO 8601 UTC)."
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "When it last changed."
+          },
+          "endedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When it finished, or null."
+          },
+          "trigger": {
+            "description": "What started it (spec \u00a73 `trigger.*`), masked."
+          },
+          "steps": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/StepView"
+            },
+            "description": "The executed steps, oldest first (single-instance reads only)."
+          },
+          "tokens": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TokenView"
+            },
+            "description": "The interpreter's threads and what each waits for (single-instance reads only)."
+          },
+          "outputs": {
+            "description": "Step outputs by step id, masked (single-instance reads only)."
+          },
+          "variables": {
+            "description": "The workflow variables, masked (single-instance reads only)."
+          },
+          "tasks": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/TaskView"
+            },
+            "description": "The instance's tasks (single-instance reads only)."
+          }
+        },
+        "description": "An instance (automation run, lifecycle record instance or child run), as the API and run viewer show it. Data is masked (spec \u00a711)."
+      },
       "JsonArray": {
         "type": "array"
       },
       "JsonNode": {},
+      "JsonObject": {
+        "type": "object"
+      },
+      "LabelledItem": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key definitions use."
+          },
+          "label": {
+            "type": "string",
+            "description": "The name shown to people."
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Optional explanation."
+          }
+        },
+        "description": "A key with a label, for channels, roles and groups."
+      },
       "LintProblem": {
         "required": [
           "code",
@@ -2009,6 +2928,111 @@
         },
         "description": "One problem in a definition. `Node` is the id of the step, state or transition it is on."
       },
+      "ManualOption": {
+        "required": [
+          "key",
+          "label",
+          "form"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The workflow key to start."
+          },
+          "label": {
+            "type": "string",
+            "description": "The button label."
+          },
+          "form": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "The form to fill in first, if any.",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          }
+        },
+        "description": "A manual-trigger workflow the viewer may start from a record (spec \u00a75 `manual`)."
+      },
+      "MePermissions": {
+        "required": [
+          "edit",
+          "publish",
+          "settings",
+          "intervene",
+          "audit"
+        ],
+        "type": "object",
+        "properties": {
+          "edit": {
+            "type": "boolean",
+            "description": "Create and edit drafts, validate, test runs, read settings."
+          },
+          "publish": {
+            "type": "boolean",
+            "description": "Publish, archive, restore, roll back and delete."
+          },
+          "settings": {
+            "type": "boolean",
+            "description": "Change global settings and purge the audit log."
+          },
+          "intervene": {
+            "type": "boolean",
+            "description": "Cancel, retry, skip, migrate, force state, reassign."
+          },
+          "audit": {
+            "type": "boolean",
+            "description": "Read and verify the audit log."
+          }
+        },
+        "description": "What the caller may do, one flag per policy of WorkflowApiOptions (true when no policy is set)."
+      },
+      "MeResponse": {
+        "required": [
+          "type",
+          "id",
+          "name",
+          "roles",
+          "can"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "`user`, or `anonymous` when the API allows callers who are not signed in."
+          },
+          "id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The user id."
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Their display name."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Their roles."
+          },
+          "can": {
+            "description": "Which kinds of operation they may perform.",
+            "$ref": "#/components/schemas/MePermissions"
+          }
+        },
+        "description": "Reply of `GET /me`: the signed-in actor and what the API's policies let them do."
+      },
       "MigrateBody": {
         "required": [
           "version",
@@ -2037,6 +3061,107 @@
           }
         },
         "description": "Body of `POST /instances/{id}/migrate`."
+      },
+      "PageOfInstanceView": {
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceView"
+            },
+            "description": "The items on this page."
+          },
+          "total": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "How many items match in all.",
+            "format": "int32"
+          }
+        },
+        "description": "One page of a list, with the total number of matches."
+      },
+      "PageOfTaskView": {
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskView"
+            },
+            "description": "The items on this page."
+          },
+          "total": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "How many items match in all.",
+            "format": "int32"
+          }
+        },
+        "description": "One page of a list, with the total number of matches."
+      },
+      "ParamDescriptor": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The key steps and tokens use."
+          },
+          "label": {
+            "type": "string",
+            "description": "The name shown to people."
+          },
+          "type": {
+            "type": "string",
+            "description": "One of FieldTypes."
+          },
+          "required": {
+            "type": [
+              "null",
+              "boolean"
+            ],
+            "description": "True when an action input must have a value."
+          },
+          "options": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/FieldOption"
+            },
+            "description": "The options of an enum parameter."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For relation parameters: the related entity's key."
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Optional explanation."
+          }
+        },
+        "description": "An input or output of an action, or a data field of a signal."
       },
       "PermissionChange": {
         "required": [
@@ -2198,6 +3323,24 @@
         },
         "description": "Body of `POST /definitions/{id}/publish`."
       },
+      "PurgeResponse": {
+        "required": [
+          "purged"
+        ],
+        "type": "object",
+        "properties": {
+          "purged": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "How many entries were deleted.",
+            "format": "int32"
+          }
+        },
+        "description": "Reply of `POST /audit/purge`."
+      },
       "ReasonBody": {
         "required": [
           "reason"
@@ -2237,6 +3380,137 @@
           }
         },
         "description": "Body of `POST /tasks/{id}/reassign`."
+      },
+      "RecordView": {
+        "required": [
+          "entity",
+          "id",
+          "title",
+          "lifecycle",
+          "lifecycleTitle",
+          "state",
+          "stateLabel",
+          "stateTone",
+          "status",
+          "stateEnteredAt",
+          "transitions",
+          "tasks",
+          "instances",
+          "manual",
+          "states",
+          "reset"
+        ],
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": "string",
+            "description": "The record type."
+          },
+          "id": {
+            "type": "string",
+            "description": "The record id."
+          },
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's title (registry title field)."
+          },
+          "lifecycle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The key of the lifecycle that owns a field of this entity, if any."
+          },
+          "lifecycleTitle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "That lifecycle's title."
+          },
+          "state": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The current state key."
+          },
+          "stateLabel": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The current state's label."
+          },
+          "stateTone": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The current state's tone."
+          },
+          "status": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record instance's status (`active`, `completed`, `outOfSync`\u2026)."
+          },
+          "stateEnteredAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When the record entered its state, if known."
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransitionOption"
+            },
+            "description": "What the viewer may apply now."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskView"
+            },
+            "description": "Open tasks about the record."
+          },
+          "instances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceView"
+            },
+            "description": "Recent automation runs and lifecycle child runs about the record."
+          },
+          "manual": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManualOption"
+            },
+            "description": "Manual workflows the viewer may start from the record."
+          },
+          "states": {
+            "type": "array",
+            "description": "All states of the lifecycle: `{ key, label, category, tone }`."
+          },
+          "reset": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "Starting the workflow over, when the viewer may (null otherwise).",
+                "$ref": "#/components/schemas/ResetOption"
+              }
+            ]
+          }
+        },
+        "description": "Everything a record page shows (the record panel): its lifecycle state, the transitions the viewer may\napply, open tasks, recent runs and manual starts. Reading never creates the lifecycle instance; a\nrecord without one is shown in the state it would get."
       },
       "ResetBody": {
         "required": [
@@ -2436,6 +3710,24 @@
         },
         "description": "Body of `POST /instances/{id}/retry`."
       },
+      "RevisionResponse": {
+        "required": [
+          "revision"
+        ],
+        "type": "object",
+        "properties": {
+          "revision": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The new revision.",
+            "format": "int32"
+          }
+        },
+        "description": "Reply of `PUT /settings`."
+      },
       "RollbackBody": {
         "required": [
           "version"
@@ -2453,6 +3745,118 @@
           }
         },
         "description": "Body of `POST /definitions/{id}/rollback`."
+      },
+      "SchemaResponse": {
+        "required": [
+          "specVersion",
+          "registry",
+          "steps"
+        ],
+        "type": "object",
+        "properties": {
+          "specVersion": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The spec version the engine implements.",
+            "format": "int32"
+          },
+          "registry": {
+            "description": "What workflows may read, watch, write and call.",
+            "$ref": "#/components/schemas/WorkflowRegistry"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StepDescriptor"
+            },
+            "description": "The step types."
+          }
+        },
+        "description": "Response of `GET /schema`."
+      },
+      "SeqGap": {
+        "required": [
+          "from",
+          "to"
+        ],
+        "type": "object",
+        "properties": {
+          "from": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The first deleted sequence number.",
+            "format": "int64"
+          },
+          "to": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The last deleted sequence number.",
+            "format": "int64"
+          }
+        },
+        "description": "A range of sequence numbers a purge deleted on purpose."
+      },
+      "SettingsBody": {
+        "required": [
+          "settings",
+          "revision"
+        ],
+        "type": "object",
+        "properties": {
+          "settings": {
+            "description": "The new global settings.",
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "revision": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The revision they were based on (optimistic concurrency).",
+            "format": "int32"
+          }
+        },
+        "description": "Body of `PUT /settings`."
+      },
+      "SettingsResponse": {
+        "required": [
+          "settings",
+          "revision"
+        ],
+        "type": "object",
+        "properties": {
+          "settings": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "The global settings (spec/schema/settings.schema.json).",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "revision": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Their revision, to send back with `PUT /settings`.",
+            "format": "int32"
+          }
+        },
+        "description": "Reply of `GET /settings`."
       },
       "SignalBody": {
         "required": [
@@ -2486,6 +3890,293 @@
         },
         "description": "Body of `POST /signals/{key}`."
       },
+      "SignalDescriptor": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The signal key (e.g. `payment.received`)."
+          },
+          "label": {
+            "type": "string",
+            "description": "The name shown to people."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type it is about; null = no record."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ParamDescriptor"
+            },
+            "description": "Its data fields (`trigger.data.*`, wait output `data`)."
+          }
+        },
+        "description": "A named event the app raises, optionally about one record type."
+      },
+      "SignalResponse": {
+        "required": [
+          "resumed"
+        ],
+        "type": "object",
+        "properties": {
+          "resumed": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "How many waiting workflows the signal resumed.",
+            "format": "int32"
+          }
+        },
+        "description": "Reply of `POST /signals/{key}`."
+      },
+      "SimulateBody": {
+        "required": [
+          "definition",
+          "request"
+        ],
+        "type": "object",
+        "properties": {
+          "definition": {
+            "description": "The definition to run (usually the draft).",
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "request": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "The record, trigger and events of the test run.",
+                "$ref": "#/components/schemas/SimulationRequest"
+              }
+            ]
+          }
+        },
+        "description": "Body of `POST /simulate`."
+      },
+      "SimulationEntry": {
+        "required": [
+          "kind",
+          "action",
+          "subject",
+          "text",
+          "data",
+          "at"
+        ],
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "subject": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "text": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "data": {},
+          "at": {
+            "type": "string"
+          }
+        },
+        "description": "One thing that happened (or would have happened) during a test run."
+      },
+      "SimulationEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "`decide` (an open task), `advance` (move the clock), `signal`, `set` (change record fields)."
+          },
+          "step": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For `decide`: the step of the task (defaults to the first open task)."
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For `decide`: the outcome key (default `approved`)."
+          },
+          "comment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For `decide`: the comment (default \"Test run\")."
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "For `decide`: the form answers; for `signal`: the signal data."
+          },
+          "user": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For `decide`: who decides (defaults to the task's first undecided assignee)."
+          },
+          "duration": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For `advance`: an ISO duration."
+          },
+          "signal": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "For `signal`: the signal key, raised for the test record."
+          },
+          "values": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "For `set`: the record fields to change (a committed change, so triggers and condition waits react)."
+          }
+        },
+        "description": "One thing to do during a test run, after the workflow starts."
+      },
+      "SimulationRequest": {
+        "type": "object",
+        "properties": {
+          "entityId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The real record to read (its values are read, never written)."
+          },
+          "values": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "Record values to use instead of (or on top of) the real record's."
+          },
+          "trigger": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "Automations: the change that starts it (`field`, `from`, `to`), or signal/manual data."
+          },
+          "fromState": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Lifecycles: the state the record is in, and the transition to try."
+          },
+          "transition": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Lifecycles: the transition key to apply (who is not checked in test runs)."
+          },
+          "input": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "Form answers: the transition's input or the manual trigger's form."
+          },
+          "events": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/SimulationEvent"
+            },
+            "description": "What happens after the start, in order (at most int WorkflowEngine.MaxSimulationEvents)."
+          }
+        },
+        "description": "What a test run (`POST /simulate`) should do: which record to use, how the workflow starts and what happens next (at most 50 events)."
+      },
+      "SimulationResult": {
+        "required": [
+          "problems",
+          "log",
+          "instances",
+          "openTasks",
+          "record",
+          "error"
+        ],
+        "type": "object",
+        "properties": {
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LintProblem"
+            },
+            "description": "Lint problems of the definition (errors stop the run before it starts), plus a `lifecycleNotSelected` warning when the test record would not get this lifecycle."
+          },
+          "log": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SimulationEntry"
+            },
+            "description": "What happened, side effects that were skipped included (messages, webhooks, actions, writes)."
+          },
+          "instances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceView"
+            },
+            "description": "The instances the run created, oldest first."
+          },
+          "openTasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskView"
+            },
+            "description": "Tasks still open at the end."
+          },
+          "record": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "The test record's values at the end (masked, readable fields only)."
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Why the run stopped early, if it did."
+          }
+        },
+        "description": "What a test run did. Everything is masked like the audit log; fields workflows may not read are left out."
+      },
       "SkipBody": {
         "required": [
           "outputs"
@@ -2508,6 +4199,361 @@
           }
         },
         "description": "Body of `POST /instances/{id}/skip`."
+      },
+      "StepDescriptor": {
+        "required": [
+          "type",
+          "label",
+          "outputs"
+        ],
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "description": "The step type key."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its label."
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The outputs later steps can read."
+          }
+        },
+        "description": "A step type the builder can offer."
+      },
+      "StepView": {
+        "required": [
+          "id",
+          "nodeId",
+          "type",
+          "title",
+          "attempt",
+          "status",
+          "input",
+          "output",
+          "error",
+          "startedAt",
+          "endedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The step record's id (one per attempt)."
+          },
+          "nodeId": {
+            "type": "string",
+            "description": "The step's id in the definition."
+          },
+          "type": {
+            "type": "string",
+            "description": "The step type (`approval`, `webhook`\u2026)."
+          },
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The step's title in the definition version the instance runs, if it has one."
+          },
+          "attempt": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The attempt number (1 for the first try, higher after retries).",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string",
+            "description": "One of StepStatus: running, waiting, completed, failed, skipped, cancelled."
+          },
+          "input": {
+            "description": "What the step was given (recipients, URL, action input\u2026)."
+          },
+          "output": {
+            "description": "What the step produced (spec \u00a77 outputs)."
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Why the attempt failed, if it did."
+          },
+          "startedAt": {
+            "type": "string",
+            "description": "When the attempt started (ISO 8601 UTC)."
+          },
+          "endedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When it ended, or null while it runs or waits."
+          }
+        },
+        "description": "One executed step of an instance, as the run viewer shows it (inputs, outputs and errors are masked, spec \u00a711)."
+      },
+      "TaskDecision": {
+        "required": [
+          "userId",
+          "name",
+          "outcome",
+          "comment",
+          "data",
+          "at"
+        ],
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "description": "Who decided."
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Their name."
+          },
+          "outcome": {
+            "type": "string",
+            "description": "The outcome key they chose."
+          },
+          "comment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Their comment, if any."
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "Their form answers, if the task has a form (masked in views)."
+          },
+          "at": {
+            "type": "string",
+            "description": "When (ISO 8601 UTC)."
+          }
+        },
+        "description": "One person's decision on a task."
+      },
+      "TaskView": {
+        "required": [
+          "id",
+          "instanceId",
+          "kind",
+          "title",
+          "instructions",
+          "definitionKey",
+          "entity",
+          "entityId",
+          "entityTitle",
+          "status",
+          "assignees",
+          "assigneeNames",
+          "rule",
+          "outcomes",
+          "decisions",
+          "form",
+          "requireComment",
+          "allowDelegation",
+          "outcome",
+          "dueAt",
+          "overdue",
+          "escalationLevel",
+          "createdAt",
+          "completedAt",
+          "canDecide"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The task id."
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "The instance whose step created it."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`approval` or `task`."
+          },
+          "title": {
+            "type": "string",
+            "description": "The step's title (or \"Approval\"/\"Task\")."
+          },
+          "instructions": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The rendered instructions template, if any."
+          },
+          "definitionKey": {
+            "type": "string",
+            "description": "The workflow it belongs to."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type it is about, if any."
+          },
+          "entityId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record id, if any."
+          },
+          "entityTitle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's title when the task was created."
+          },
+          "status": {
+            "type": "string",
+            "description": "open, completed, cancelled or timedOut."
+          },
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "User ids who may decide."
+          },
+          "assigneeNames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Their names, in the same order."
+          },
+          "rule": {
+            "description": "For approvals: `{ type, value }` (spec \u00a77 assignee rules)."
+          },
+          "outcomes": {
+            "description": "The choices: `[{ key, label, tone }]`."
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskDecision"
+            },
+            "description": "The decisions made so far."
+          },
+          "form": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "The form to fill in when deciding, if any.",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "requireComment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "`never`, `reject` (an approval's `rejected`, or a task outcome whose tone is `danger`, needs a comment) or `always`."
+          },
+          "allowDelegation": {
+            "type": "boolean",
+            "description": "Whether an assignee may hand it to someone else."
+          },
+          "outcome": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The settled outcome, once there is one."
+          },
+          "dueAt": {
+            "type": "string",
+            "description": "When it times out (ISO 8601 UTC)."
+          },
+          "overdue": {
+            "type": "boolean",
+            "description": "True while open past its due time."
+          },
+          "escalationLevel": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "How many times it has been escalated.",
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "When it was created."
+          },
+          "completedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "When it was settled, cancelled or timed out."
+          },
+          "canDecide": {
+            "type": "boolean",
+            "description": "True when the viewer is an assignee who has not decided yet and the task is open."
+          }
+        },
+        "description": "An approval or task waiting for (or decided by) people, as the inbox and record panel show it. Decision answers are masked."
+      },
+      "TokenView": {
+        "required": [
+          "id",
+          "status",
+          "waiting",
+          "stepId"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The token id (`root`, `t1`\u2026)."
+          },
+          "status": {
+            "type": "string",
+            "description": "active, waiting, done or cancelled."
+          },
+          "waiting": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "What it waits for: `task:ID`, `timer`, `signal`, `condition`, `join`, `child:ID`, `retry` or `incident`."
+          },
+          "stepId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The step it is at, if any."
+          }
+        },
+        "description": "One thread of an instance: parallel paths and parallel forEach items each run in their own."
       },
       "TransitionBody": {
         "required": [
@@ -2539,6 +4585,67 @@
           }
         },
         "description": "Body of `POST /records/{entity}/{id}/transitions/{key}`."
+      },
+      "TransitionOption": {
+        "required": [
+          "key",
+          "label",
+          "to",
+          "toLabel",
+          "tone",
+          "confirm",
+          "form",
+          "comment"
+        ],
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The transition key to apply."
+          },
+          "label": {
+            "type": "string",
+            "description": "Its button label."
+          },
+          "to": {
+            "type": "string",
+            "description": "The target state key."
+          },
+          "toLabel": {
+            "type": "string",
+            "description": "The target state's label."
+          },
+          "tone": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The button tone, if set."
+          },
+          "confirm": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "A confirmation question to ask first, if set."
+          },
+          "form": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "The input form to fill in, if the transition asks for one.",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "comment": {
+            "type": "string",
+            "description": "Whether the person is asked for remarks: `none`, `optional` or `required` (resolved, never null)."
+          }
+        },
+        "description": "A transition the viewer may apply to a record now (its `who` and guard hold, spec \u00a76)."
       },
       "TriggerOverview": {
         "required": [
@@ -2633,6 +4740,108 @@
           }
         },
         "description": "The body of every error response: a stable code (spec), a message for people, and details (lint problems, form errors\u2026)."
+      },
+      "WorkflowRegistry": {
+        "type": "object",
+        "properties": {
+          "specVersion": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The spec version of the registry format (currently `1`).",
+            "format": "int32"
+          },
+          "entities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntityDescriptor"
+            },
+            "description": "The record types workflows may be about, with their fields."
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActionDescriptor"
+            },
+            "description": "App actions `action` steps may call."
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignalDescriptor"
+            },
+            "description": "Named events the app raises (`signal` triggers and waits)."
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledItem"
+            },
+            "description": "Notification channels (e.g. `email`, `inApp`)."
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledItem"
+            },
+            "description": "Roles assignee lists may name."
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledItem"
+            },
+            "description": "Groups assignee lists may name."
+          }
+        },
+        "description": "Everything the host app lets workflows read, watch, write and call (spec \u00a72). Served to the\nbuilder at `GET /schema`; definitions may only reference what is listed here."
+      },
+      "WorkflowUser": {
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The user id assignees and actors use."
+          },
+          "name": {
+            "type": "string",
+            "description": "The display name templates render."
+          },
+          "email": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Where email notifications go, if any."
+          },
+          "roles": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Role keys the person has (registry roles)."
+          },
+          "groups": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Group keys the person belongs to (registry groups)."
+          }
+        },
+        "description": "A person the app's directory knows."
       }
     }
   },

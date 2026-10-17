@@ -48,9 +48,35 @@ public sealed class PlaygroundTests : IClassFixture<PlaygroundTests.App>
         var inB = JsonNode.Parse(await b.GetStringAsync("/api/demo/applications"))!.AsArray();
         Assert.Contains(inA, x => x!["title"]!.GetValue<string>() == "Only in A");
         Assert.DoesNotContain(inB, x => x!["title"]!.GetValue<string>() == "Only in A");
-        await a.PostAsync("/api/playground/reset", null);
-        var fresh = JsonNode.Parse(await Session(idA).GetStringAsync("/api/demo/applications"))!.AsArray();
+        var reset = await a.PostAsync("/api/playground/reset", null);
+        Assert.True(reset.IsSuccessStatusCode, await reset.Content.ReadAsStringAsync());
+        var newId = JsonNode.Parse(await reset.Content.ReadAsStringAsync())!["session"]!.GetValue<string>();
+        Assert.NotEqual(idA, newId);
+        // The old id is given up: it cannot bring a sandbox back (that skipped the session rate limit).
+        var old = await Session(idA).GetAsync("/api/demo/applications");
+        Assert.Equal(HttpStatusCode.BadRequest, old.StatusCode);
+        Assert.Equal("noSession", JsonNode.Parse(await old.Content.ReadAsStringAsync())!["code"]!.GetValue<string>());
+        var fresh = JsonNode.Parse(await Session(newId).GetStringAsync("/api/demo/applications"))!.AsArray();
         Assert.DoesNotContain(fresh, x => x!["title"]!.GetValue<string>() == "Only in A");
+    }
+
+    [Fact]
+    public async Task Each_sandbox_has_its_own_bank()
+    {
+        var a = Session(await NewSessionAsync());
+        var b = Session(await NewSessionAsync());
+        Assert.True((await a.PostAsJsonAsync("/api/demo/bank", new { down = true })).IsSuccessStatusCode);
+        Assert.True(JsonNode.Parse(await a.GetStringAsync("/api/demo/bank"))!["down"]!.GetValue<bool>());
+        Assert.False(JsonNode.Parse(await b.GetStringAsync("/api/demo/bank"))!["down"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task The_session_id_is_only_read_from_the_header()
+    {
+        var session = await NewSessionAsync();
+        var c = _app.CreateClient();
+        c.DefaultRequestHeaders.Add("X-Demo-User", "ali");
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.GetAsync($"/api/demo/applications?session={Uri.EscapeDataString(session)}")).StatusCode);
     }
 
     [Fact]

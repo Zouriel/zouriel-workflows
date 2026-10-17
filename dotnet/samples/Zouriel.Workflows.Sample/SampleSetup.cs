@@ -71,6 +71,8 @@ public static class SampleSetup
             o.AddPolicy("workflows.intervene", p => p.RequireRole("admin", "head"));
             o.AddPolicy("workflows.audit", p => p.RequireRole("admin", "head"));
             o.AddPolicy("workflows.settings", p => p.RequireRole("admin"));
+            // Recording a payment resumes workflows waiting for the money: finance's job (and the admin's).
+            o.AddPolicy(DemoEndpoints.PaymentsPolicy, p => p.RequireRole("finance", "admin"));
         });
     }
 
@@ -129,6 +131,8 @@ public static class SampleSetup
                 .Input("memo", "Memo")
                 .Output("invoiceNo", "Invoice number"))
             .Signal("payment.received", s => s.Label("Payment received").For("application").Field("amount", "Amount", "currency")));
+        // One of each per service collection: the playground calls AddSampleApp for every sandbox, so each
+        // visitor has their own inbox and bank, and switching the bank off never stops anyone else's payments.
         services.AddSingleton<DemoInbox>();
         services.AddSingleton<DemoBank>();
     }

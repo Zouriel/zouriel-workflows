@@ -57,6 +57,19 @@ modelBuilder.AddWorkflows();
 
 Targets .NET 8 and .NET 10; tested on SQLite and PostgreSQL.
 
+#### Upgrading: database migration
+
+The workflow tables now carry a unique filtered index, `IX_wf_instances_live_record` on
+`wf_instances (definition_id, entity, entity_id)` where `kind = 'record'` and `status` is not
+`completed`, `failed` or `cancelled`: the database refuses a second live lifecycle instance of one
+workflow for one record, even when two units race to create it (the loser is retried). Add a migration
+after upgrading (`dotnet ef migrations add WorkflowLiveRecordIndex`). If old data already holds
+duplicates, the migration fails: cancel the extra live instances first. On a provider without filtered
+indexes, turn it off with `modelBuilder.AddWorkflows(o => o.UniqueLiveRecordInstances = false)`.
+
+With `WorkflowEngineSettings.Tenant` set, the EF store reads, verifies and purges only that tenant's
+audit chain; apps sharing one audit table no longer see or break each other's entries.
+
 ### Run the sample
 
 ```sh
