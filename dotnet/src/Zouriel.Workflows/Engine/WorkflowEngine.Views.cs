@@ -7,39 +7,147 @@ using TaskStatus = Zouriel.Workflows.Storage.TaskStatus;
 
 namespace Zouriel.Workflows.Engine;
 
+/// <summary>One executed step of an instance, as the run viewer shows it (inputs, outputs and errors are masked, spec §11).</summary>
+/// <param name="Id">The step record's id (one per attempt).</param>
+/// <param name="NodeId">The step's id in the definition.</param>
+/// <param name="Type">The step type (<c>approval</c>, <c>webhook</c>…).</param>
+/// <param name="Title">The step's title in the definition version the instance runs, if it has one.</param>
+/// <param name="Attempt">The attempt number (1 for the first try, higher after retries).</param>
+/// <param name="Status">One of <see cref="Storage.StepStatus"/>: running, waiting, completed, failed, skipped, cancelled.</param>
+/// <param name="Input">What the step was given (recipients, URL, action input…).</param>
+/// <param name="Output">What the step produced (spec §7 outputs).</param>
+/// <param name="Error">Why the attempt failed, if it did.</param>
+/// <param name="StartedAt">When the attempt started (ISO 8601 UTC).</param>
+/// <param name="EndedAt">When it ended, or null while it runs or waits.</param>
 public sealed record StepView(string Id, string NodeId, string Type, string? Title, int Attempt, string Status, object? Input, object? Output, string? Error, string StartedAt, string? EndedAt);
 
+/// <summary>An instance (automation run, lifecycle record instance or child run), as the API and run viewer show it. Data is masked (spec §11).</summary>
+/// <param name="Id">The instance id.</param>
+/// <param name="DefinitionId">The definition it runs.</param>
+/// <param name="DefinitionKey">That definition's key.</param>
+/// <param name="Title">The definition's title in the pinned version.</param>
+/// <param name="Version">The definition version the instance is pinned to.</param>
+/// <param name="Kind">One of <see cref="Storage.InstanceKinds"/>: automation, record or run.</param>
+/// <param name="ParentId">For child runs and waited-for sub-workflows: the instance that started it.</param>
+/// <param name="Reason">For runs: which list it runs (<c>transition:ID</c>, <c>onEnter:ID</c>…); for sub-workflows, the parent step.</param>
+/// <param name="Entity">The record type the instance is about, if any.</param>
+/// <param name="EntityId">The record's id, if any.</param>
+/// <param name="EntityTitle">The record's title (its registry title field), when it can be read.</param>
+/// <param name="Status">One of <see cref="Storage.InstanceStatus"/> (spec §10).</param>
+/// <param name="State">For record instances: the current state key.</param>
+/// <param name="StateLabel">That state's label.</param>
+/// <param name="Error">The error of the incident (or failure) the instance shows.</param>
+/// <param name="ErrorStepId">The step that failed, for that incident.</param>
+/// <param name="InitiatorId">The person who started it (null for system starts).</param>
+/// <param name="InitiatorName">That person's name.</param>
+/// <param name="StartedAt">When it started (ISO 8601 UTC).</param>
+/// <param name="UpdatedAt">When it last changed.</param>
+/// <param name="EndedAt">When it finished, or null.</param>
+/// <param name="Trigger">What started it (spec §3 <c>trigger.*</c>), masked.</param>
+/// <param name="Steps">The executed steps, oldest first (single-instance reads only).</param>
+/// <param name="Tokens">The interpreter's threads and what each waits for (single-instance reads only).</param>
+/// <param name="Outputs">Step outputs by step id, masked (single-instance reads only).</param>
+/// <param name="Variables">The workflow variables, masked (single-instance reads only).</param>
+/// <param name="Tasks">The instance's tasks (single-instance reads only).</param>
 public sealed record InstanceView(
     string Id, string DefinitionId, string DefinitionKey, string Title, int Version, string Kind, string? ParentId, string? Reason, string? Entity, string? EntityId,
     string? EntityTitle, string Status, string? State, string? StateLabel, string? Error, string? ErrorStepId, string? InitiatorId, string? InitiatorName,
     string StartedAt, string UpdatedAt, string? EndedAt, object? Trigger, IReadOnlyList<StepView>? Steps, IReadOnlyList<TokenView>? Tokens,
     object? Outputs, object? Variables, IReadOnlyList<TaskView>? Tasks);
 
+/// <summary>One thread of an instance: parallel paths and parallel forEach items each run in their own.</summary>
+/// <param name="Id">The token id (<c>root</c>, <c>t1</c>…).</param>
+/// <param name="Status">active, waiting, done or cancelled.</param>
+/// <param name="Waiting">What it waits for: <c>task:ID</c>, <c>timer</c>, <c>signal</c>, <c>condition</c>, <c>join</c>, <c>child:ID</c>, <c>retry</c> or <c>incident</c>.</param>
+/// <param name="StepId">The step it is at, if any.</param>
 public sealed record TokenView(string Id, string Status, string? Waiting, string? StepId);
 
+/// <summary>An approval or task waiting for (or decided by) people, as the inbox and record panel show it. Decision answers are masked.</summary>
+/// <param name="Id">The task id.</param>
+/// <param name="InstanceId">The instance whose step created it.</param>
+/// <param name="Kind"><c>approval</c> or <c>task</c>.</param>
+/// <param name="Title">The step's title (or "Approval"/"Task").</param>
+/// <param name="Instructions">The rendered instructions template, if any.</param>
+/// <param name="DefinitionKey">The workflow it belongs to.</param>
+/// <param name="Entity">The record type it is about, if any.</param>
+/// <param name="EntityId">The record id, if any.</param>
+/// <param name="EntityTitle">The record's title when the task was created.</param>
+/// <param name="Status">open, completed, cancelled or timedOut.</param>
+/// <param name="Assignees">User ids who may decide.</param>
+/// <param name="AssigneeNames">Their names, in the same order.</param>
+/// <param name="Rule">For approvals: <c>{ type, value }</c> (spec §7 assignee rules).</param>
+/// <param name="Outcomes">The choices: <c>[{ key, label, tone }]</c>.</param>
+/// <param name="Decisions">The decisions made so far.</param>
+/// <param name="Form">The form to fill in when deciding, if any.</param>
+/// <param name="RequireComment"><c>never</c>, <c>reject</c> or <c>always</c>.</param>
+/// <param name="AllowDelegation">Whether an assignee may hand it to someone else.</param>
+/// <param name="Outcome">The settled outcome, once there is one.</param>
+/// <param name="DueAt">When it times out (ISO 8601 UTC).</param>
+/// <param name="Overdue">True while open past its due time.</param>
+/// <param name="EscalationLevel">How many times it has been escalated.</param>
+/// <param name="CreatedAt">When it was created.</param>
+/// <param name="CompletedAt">When it was settled, cancelled or timed out.</param>
+/// <param name="CanDecide">True when the viewer is an assignee who has not decided yet and the task is open.</param>
 public sealed record TaskView(
     string Id, string InstanceId, string Kind, string Title, string? Instructions, string DefinitionKey, string? Entity, string? EntityId, string? EntityTitle,
     string Status, IReadOnlyList<string> Assignees, IReadOnlyList<string> AssigneeNames, object? Rule, object Outcomes, IReadOnlyList<TaskDecision> Decisions,
     JsonNode? Form, string? RequireComment, bool AllowDelegation, string? Outcome, string DueAt, bool Overdue, int EscalationLevel, string CreatedAt,
     string? CompletedAt, bool CanDecide);
 
+/// <summary>A transition the viewer may apply to a record now (its <c>who</c> and guard hold, spec §6).</summary>
+/// <param name="Key">The transition key to apply.</param>
+/// <param name="Label">Its button label.</param>
+/// <param name="To">The target state key.</param>
+/// <param name="ToLabel">The target state's label.</param>
+/// <param name="Tone">The button tone, if set.</param>
+/// <param name="Confirm">A confirmation question to ask first, if set.</param>
+/// <param name="Form">The input form to fill in, if the transition asks for one.</param>
 public sealed record TransitionOption(string Key, string Label, string To, string ToLabel, string? Tone, string? Confirm, JsonNode? Form);
 
+/// <summary>
+/// Everything a record page shows (the record panel): its lifecycle state, the transitions the viewer may
+/// apply, open tasks, recent runs and manual starts. Reading never creates the lifecycle instance; a
+/// record without one is shown in the state it would get.
+/// </summary>
+/// <param name="Entity">The record type.</param>
+/// <param name="Id">The record id.</param>
+/// <param name="Title">The record's title (registry title field).</param>
+/// <param name="Lifecycle">The key of the lifecycle that owns a field of this entity, if any.</param>
+/// <param name="LifecycleTitle">That lifecycle's title.</param>
+/// <param name="State">The current state key.</param>
+/// <param name="StateLabel">The current state's label.</param>
+/// <param name="StateTone">The current state's tone.</param>
+/// <param name="Status">The record instance's status (<c>active</c>, <c>completed</c>, <c>outOfSync</c>…).</param>
+/// <param name="StateEnteredAt">When the record entered its state, if known.</param>
+/// <param name="Transitions">What the viewer may apply now.</param>
+/// <param name="Tasks">Open tasks about the record.</param>
+/// <param name="Instances">Recent automation runs and lifecycle child runs about the record.</param>
+/// <param name="Manual">Manual workflows the viewer may start from the record.</param>
+/// <param name="States">All states of the lifecycle: <c>{ key, label, category, tone }</c>.</param>
 public sealed record RecordView(
     string Entity, string Id, string? Title, string? Lifecycle, string? LifecycleTitle, string? State, string? StateLabel, string? StateTone, string? Status,
     string? StateEnteredAt, IReadOnlyList<TransitionOption> Transitions, IReadOnlyList<TaskView> Tasks, IReadOnlyList<InstanceView> Instances,
     IReadOnlyList<ManualOption> Manual, IReadOnlyList<object?> States);
 
+/// <summary>A manual-trigger workflow the viewer may start from a record (spec §5 <c>manual</c>).</summary>
+/// <param name="Key">The workflow key to start.</param>
+/// <param name="Label">The button label.</param>
+/// <param name="Form">The form to fill in first, if any.</param>
 public sealed record ManualOption(string Key, string Label, JsonNode? Form);
 
+/// <summary>One page of a list, with the total number of matches.</summary>
+/// <param name="Items">The items on this page.</param>
+/// <param name="Total">How many items match in all.</param>
 public sealed record Page<T>(IReadOnlyList<T> Items, int Total);
 
 public sealed partial class WorkflowEngine
 {
     // ── Instances ─────────────────────────────────────────────────────────
 
+    /// <summary>One instance with its steps, tokens, outputs, variables and tasks (masked). Throws <c>notFound</c>.</summary>
     public Task<InstanceView> GetInstanceAsync(string id, CancellationToken ct = default) => RunAsync(u => InstanceViewAsync(u, id, ct), ct);
 
+    /// <summary>A page of instances matching the query (summaries without steps or outputs).</summary>
     public Task<Page<InstanceView>> QueryInstancesAsync(InstanceQuery q, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
@@ -230,6 +338,7 @@ public sealed partial class WorkflowEngine
 
     // ── Tasks ─────────────────────────────────────────────────────────────
 
+    /// <summary>A page of tasks matching the query; <paramref name="viewer"/> decides <see cref="TaskView.CanDecide"/>.</summary>
     public Task<Page<TaskView>> QueryTasksAsync(TaskQuery q, WorkflowActor? viewer, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
@@ -238,6 +347,7 @@ public sealed partial class WorkflowEngine
             return new Page<TaskView>(items, await u.S.CountTasksAsync(q, ct));
         }, ct);
 
+    /// <summary>One task as <paramref name="viewer"/> sees it. Throws <c>notFound</c>.</summary>
     public Task<TaskView> GetTaskAsync(string id, WorkflowActor? viewer, CancellationToken ct = default) =>
         RunAsync(async u => await TaskViewAsync(u, await u.S.GetTaskAsync(id, ct) ?? throw new WorkflowException("notFound", "That task does not exist."), viewer, ct), ct);
 
@@ -313,6 +423,7 @@ public sealed partial class WorkflowEngine
 
     // ── Audit ─────────────────────────────────────────────────────────────
 
+    /// <summary>Audit entries matching the query (newest first, or oldest first from <see cref="AuditQuery.FromSeq"/>). Entries are stored masked.</summary>
     public Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default) =>
         RunAsync(u => u.S.QueryAuditAsync(q, ct), ct);
 
@@ -390,6 +501,16 @@ public sealed partial class WorkflowEngine
 
     // ── Watching overview (global settings) ───────────────────────────────
 
+    /// <summary>One active trigger or lifecycle, for the "Watching" section of global settings.</summary>
+    /// <param name="DefinitionId">The definition it belongs to.</param>
+    /// <param name="DefinitionKey">That definition's key.</param>
+    /// <param name="Title">That definition's title.</param>
+    /// <param name="Kind"><c>automation</c> or <c>lifecycle</c>.</param>
+    /// <param name="Type">The trigger type (spec §5), or <c>lifecycle</c> for an owned field.</param>
+    /// <param name="Entity">The record type it watches, if any.</param>
+    /// <param name="Field">The field it watches or owns, if any.</param>
+    /// <param name="Summary">A plain-English description ("When Application Stage changes to Done").</param>
+    /// <param name="Version">The published version the trigger comes from.</param>
     public sealed record TriggerOverview(string DefinitionId, string DefinitionKey, string Title, string Kind, string Type, string? Entity, string? Field, string Summary, int Version);
 
     /// <summary>Every active trigger and lifecycle, for the "Watching" section of global settings.</summary>

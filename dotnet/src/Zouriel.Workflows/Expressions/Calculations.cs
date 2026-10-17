@@ -12,9 +12,11 @@ public static class Calculations
     /// <summary>What a calculation reads. In workflows every reference has one value; forms have one per repeat entry.</summary>
     public interface ISource
     {
+        /// <summary>The values a reference has (one in workflows, one per entry inside repeatable groups in forms).</summary>
         IReadOnlyList<object?> Values(string path);
         /// <summary>Number of entries when the reference is a repeatable group, else null.</summary>
         int? Rows(string path);
+        /// <summary>Today's date (<c>YYYY-MM-DD</c>) for date calculations.</summary>
         string Today { get; }
     }
 
@@ -25,8 +27,10 @@ public static class Calculations
         public string Today => ctx.Today;
     }
 
+    /// <summary>Evaluates a calculation against token values (null when <paramref name="c"/> is null).</summary>
     public static object? Evaluate(Calc? c, IValueContext ctx) => Evaluate(c, new SingleValues(ctx));
 
+    /// <summary>Evaluates a calculation against a source that may give several values per reference.</summary>
     public static object? Evaluate(Calc? c, ISource ctx)
     {
         if (c is null) return null;

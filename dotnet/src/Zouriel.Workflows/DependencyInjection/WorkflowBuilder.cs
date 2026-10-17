@@ -21,6 +21,7 @@ public sealed class WorkflowEngineSettings
     public string? RecordLinkTemplate { get; set; }
     /// <summary>Channel for "you have a new task" messages. Null = inApp, else email.</summary>
     public string? TaskNotificationChannel { get; set; }
+    /// <summary>Whether the engine sends its own "you have a task" messages (reminders and escalations too).</summary>
     public bool NotifyTaskAssignees { get; set; } = true;
     /// <summary>The most steps one instance may run in one go before it waits (stops runaway loops).</summary>
     public int MaxStepsPerRun { get; set; } = 5000;
@@ -36,6 +37,7 @@ public sealed class WorkflowEngineSettings
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
     /// <summary>Turn off to run the background work yourself (e.g. in a separate worker process).</summary>
     public bool RunWorker { get; set; } = true;
+    /// <summary>The engine's clock (tests use a manual one).</summary>
     public TimeProvider Time { get; set; } = TimeProvider.System;
 }
 
@@ -45,8 +47,11 @@ public sealed class WorkflowEngineSettings
 /// </summary>
 public sealed class WorkflowBuilder(IServiceCollection services)
 {
+    /// <summary>The app's service collection, for registering handlers and services.</summary>
     public IServiceCollection Services { get; } = services;
+    /// <summary>The registry being described: entities, actions, signals, roles, groups and channels (spec §2).</summary>
     public RegistryBuilder Registry { get; } = new();
+    /// <summary>Engine and worker settings.</summary>
     public WorkflowEngineSettings Settings { get; } = new();
     internal Func<IServiceProvider, WorkflowEngine, IWorkflowStore>? StoreFactory { get; private set; }
 
@@ -70,6 +75,7 @@ public sealed class WorkflowBuilder(IServiceCollection services)
         });
     }
 
+    /// <summary>Registers an entity workflows may use, with the fields they may read, watch and set.</summary>
     public WorkflowBuilder Entity<T>(string key, Action<EntityBuilder<T>> configure) where T : class
     {
         Registry.Entity(key, configure);
@@ -84,24 +90,28 @@ public sealed class WorkflowBuilder(IServiceCollection services)
         return this;
     }
 
+    /// <summary>Registers a signal the app raises with <c>WorkflowEngine.SignalAsync</c>.</summary>
     public WorkflowBuilder Signal(string key, Action<SignalBuilder>? configure = null)
     {
         Registry.Signal(key, configure);
         return this;
     }
 
+    /// <summary>Registers a role assignees may name (members come from the identity service).</summary>
     public WorkflowBuilder Role(string key, string label)
     {
         Registry.Role(key, label);
         return this;
     }
 
+    /// <summary>Registers a group assignees may name (members come from the identity service).</summary>
     public WorkflowBuilder Group(string key, string label)
     {
         Registry.Group(key, label);
         return this;
     }
 
+    /// <summary>Registers a notification channel <c>notify</c> steps may use.</summary>
     public WorkflowBuilder Channel(string key, string label)
     {
         Registry.Channel(key, label);
@@ -116,6 +126,7 @@ public sealed class WorkflowBuilder(IServiceCollection services)
         return this;
     }
 
+    /// <summary>Where notifications are delivered (scoped services are fine).</summary>
     public WorkflowBuilder UseNotifications<T>() where T : class, INotificationSender
     {
         Services.TryAddScoped<T>();
@@ -123,6 +134,7 @@ public sealed class WorkflowBuilder(IServiceCollection services)
         return this;
     }
 
+    /// <summary>Where webhook connection secrets come from (scoped services are fine).</summary>
     public WorkflowBuilder UseSecrets<T>() where T : class, IWorkflowSecretResolver
     {
         Services.TryAddScoped<T>();
@@ -130,12 +142,14 @@ public sealed class WorkflowBuilder(IServiceCollection services)
         return this;
     }
 
+    /// <summary>Replaces the default webhook client (which blocks private networks and never follows redirects).</summary>
     public WorkflowBuilder UseWebhookClient<T>() where T : class, IWebhookClient
     {
         Services.Replace(ServiceDescriptor.Singleton<IWebhookClient, T>());
         return this;
     }
 
+    /// <summary>Changes engine and worker settings.</summary>
     public WorkflowBuilder Configure(Action<WorkflowEngineSettings> configure)
     {
         configure(Settings);
@@ -143,6 +157,7 @@ public sealed class WorkflowBuilder(IServiceCollection services)
     }
 }
 
+/// <summary>Registers the workflow engine with dependency injection.</summary>
 public static class WorkflowServiceCollectionExtensions
 {
     /// <summary>
@@ -200,6 +215,7 @@ public static class WorkflowServiceScope
 {
     private static readonly AsyncLocal<IServiceProvider?> CurrentProvider = new();
 
+    /// <summary>The current unit of work's service provider, or null outside one.</summary>
     public static IServiceProvider? Current
     {
         get => CurrentProvider.Value;

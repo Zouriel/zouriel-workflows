@@ -27,6 +27,7 @@ public static class Conditions
     /// <summary>How many values an operator needs (0, 1 or 2).</summary>
     public static int Arity(string op) => NoValue.Contains(op) ? 0 : TwoValues.Contains(op) ? 2 : 1;
 
+    /// <summary>Whether a condition holds (spec §4): an empty group or no condition holds; unfinished rules never match.</summary>
     public static bool Evaluate(Condition? c, IValueContext ctx)
     {
         switch (c)
@@ -55,6 +56,7 @@ public static class Conditions
         _ => v,
     };
 
+    /// <summary>The value of an operand: a constant, a token, today plus days, or a calculation.</summary>
     public static object? ResolveOperand(Operand? o, IValueContext ctx)
     {
         if (o is null) return null;
@@ -65,6 +67,7 @@ public static class Conditions
         return null;
     }
 
+    /// <summary>A <c>YYYY-MM-DD</c> date moved by a number of days.</summary>
     public static string AddDays(string iso, int days)
     {
         var d = DateOnly.ParseExact(iso[..10], "yyyy-MM-dd", CultureInfo.InvariantCulture);

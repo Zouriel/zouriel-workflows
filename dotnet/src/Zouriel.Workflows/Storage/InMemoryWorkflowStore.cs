@@ -27,10 +27,12 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
     /// <summary>Reads records that are not in memory from here (test runs read the real app's records).</summary>
     public IEntityGateway? Fallback { get; set; }
 
+    /// <inheritdoc />
     public Task<IWorkflowSession> BeginAsync(CancellationToken ct = default) => Task.FromResult<IWorkflowSession>(new Session(this));
 
     // ── Host-side record changes (what the app does outside workflows) ────
 
+    /// <summary>Creates a record the way the app would (change hook and created event included).</summary>
     public async Task CreateRecordAsync(string entity, string id, Dictionary<string, object?> values, CancellationToken ct = default)
     {
         await using var s = (Session)await BeginAsync(ct);
@@ -38,6 +40,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         await s.CommitAsync(ct);
     }
 
+    /// <summary>Changes fields of a record the way the app would (ownership enforced, change event written).</summary>
     public async Task ChangeRecordAsync(string entity, string id, Dictionary<string, object?> values, CancellationToken ct = default)
     {
         await using var s = (Session)await BeginAsync(ct);
@@ -45,6 +48,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         await s.CommitAsync(ct);
     }
 
+    /// <summary>Deletes a record the way the app would (deleted event with its last values).</summary>
     public async Task DeleteRecordAsync(string entity, string id, CancellationToken ct = default)
     {
         await using var s = (Session)await BeginAsync(ct);
@@ -52,6 +56,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         await s.CommitAsync(ct);
     }
 
+    /// <summary>A record's committed values, read outside any unit (for tests), or null.</summary>
     public RecordSnapshot? PeekRecord(string entity, string id)
     {
         lock (Gate)
@@ -60,6 +65,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         }
     }
 
+    /// <summary>Copies of every committed row of a table (for tests).</summary>
     public IReadOnlyList<T> All<T>(string table) where T : class
     {
         lock (Gate)

@@ -37,6 +37,7 @@ public readonly partial record struct IsoDuration(bool Negative, int Years, int 
     public static IsoDuration Parse(string s) =>
         TryParse(s, out var d) ? d : throw new WorkflowException("badDuration", $"'{s}' is not a duration (ISO 8601, at most 50 years).");
 
+    /// <summary>True when every part is zero.</summary>
     public bool IsZero => Years == 0 && Months == 0 && Weeks == 0 && Days == 0 && Hours == 0 && Minutes == 0 && Seconds == 0;
 
     /// <summary>Whole days in the date part (weeks count 7).</summary>
@@ -57,9 +58,12 @@ public sealed class WorkCalendar
     private readonly TimeOnly _end;
     private readonly HashSet<DateOnly> _holidays;
 
+    /// <summary>The time zone local dates and times are in.</summary>
     public TimeZoneInfo Zone { get; }
+    /// <summary>False when no working calendar is configured; working durations then count plain time.</summary>
     public bool HasWorkingTime { get; }
 
+    /// <summary>A calendar: working <paramref name="days"/> (default Monday–Friday), hours <paramref name="start"/>–<paramref name="end"/> (default 09:00–17:00) and <paramref name="holidays"/>.</summary>
     public WorkCalendar(TimeZoneInfo zone, IEnumerable<DayOfWeek>? days = null, TimeOnly? start = null, TimeOnly? end = null, IEnumerable<DateOnly>? holidays = null, bool hasWorkingTime = true)
     {
         Zone = zone;
@@ -72,10 +76,13 @@ public sealed class WorkCalendar
         HasWorkingTime = hasWorkingTime;
     }
 
+    /// <summary>Plain UTC time with no working calendar.</summary>
     public static WorkCalendar Utc { get; } = new(TimeZoneInfo.Utc, hasWorkingTime: false);
 
+    /// <summary>An instant as local time in <see cref="Zone"/>.</summary>
     public DateTime ToLocal(DateTimeOffset t) => TimeZoneInfo.ConvertTime(t, Zone).DateTime;
 
+    /// <summary>A local time in <see cref="Zone"/> as an instant (times inside a DST gap move forward).</summary>
     public DateTimeOffset FromLocal(DateTime local)
     {
         local = DateTime.SpecifyKind(local, DateTimeKind.Unspecified);
@@ -84,6 +91,7 @@ public sealed class WorkCalendar
         return new DateTimeOffset(local, Zone.GetUtcOffset(local));
     }
 
+    /// <summary>The local date (<c>YYYY-MM-DD</c>) of an instant.</summary>
     public string Today(DateTimeOffset now) => DateOnly.FromDateTime(ToLocal(now)).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     /// <summary>Adds a duration. <paramref name="working"/> counts only working time (spec §9).</summary>
@@ -97,8 +105,10 @@ public sealed class WorkCalendar
         return result + (sign * d.TimePart);
     }
 
+    /// <summary>Adds an ISO duration given as text (see the other overload).</summary>
     public DateTimeOffset Add(DateTimeOffset from, string iso, bool working = false) => Add(from, IsoDuration.Parse(iso), working);
 
+    /// <summary>Whether a date is a working day (a working weekday and not a holiday).</summary>
     public bool IsWorkingDay(DateOnly day) => _days.Contains(day.DayOfWeek) && !_holidays.Contains(day);
 
     private DateTimeOffset AddWorking(DateTimeOffset from, IsoDuration d)

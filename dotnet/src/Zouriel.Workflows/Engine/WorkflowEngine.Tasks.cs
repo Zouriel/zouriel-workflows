@@ -8,6 +8,13 @@ using TaskStatus = Zouriel.Workflows.Storage.TaskStatus;
 
 namespace Zouriel.Workflows.Engine;
 
+/// <summary>One person's decision on a task.</summary>
+/// <param name="UserId">Who decided.</param>
+/// <param name="Name">Their name.</param>
+/// <param name="Outcome">The outcome key they chose.</param>
+/// <param name="Comment">Their comment, if any.</param>
+/// <param name="Data">Their form answers, if the task has a form (masked in views).</param>
+/// <param name="At">When (ISO 8601 UTC).</param>
 public sealed record TaskDecision(string UserId, string? Name, string Outcome, string? Comment, Dictionary<string, object?>? Data, string At);
 
 public sealed partial class WorkflowEngine

@@ -7,6 +7,7 @@ using Zouriel.Workflows.Time;
 
 namespace Zouriel.Workflows.Testing;
 
+/// <summary>A conformance fixture step did not produce what it expects; the message names the fixture, the step and the difference.</summary>
 public sealed class ConformanceException(string message) : Exception(message);
 
 /// <summary>
@@ -15,6 +16,11 @@ public sealed class ConformanceException(string message) : Exception(message);
 /// </summary>
 public static class ConformanceRunner
 {
+    /// <summary>
+    /// Runs one fixture file against a fresh <see cref="WorkflowTestHost"/>: loads its registry, users,
+    /// settings, records and fake action/webhook behaviour, publishes its definitions, then plays each step
+    /// and checks its expectations. Throws <see cref="ConformanceException"/> at the first mismatch.
+    /// </summary>
     public static async Task RunAsync(string fixturePath, CancellationToken ct = default)
     {
         var dir = Path.GetDirectoryName(fixturePath)!;

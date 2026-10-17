@@ -22,9 +22,12 @@ public sealed partial class WorkflowEngine
     private readonly ConcurrentDictionary<(string, int), CompiledDefinition> _compiled = new();
     private volatile OwnershipMap? _ownership;
 
+    /// <summary>The services and limits the engine was created with.</summary>
     public WorkflowEngineOptions Options { get; }
+    /// <summary>What workflows may use (spec §2).</summary>
     public WorkflowRegistry Registry => Options.Registry;
 
+    /// <summary>Creates an engine. Apps normally get it from DI (<c>AddWorkflows</c>); tests use <c>WorkflowTestHost</c>.</summary>
     public WorkflowEngine(WorkflowEngineOptions options)
     {
         Options = options;
@@ -268,6 +271,7 @@ public sealed partial class WorkflowEngine
 
     // ── Settings ──────────────────────────────────────────────────────────
 
+    /// <summary>The global settings (spec §12) and their revision, for optimistic saving.</summary>
     public Task<(GlobalSettings Settings, int Revision)> GetSettingsAsync(CancellationToken ct = default) =>
         RunAsync(async u =>
         {
@@ -275,6 +279,11 @@ public sealed partial class WorkflowEngine
             return (GlobalSettings.Parse(rec?.Json), rec?.Revision ?? 0);
         }, ct);
 
+    /// <summary>
+    /// Saves the global settings when <paramref name="expectedRevision"/> is still current and returns the new
+    /// revision. Refuses <c>invalidSettings</c> (bad time zone, hours, durations, connection addresses) and
+    /// <c>staleSettings</c> (someone saved meanwhile). Audited as <c>settings.updated</c> with before and after.
+    /// </summary>
     public Task<int> SaveSettingsAsync(GlobalSettings settings, int expectedRevision, WorkflowActor actor, CancellationToken ct = default) =>
         RunAsync(async u =>
         {

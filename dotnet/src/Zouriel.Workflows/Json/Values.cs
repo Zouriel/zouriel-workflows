@@ -42,11 +42,14 @@ public static class Values
         _ => v.ToString(),
     };
 
+    /// <summary>An instant as ISO 8601 UTC with milliseconds (<c>2026-01-02T03:04:05.000Z</c>).</summary>
     public static string FormatInstant(DateTime utc) =>
         utc.ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture);
 
+    /// <summary>An instant as ISO 8601 UTC with milliseconds.</summary>
     public static string FormatInstant(DateTimeOffset t) => FormatInstant(t.UtcDateTime);
 
+    /// <summary>A JSON node as a workflow value: dictionaries, lists, strings, doubles, booleans or null.</summary>
     public static object? FromJson(JsonNode? node)
     {
         switch (node)
@@ -73,8 +76,10 @@ public static class Values
         return null;
     }
 
+    /// <summary>Parses JSON text into a workflow value.</summary>
     public static object? FromJson(string json) => FromJson(JsonNode.Parse(json));
 
+    /// <summary>A workflow (or CLR) value as a JSON node.</summary>
     public static JsonNode? ToJson(object? v)
     {
         v = Normalize(v);
@@ -98,8 +103,10 @@ public static class Values
         return JsonValue.Create(v.ToString());
     }
 
+    /// <summary>A workflow value as JSON text (<c>null</c> for null).</summary>
     public static string Serialize(object? v) => ToJson(v)?.ToJsonString() ?? "null";
 
+    /// <summary>True for null, blank text and empty lists or objects (the form engine's notion of empty).</summary>
     public static bool IsEmpty(object? v) =>
         v is null || (v is string s && s.Length == 0) || (v is List<object?> l && l.Count == 0) || (v is double d && double.IsNaN(d));
 

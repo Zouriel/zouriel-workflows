@@ -31,6 +31,7 @@ public sealed class Cron
         if (dow[7]) _dow[0] = true;
     }
 
+    /// <summary>Reads a 5-field cron expression; false with an <paramref name="error"/> message when it is invalid.</summary>
     public static bool TryParse(string? expr, out Cron? cron, out string? error)
     {
         cron = null;
@@ -53,6 +54,7 @@ public sealed class Cron
         }
     }
 
+    /// <summary>Reads a 5-field cron expression, throwing <c>FormatException</c> when it is invalid.</summary>
     public static Cron Parse(string expr) =>
         TryParse(expr, out var c, out var e) ? c! : throw new FormatException(e);
 

@@ -8,6 +8,7 @@ namespace Zouriel.Workflows.Model;
 /// <summary>Reading and writing definitions.</summary>
 public static class Definitions
 {
+    /// <summary>The JSON settings every workflow document uses: camelCase names, nulls left out, comments and trailing commas allowed.</summary>
     public static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -17,12 +18,20 @@ public static class Definitions
         AllowTrailingCommas = true,
     };
 
+    /// <summary>Reads a definition from JSON text.</summary>
+    /// <param name="json">The definition JSON.</param>
+    /// <exception cref="JsonException">The text is not a definition.</exception>
     public static WorkflowDefinition Parse(string json) =>
         JsonSerializer.Deserialize<WorkflowDefinition>(json, JsonOptions) ?? throw new JsonException("Empty definition.");
 
+    /// <summary>Reads a definition from a parsed JSON node.</summary>
+    /// <param name="json">The definition JSON.</param>
+    /// <exception cref="JsonException">The node is not a definition.</exception>
     public static WorkflowDefinition Parse(JsonNode json) =>
         json.Deserialize<WorkflowDefinition>(JsonOptions) ?? throw new JsonException("Empty definition.");
 
+    /// <summary>Writes a definition as JSON.</summary>
+    /// <param name="d">The definition.</param>
     public static string Serialize(WorkflowDefinition d) => JsonSerializer.Serialize(d, JsonOptions);
 
     internal static object? ReadValue(ref Utf8JsonReader reader) => Values.FromJson(JsonNode.Parse(ref reader));

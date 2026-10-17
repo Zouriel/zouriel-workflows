@@ -7,13 +7,22 @@ using Zouriel.Workflows.Time;
 namespace Zouriel.Workflows.Lint;
 
 /// <summary>One problem in a definition. <c>Node</c> is the id of the step, state or transition it is on.</summary>
+/// <param name="Code">Stable problem code, the same in every engine and editor (<c>spec/fixtures/lint</c>).</param>
+/// <param name="Severity"><c>error</c> (blocks publishing) or <c>warning</c>.</param>
+/// <param name="Node">The id of the step, state or transition the problem is on; null for the whole definition.</param>
+/// <param name="Message">What is wrong, in plain words.</param>
 public sealed record LintProblem(string Code, string Severity, string? Node, string Message);
 
+/// <summary>What a definition is checked against.</summary>
+/// <param name="Registry">What the app lets workflows read, watch, write and call.</param>
+/// <param name="Settings">The global settings (allowed webhook origins, channels…).</param>
+/// <param name="OtherPublished">The other published definitions (lifecycle conflicts, sub-workflows, owned fields).</param>
 public sealed record LintContext(WorkflowRegistry Registry, GlobalSettings Settings, IReadOnlyList<WorkflowDefinition> OtherPublished);
 
 /// <summary>Checks a definition (spec §13). Errors block publishing; warnings don't.</summary>
 public static class Linter
 {
+    /// <summary>The label of each step type, used in messages and served to editors.</summary>
     public static readonly IReadOnlyDictionary<string, string> StepLabels = new Dictionary<string, string>
     {
         ["branch"] = "Branch", ["switch"] = "Switch", ["parallel"] = "Parallel paths", ["forEach"] = "For each",
@@ -33,6 +42,9 @@ public static class Linter
         ["subWorkflow"] = ["instanceId", "status", "outputs", "error"], ["goTo"] = ["count"], ["end"] = [],
     };
 
+    /// <summary>Checks a definition and returns every problem found (empty when it is fine).</summary>
+    /// <param name="def">The definition to check.</param>
+    /// <param name="ctx">The registry, settings and other published workflows to check against.</param>
     public static IReadOnlyList<LintProblem> Lint(WorkflowDefinition def, LintContext ctx) => new Run(def, ctx).Go();
 
     private sealed class Run(WorkflowDefinition def, LintContext ctx)

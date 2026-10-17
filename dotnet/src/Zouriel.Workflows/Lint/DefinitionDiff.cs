@@ -6,6 +6,9 @@ namespace Zouriel.Workflows.Lint;
 /// <summary>Plain-English differences between two versions of a workflow, shown before publishing and stored in the audit log.</summary>
 public static class DefinitionDiff
 {
+    /// <summary>One sentence per change from <paramref name="before"/> to <paramref name="after"/> (empty when they match).</summary>
+    /// <param name="before">The earlier version (usually the published one).</param>
+    /// <param name="after">The later version (usually the draft).</param>
     public static IReadOnlyList<string> Describe(WorkflowDefinition before, WorkflowDefinition after)
     {
         var lines = new List<string>();

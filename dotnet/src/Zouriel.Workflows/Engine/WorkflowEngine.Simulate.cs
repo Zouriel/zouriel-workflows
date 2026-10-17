@@ -13,19 +13,26 @@ public sealed class SimulationEvent
     public string Type { get; set; } = "";
     /// <summary>For <c>decide</c>: the step of the task (defaults to the first open task).</summary>
     public string? Step { get; set; }
+    /// <summary>For <c>decide</c>: the outcome key (default <c>approved</c>).</summary>
     public string? Outcome { get; set; }
+    /// <summary>For <c>decide</c>: the comment (default "Test run").</summary>
     public string? Comment { get; set; }
+    /// <summary>For <c>decide</c>: the form answers; for <c>signal</c>: the signal data.</summary>
     public Dictionary<string, object?>? Data { get; set; }
     /// <summary>For <c>decide</c>: who decides (defaults to the task's first undecided assignee).</summary>
     public string? User { get; set; }
     /// <summary>For <c>advance</c>: an ISO duration.</summary>
     public string? Duration { get; set; }
+    /// <summary>For <c>signal</c>: the signal key, raised for the test record.</summary>
     public string? Signal { get; set; }
+    /// <summary>For <c>set</c>: the record fields to change (a committed change, so triggers and condition waits react).</summary>
     public Dictionary<string, object?>? Values { get; set; }
 }
 
+/// <summary>What a test run (<c>POST /simulate</c>) should do: which record to use, how the workflow starts and what happens next (at most 50 events).</summary>
 public sealed class SimulationRequest
 {
+    /// <summary>The real record to read (its values are read, never written).</summary>
     public string? EntityId { get; set; }
     /// <summary>Record values to use instead of (or on top of) the real record's.</summary>
     public Dictionary<string, object?>? Values { get; set; }
@@ -33,11 +40,21 @@ public sealed class SimulationRequest
     public Dictionary<string, object?>? Trigger { get; set; }
     /// <summary>Lifecycles: the state the record is in, and the transition to try.</summary>
     public string? FromState { get; set; }
+    /// <summary>Lifecycles: the transition key to apply (who is not checked in test runs).</summary>
     public string? Transition { get; set; }
+    /// <summary>Form answers: the transition's input or the manual trigger's form.</summary>
     public Dictionary<string, object?>? Input { get; set; }
+    /// <summary>What happens after the start, in order (at most <see cref="WorkflowEngine.MaxSimulationEvents"/>).</summary>
     public List<SimulationEvent>? Events { get; set; }
 }
 
+/// <summary>What a test run did. Everything is masked like the audit log; fields workflows may not read are left out.</summary>
+/// <param name="Problems">Lint problems of the definition (errors stop the run before it starts).</param>
+/// <param name="Log">What happened, side effects that were skipped included (messages, webhooks, actions, writes).</param>
+/// <param name="Instances">The instances the run created, oldest first.</param>
+/// <param name="OpenTasks">Tasks still open at the end.</param>
+/// <param name="Record">The test record's values at the end (masked, readable fields only).</param>
+/// <param name="Error">Why the run stopped early, if it did.</param>
 public sealed record SimulationResult(
     IReadOnlyList<LintProblem> Problems, IReadOnlyList<SimulationEntry> Log, IReadOnlyList<InstanceView> Instances, IReadOnlyList<TaskView> OpenTasks,
     Dictionary<string, object?>? Record, string? Error);

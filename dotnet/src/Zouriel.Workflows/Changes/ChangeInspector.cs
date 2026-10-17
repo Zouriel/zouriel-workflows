@@ -85,5 +85,6 @@ public sealed class ChangeInspector
 /// <summary>Supplies the person behind record writes made outside workflows (the logged-in user), for change events and audit.</summary>
 public interface IWorkflowActorAccessor
 {
+    /// <summary>The person behind the current request, or null outside one (writes are then attributed to the system).</summary>
     WorkflowActor? Current { get; }
 }

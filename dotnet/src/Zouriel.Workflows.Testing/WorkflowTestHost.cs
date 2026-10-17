@@ -17,14 +17,22 @@ namespace Zouriel.Workflows.Testing;
 /// </summary>
 public sealed class WorkflowTestHost
 {
+    /// <summary>The in-memory store; create, change and delete records through it as the app would.</summary>
     public InMemoryWorkflowStore Store { get; }
+    /// <summary>The manual clock the engine and store use; move it with <see cref="AdvanceAsync"/>.</summary>
     public ManualTimeProvider Clock { get; }
+    /// <summary>The people workflows see; add users with roles, groups and managers.</summary>
     public FakeIdentity Identity { get; } = new();
+    /// <summary>Notifications delivered from the outbox (deduplicated by idempotency key).</summary>
     public RecordingNotifications Notifications { get; } = new();
+    /// <summary>Webhook calls made, with canned responses per URL prefix.</summary>
     public FakeWebhooks Webhooks { get; } = new();
+    /// <summary>Action handlers with fixed outputs, failures and delays.</summary>
     public FakeActions Actions { get; } = new();
+    /// <summary>The engine under test.</summary>
     public WorkflowEngine Engine { get; }
 
+    /// <summary>Creates a host. <paramref name="now"/> sets the clock (default 2026-10-19 09:00 UTC); <paramref name="configure"/> may replace the engine options.</summary>
     public WorkflowTestHost(WorkflowRegistry registry, DateTimeOffset? now = null, Func<WorkflowEngineOptions, WorkflowEngineOptions>? configure = null)
     {
         Store = new InMemoryWorkflowStore { Registry = registry };
@@ -107,27 +115,34 @@ public sealed class FakeIdentity : IWorkflowIdentity
     public Task<WorkflowUser?> GetUserAsync(string id, CancellationToken ct = default) =>
         Broken.ContainsKey(id) ? throw new InvalidOperationException($"The directory failed looking up '{id}'.") : Task.FromResult(_users.TryGetValue(id, out var u) ? u.User : null);
 
+    /// <inheritdoc />
     public Task<IReadOnlyList<string>> GetUsersInRoleAsync(string role, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<string>>(_users.Values.Where(u => u.User.Roles?.Contains(role) == true).Select(u => u.User.Id).OrderBy(x => x, StringComparer.Ordinal).ToList());
 
+    /// <inheritdoc />
     public Task<IReadOnlyList<string>> GetUsersInGroupAsync(string group, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<string>>(_users.Values.Where(u => u.User.Groups?.Contains(group) == true).Select(u => u.User.Id).OrderBy(x => x, StringComparer.Ordinal).ToList());
 
+    /// <inheritdoc />
     public Task<string?> GetManagerAsync(string userId, CancellationToken ct = default) => Task.FromResult(_users.TryGetValue(userId, out var u) ? u.Manager : null);
 
+    /// <inheritdoc />
     public Task<IReadOnlyList<WorkflowUser>> SearchUsersAsync(string? query, int limit, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<WorkflowUser>>(_users.Values.Select(u => u.User)
             .Where(u => string.IsNullOrEmpty(query) || u.Name.Contains(query, StringComparison.OrdinalIgnoreCase) || u.Id.Contains(query, StringComparison.OrdinalIgnoreCase))
             .OrderBy(u => u.Name, StringComparer.Ordinal).Take(limit).ToList());
 }
 
+/// <summary>Records delivered notifications instead of sending them; idempotent on the notification key, as real senders should be.</summary>
 public sealed class RecordingNotifications : INotificationSender
 {
     private readonly ConcurrentQueue<WorkflowNotification> _sent = new();
     private readonly ConcurrentDictionary<string, bool> _keys = new();
 
+    /// <summary>Everything delivered so far, in order.</summary>
     public IReadOnlyList<WorkflowNotification> Sent => _sent.ToList();
 
+    /// <inheritdoc />
     public Task SendAsync(WorkflowNotification notification, CancellationToken ct = default)
     {
         // Senders should be idempotent on the key; this one is, so retried deliveries don't double up.
@@ -136,15 +151,18 @@ public sealed class RecordingNotifications : INotificationSender
     }
 }
 
+/// <summary>Records webhook calls and answers them from <see cref="Responses"/> (never touches the network).</summary>
 public sealed class FakeWebhooks : IWebhookClient
 {
     private readonly ConcurrentQueue<WebhookRequest> _calls = new();
 
+    /// <summary>Every call made so far, in order.</summary>
     public IReadOnlyList<WebhookRequest> Calls => _calls.ToList();
 
     /// <summary>Responses per URL prefix; unmatched calls answer 200 with an empty JSON object.</summary>
     public Dictionary<string, Queue<WebhookResponse>> Responses { get; } = [];
 
+    /// <summary>Records the call and returns the next queued response for its URL prefix (the last one repeats).</summary>
     public Task<WebhookResponse> SendAsync(WebhookRequest request, CancellationToken ct = default)
     {
         _calls.Enqueue(request);
@@ -160,12 +178,14 @@ public sealed class FakeActions : IWorkflowActionResolver
     private readonly ConcurrentDictionary<string, Behaviour> _behaviours = new();
     private readonly ConcurrentQueue<WorkflowActionContext> _calls = new();
 
+    /// <summary>Every action call made so far, in order (with idempotency keys and attempts).</summary>
     public IReadOnlyList<WorkflowActionContext> Calls => _calls.ToList();
 
     /// <summary>Sets what an action does: its outputs, how many first calls fail, and how long each call takes (honouring cancellation).</summary>
     public void Set(string key, IReadOnlyDictionary<string, object?>? output = null, int failTimes = 0, string? failMessage = null, TimeSpan? delay = null) =>
         _behaviours[key] = new Behaviour(output ?? new Dictionary<string, object?>(), failTimes, failMessage ?? "The action failed.", delay);
 
+    /// <summary>A handler that behaves as <see cref="Set"/> said for the action's key (empty outputs when never set).</summary>
     public IWorkflowAction? Resolve(ActionDescriptor action) => new Handler(this, action.Key);
 
     private sealed record Behaviour(IReadOnlyDictionary<string, object?> Output, int FailTimes, string FailMessage, TimeSpan? Delay = null)

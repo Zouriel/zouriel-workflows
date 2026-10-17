@@ -14,6 +14,7 @@ public sealed record FormError(string Path, string FieldId, string Message);
 /// <summary>Checks answers against a <c>@zouriel/ui</c> form-builder definition on the server.</summary>
 public interface IFormValidator
 {
+    /// <summary>The problems with <paramref name="data"/> (empty when the answers are acceptable); <paramref name="today"/> is <c>YYYY-MM-DD</c> for date checks.</summary>
     IReadOnlyList<FormError> Validate(JsonObject form, IReadOnlyDictionary<string, object?> data, string today);
 }
 
@@ -25,6 +26,7 @@ public interface IFormValidator
 /// </summary>
 public sealed partial class FormValidator : IFormValidator
 {
+    /// <inheritdoc />
     public IReadOnlyList<FormError> Validate(JsonObject form, IReadOnlyDictionary<string, object?> data, string today)
     {
         var index = new Dictionary<string, Entry>(StringComparer.Ordinal);

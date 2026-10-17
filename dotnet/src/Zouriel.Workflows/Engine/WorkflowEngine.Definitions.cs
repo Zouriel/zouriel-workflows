@@ -9,12 +9,36 @@ using Zouriel.Workflows.Time;
 
 namespace Zouriel.Workflows.Engine;
 
+/// <summary>A workflow definition in lists (builder home page, API).</summary>
+/// <param name="Id">The definition id.</param>
+/// <param name="Key">Its key (unique; other workflows and the API use it).</param>
+/// <param name="Kind"><c>automation</c> or <c>lifecycle</c>.</param>
+/// <param name="Title">Its title.</param>
+/// <param name="Entity">The record type it is about, if any.</param>
+/// <param name="Status"><c>draft</c>, <c>published</c> or <c>archived</c> (spec §13).</param>
+/// <param name="Version">The latest published version (0 when never published).</param>
+/// <param name="HasDraftChanges">True when the draft differs from the latest published version.</param>
+/// <param name="UpdatedAt">When the draft or status last changed.</param>
+/// <param name="UpdatedBy">Who changed it.</param>
+/// <param name="RunningInstances">Unfinished automation and record instances of any version.</param>
 public sealed record DefinitionSummary(
     string Id, string Key, string Kind, string Title, string? Entity, string Status, int Version, bool HasDraftChanges,
     DateTimeOffset UpdatedAt, string? UpdatedBy, int RunningInstances);
 
+/// <summary>A definition with its draft, latest published version, version history and the draft's lint problems.</summary>
+/// <param name="Summary">The list summary.</param>
+/// <param name="Draft">The draft JSON.</param>
+/// <param name="Published">The latest published version's JSON, or null.</param>
+/// <param name="Versions">Published versions, newest first, with instance counts.</param>
+/// <param name="Problems">Lint problems of the draft (spec §13).</param>
 public sealed record DefinitionDetail(DefinitionSummary Summary, JsonNode Draft, JsonNode? Published, IReadOnlyList<DefinitionVersionInfo> Versions, IReadOnlyList<LintProblem> Problems);
 
+/// <summary>One published version of a definition.</summary>
+/// <param name="Version">The version number.</param>
+/// <param name="Note">The publish note.</param>
+/// <param name="PublishedAt">When it was published.</param>
+/// <param name="PublishedBy">Who published it.</param>
+/// <param name="Instances">How many automation and record instances are pinned to it.</param>
 public sealed record DefinitionVersionInfo(int Version, string? Note, DateTimeOffset PublishedAt, string? PublishedBy, int Instances);
 
 public sealed partial class WorkflowEngine
@@ -44,6 +68,7 @@ public sealed partial class WorkflowEngine
         return Linter.Lint(def, new LintContext(Registry, u.Settings, others));
     }
 
+    /// <summary>All definitions, by title, with their running instance counts.</summary>
     public Task<IReadOnlyList<DefinitionSummary>> ListDefinitionsAsync(CancellationToken ct = default) =>
         RunAsync<IReadOnlyList<DefinitionSummary>>(async u =>
         {
@@ -63,6 +88,7 @@ public sealed partial class WorkflowEngine
         return new DefinitionSummary(d.Id, d.Key, d.Kind, d.Title, d.Entity, d.Status, d.Version, d.HasDraftChanges, d.UpdatedAt, d.UpdatedBy, running);
     }
 
+    /// <summary>One definition with its draft, published version, history and draft lint problems. Throws <c>notFound</c>.</summary>
     public Task<DefinitionDetail> GetDefinitionAsync(string id, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
@@ -77,6 +103,7 @@ public sealed partial class WorkflowEngine
             return new DefinitionDetail(await SummaryAsync(u, d, ct), JsonNode.Parse(d.DraftJson)!, published, versions, problems);
         }, ct);
 
+    /// <summary>The JSON of one published version (immutable). Throws <c>notFound</c>.</summary>
     public Task<JsonNode> GetVersionAsync(string id, int version, CancellationToken ct = default) =>
         RunAsync(async u => JsonNode.Parse((await u.S.GetVersionAsync(id, version, ct) ?? throw new WorkflowException("notFound", "That version does not exist.")).Json)!, ct);
 
@@ -253,9 +280,14 @@ public sealed partial class WorkflowEngine
         else foreach (var b in await u.S.FindDefinitionBookmarksAsync(rec.Id, BookmarkKinds.DateReached, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
     }
 
+    /// <summary>
+    /// Archives a definition: its triggers, schedules and date timers are removed so it starts nothing new;
+    /// running instances finish on their version. Audited as <c>definition.archived</c>.
+    /// </summary>
     public Task<DefinitionSummary> ArchiveAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
         SetStatusAsync(id, DefinitionStatus.Archived, "archived", actor, ct);
 
+    /// <summary>Restores an archived definition to published (or draft, if never published) and re-indexes its triggers. Audited as <c>definition.restored</c>.</summary>
     public Task<DefinitionSummary> RestoreAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
         SetStatusAsync(id, null, "restored", actor, ct);
 
