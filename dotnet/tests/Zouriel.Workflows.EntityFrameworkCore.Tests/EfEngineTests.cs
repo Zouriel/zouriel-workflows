@@ -123,6 +123,47 @@ public abstract class EfEngineTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Field_ownership_follows_the_pinned_lifecycle_after_the_condition_field_changes()
+    {
+        // New applications are observed; the rest are enforced. A record stays on the lifecycle it started on.
+        await App.PublishAsync("""
+        { "specVersion": 1, "id": "lc_new", "key": "fresh", "kind": "lifecycle", "title": "Fresh", "entity": "application",
+          "lifecycle": { "field": "status", "mode": "observe",
+            "appliesWhen": { "match": "all", "conditions": [ { "ref": "entity.stage", "op": "eq", "value": { "const": "new" } } ] },
+            "states": [ { "id": "d", "key": "Draft", "label": "Draft", "category": "initial" }, { "id": "s", "key": "Submitted", "label": "Submitted", "category": "active" } ],
+            "transitions": [ { "id": "t", "key": "submit", "label": "Submit", "from": ["d"], "to": "s", "who": [ { "role": "reviewer" } ] } ] } }
+        """);
+        await App.PublishAsync(Lifecycle);
+        var id = await App.WithDbAsync(async db =>
+        {
+            var a = new Application { Title = "Grant", Stage = "new" };
+            db.Add(a);
+            await db.SaveChangesAsync();
+            return a.Id;
+        });
+        await App.SettleAsync();
+        await App.WithDbAsync(async db =>
+        {
+            (await db.Applications.FindAsync(id))!.Stage = "checked";
+            await db.SaveChangesAsync();
+        });
+        await App.SettleAsync();
+        // The pins are read back from the database too, not only kept from this process's own writes.
+        App.Engine.InvalidateOwnership();
+        await App.Engine.RefreshOwnershipAsync();
+        await App.WithDbAsync(async db =>
+        {
+            (await db.Applications.FindAsync(id))!.Status = ApplicationStatus.Submitted;
+            await db.SaveChangesAsync();
+        });
+        await App.SettleAsync();
+        var records = (await App.Engine.QueryInstancesAsync(new InstanceQuery { Kinds = [InstanceKinds.Record] })).Items;
+        var only = Assert.Single(records);
+        Assert.Equal("fresh", only.DefinitionKey);
+        Assert.Equal("Submitted", only.State);
+    }
+
+    [Fact]
     public async Task Approvals_wait_on_durable_timers_and_time_out()
     {
         await App.PublishAsync("""

@@ -295,7 +295,34 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -1097,6 +1124,7 @@
         "tags": [
           "Workflows"
         ],
+        "description": "What a reset would take back (spec \u00a76): the reset option and the items, oldest first, with a `token`. Item kinds: `created`, `field`, `action`, `message`, `webhook`, `move` (another record moved by applyTransition; never undoable). 403 `notAllowed` when the caller is not among the lifecycle's reset `who` or there is nothing to reset.",
         "parameters": [
           {
             "name": "entity",
@@ -1124,7 +1152,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetPreview"
+                }
+              }
+            }
           }
         }
       },
@@ -1132,6 +1167,7 @@
         "tags": [
           "Workflows"
         ],
+        "description": "Starts the record's workflow over (spec \u00a76). `undo` lists item ids to take back; `token` (from GET) makes the reset fail with 409 `resetChanged` when the list has changed since it was opened, as does an id no longer listed. 400 `notUndoable` for an item that cannot be taken back, `invalidInput` for the form. Writes that take things back start no automations.",
         "parameters": [
           {
             "name": "entity",
@@ -2014,7 +2050,7 @@
             "description": "A transition id, `reset`, `trigger` (a manual start) or an approval/task step id."
           },
           "who": {
-            "description": "The assignees (roles, groups, users, fields) who may do it; empty = nobody.",
+            "description": "The assignees (roles, groups, users, person fields of the record) who may do it. What empty means depends on\nthe node: a transition or the reset, nobody by hand; a manual start (`trigger`), anyone who can see the\nrecord; an approval or task, refused (it needs someone, `lintErrors`).",
             "$ref": "#/components/schemas/JsonArray"
           }
         },
@@ -2022,8 +2058,7 @@
       },
       "PermissionsBody": {
         "required": [
-          "changes",
-          "note"
+          "changes"
         ],
         "type": "object",
         "properties": {
@@ -2043,6 +2078,109 @@
           }
         },
         "description": "Body of `POST /definitions/{id}/permissions`."
+      },
+      "PermissionsSummary": {
+        "required": [
+          "changed",
+          "draftSkipped",
+          "recordsMoved",
+          "id",
+          "key",
+          "kind",
+          "title",
+          "entity",
+          "status",
+          "version",
+          "hasDraftChanges",
+          "updatedAt",
+          "updatedBy",
+          "runningInstances"
+        ],
+        "type": "object",
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "False when the changes left everything as it was (no version was published)."
+          },
+          "draftSkipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The nodes the draft no longer has, so the draft did not get their change."
+          },
+          "recordsMoved": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Lifecycles: how many record instances moved from earlier versions to the new one.",
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "description": "The definition id."
+          },
+          "key": {
+            "type": "string",
+            "description": "Its key (unique; other workflows and the API use it)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`automation` or `lifecycle`."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type it is about, if any."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `published` or `archived` (spec \u00a713)."
+          },
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The latest published version (0 when never published).",
+            "format": "int32"
+          },
+          "hasDraftChanges": {
+            "type": "boolean",
+            "description": "True when the draft differs from the latest published version."
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "When the draft or status last changed.",
+            "format": "date-time"
+          },
+          "updatedBy": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Who changed it."
+          },
+          "runningInstances": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Unfinished automation and record instances of any version.",
+            "format": "int32"
+          }
+        },
+        "description": "What `POST /definitions/{id}/permissions` did: the definition's summary plus the outcome of the change."
       },
       "PublishBody": {
         "required": [
@@ -2132,6 +2270,13 @@
             },
             "description": "The reset list's item ids to take back (from `GET \u2026/reset`); empty = none."
           },
+          "token": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The reset list's token (from `GET \u2026/reset`); when the list has changed since, the reset fails with `resetChanged`."
+          },
           "comment": {
             "type": [
               "null",
@@ -2141,6 +2286,139 @@
           }
         },
         "description": "Body of `POST /records/{entity}/{id}/reset`."
+      },
+      "ResetItem": {
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "detail",
+          "workflow",
+          "step",
+          "undoable",
+          "selected",
+          "warning"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable id to send back in the reset's `undo` list."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`field` (a field it changed), `created` (a record it created), `action`, `message`, `webhook` or `move` (another record moved by `applyTransition`, never undoable)."
+          },
+          "title": {
+            "type": "string",
+            "description": "What it was, in words (\"Reviewer of Application \u201cBursary\u201d: back to nobody\")."
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "More about it (the value now, what created it), if any."
+          },
+          "workflow": {
+            "type": "string",
+            "description": "The workflow that did it."
+          },
+          "step": {
+            "type": "string",
+            "description": "The step that did it."
+          },
+          "undoable": {
+            "type": "boolean",
+            "description": "Whether the reset can take it back (messages, webhooks and actions without an undo cannot)."
+          },
+          "selected": {
+            "type": "boolean",
+            "description": "Whether it is ticked by default (not when it was changed again since, or cannot be undone)."
+          },
+          "warning": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Why it is unticked or cannot be undone, if so."
+          }
+        },
+        "description": "One thing a workflow did that the reset list shows (spec \u00a76 reset)."
+      },
+      "ResetOption": {
+        "required": [
+          "label",
+          "to",
+          "toLabel",
+          "confirm",
+          "form",
+          "comment"
+        ],
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "The button label (\"Reset workflow\" by default)."
+          },
+          "to": {
+            "type": "string",
+            "description": "The state key it goes back to."
+          },
+          "toLabel": {
+            "type": "string",
+            "description": "That state's label."
+          },
+          "confirm": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "A confirmation question to ask first, if set."
+          },
+          "form": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "The form to fill in (e.g. a reason), if the reset asks for one.",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "comment": {
+            "type": "string",
+            "description": "Whether the person is asked for remarks: `none`, `optional` or `required` (resolved, never null)."
+          }
+        },
+        "description": "Starting the record's workflow over, offered to the people the lifecycle's reset allows (spec \u00a76)."
+      },
+      "ResetPreview": {
+        "required": [
+          "reset",
+          "items",
+          "token"
+        ],
+        "type": "object",
+        "properties": {
+          "reset": {
+            "description": "The reset as offered to the viewer.",
+            "$ref": "#/components/schemas/ResetOption"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResetItem"
+            },
+            "description": "What the record's workflows did since it last started over, oldest first."
+          },
+          "token": {
+            "type": "string",
+            "description": "Fingerprint of the items and the values they would restore. Send it back with the reset: when the list has\nchanged since (someone edited a field it would restore), the reset fails with `resetChanged`."
+          }
+        },
+        "description": "What a reset would do: its option (label, target, form) and the workflow's work it can take back."
       },
       "RetryBody": {
         "required": [
@@ -2325,6 +2603,36 @@
           }
         },
         "description": "One active trigger or lifecycle, for the \"Watching\" section of global settings."
+      },
+      "WorkflowError": {
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The error code, e.g. `notAllowed`, `lintErrors`, `wrongLifecycle`."
+          },
+          "message": {
+            "type": "string",
+            "description": "What went wrong, for people."
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "Extra data: lint problems for `lintErrors`, field errors for `invalidInput`.",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          }
+        },
+        "description": "The body of every error response: a stable code (spec), a message for people, and details (lint problems, form errors\u2026)."
       }
     }
   },

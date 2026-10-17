@@ -33,10 +33,11 @@ public sealed class ChangeInspector
         if (desc is null) return new InspectResult();
         var scope = WorkflowWriteScope.Current;
         var ownership = _engine.Ownership;
-        // Which lifecycle controls a field depends on the record (spec §6 applies to): a new record's own
-        // values decide; an existing record's values before this write do.
+        // Which lifecycle controls a field depends on the record (spec §6 applies to): the one the record is
+        // pinned to; for a record with no lifecycle yet, a new record's own values decide, an existing
+        // record's values before this write do.
         var recordValues = kind == ChangeKinds.Created ? after : before;
-        var today = _engine.Options.Time.GetUtcNow().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        var today = ownership.Calendar.Today(_engine.Options.Time.GetUtcNow());
         var initial = new Dictionary<string, object?>();
         var fields = new Dictionary<string, FieldChange>(StringComparer.Ordinal);
         var engineFields = new List<string>();
@@ -46,7 +47,7 @@ public sealed class ChangeInspector
             if (!FieldTypes.IsScalar(f.Type) && f.Type != FieldTypes.Relation) continue;
             var from = before is null ? null : Values.Normalize(before.GetValueOrDefault(f.Key));
             var to = after is null ? null : Values.Normalize(after.GetValueOrDefault(f.Key));
-            var lc = ownership.For(entity, f.Key, recordValues, today);
+            var lc = ownership.For(entity, f.Key, id, recordValues, today);
             if (kind == ChangeKinds.Created && lc is not null && Values.IsEmpty(to) && lc.InitialState is not null)
             {
                 initial[f.Key] = lc.InitialState;

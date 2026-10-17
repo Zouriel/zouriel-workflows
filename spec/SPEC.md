@@ -148,11 +148,29 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   (`lifecycleConflict`), and two conditions that are not clearly apart are a `lifecyclesMayOverlap`
   warning. A record gets its lifecycle when it is created (or, for records that existed before
   publishing, the first time it is used): the lifecycles with a condition it meets are tried first, in
-  publish order, then the fallback; a record that meets none has no lifecycle on that field (the field
-  is then not owned for it). The record keeps that lifecycle afterwards, even if the fields the
-  condition reads change: pick fields that are fixed when the record is created (a type, a kind).
-  Field ownership for a write is decided from the record's values before the write (for a new
-  record, its first values).
+  publish order (first publish time, then definition id), then the fallback; a record that meets none
+  has no lifecycle on that field (the field is then not owned for it). A create that leaves out the
+  condition's field is decided on the values it has, so it usually gets the fallback. The record is
+  then **pinned** to that lifecycle (its record instance): it keeps it even if the fields the condition
+  reads change, so pick fields that are fixed when the record is created (a type, a kind). The pin
+  decides everything about the field for that record: field ownership and enforce/observe, the
+  transitions offered, observed writes. The record's values decide only while it has no lifecycle on
+  the field yet: a new record by its first values, an existing record by its values before the write.
+  Cancelling the record instance (an admin cancel, or deleting the record) unpins the record; it is
+  selected again on next use. A record whose lifecycle is archived stays pinned to it: while archived,
+  the field has no lifecycle for that record (not owned, no transitions offered, nothing selected
+  instead), and restoring the lifecycle resumes the same instance. A record never gets a second
+  lifecycle for a field it already has a live instance on. Naming a lifecycle explicitly (the `lifecycle`
+  of a transition, reset or forced state, or an `applyTransition` step) must name the record's own
+  lifecycle for that field (its pinned one, or the one selection would pick when it has none yet);
+  anything else is refused with `wrongLifecycle` (409) and never starts a second instance
+  (`applyTransition` with `ifNotAllowed: "skip"` skips instead).
+  The change hook decides ownership while the app saves and never reads the store, so engines keep the
+  pins of fields where selection depends on the record (fields shared by several lifecycles, archived
+  ones included, or with a condition) in their ownership cache: loaded with it, and updated in-process
+  when the engine creates or cancels a record instance. Another node's pins reach a node at its next
+  ownership refresh (`OwnershipRefreshInterval`), so for that long a record pinned elsewhere may be
+  judged by its values. "Today" in a condition is the settings' time zone's date, in the change hook too.
 
 - **States** map 1:1 to field values by `key` (the enum value). Each has a `category`: exactly one
   `initial`; any number of `active` and `terminal`. A state may have `onEnter` steps, `onExit` steps
@@ -190,7 +208,7 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   those steps already moved the record on) → commit. Steps
   run until they first wait; the rest continues in the background. If any check fails nothing
   changes and the API returns the error code (`notInFromState`, `notAllowed`, `guardFailed`,
-  `invalidInput`, `commentRequired`, `staleState`). The record view lists each transition the
+  `invalidInput`, `commentRequired`, `staleState`, `wrongLifecycle`). The record view lists each transition the
   viewer may apply as `{ key, label, to, toLabel, tone, confirm, form, comment }`, with `comment` the
   resolved remarks setting (never `null`).
 - **Record instance.** A lifecycle has one long-lived instance per record (`status: active` until
@@ -389,9 +407,11 @@ tenant (or global without tenancy). `fixtures/audit/` checks byte-exact hashes.
 Categories and actions:
 
 - `definition`: `created`, `draftSaved`, `published` (data: `version`, `note`, `diff`), `archived`,
-  `restored`, `rolledBack`, `deleted`.
+  `restored`, `rolledBack`, `deleted`, `permissionsChanged` (data: `version`, `changes`, `draftSkipped`,
+  `recordsMoved`).
 - `instance`: `started` (data: trigger), `queued`, `completed`, `failed`, `cancelled` (actor: who
-  cancelled it, data: reason), `migrated`, `retried`, `skipped`, `incident`, `timerFailed` (a timer
+  cancelled it, data: reason), `migrated` (before/after `version`; data: `stateMap`, or `reason:
+  "permissions"` when a permissions change moved it), `retried`, `skipped`, `incident`, `timerFailed` (a timer
   could not be processed; data: purpose, error).
 - `step`: `started`, `completed` (data: outputs, masked), `failed` (data: error, attempt),
   `retryScheduled`, `skipped`, `branchTaken` (data: path), `waiting`.
@@ -434,12 +454,32 @@ settings; a connection names a secret the host resolves.
 
 - `status`: `draft` | `published` | `archived`. Publishing validates (all lint errors block; warnings
   don't), increments `version`, stores an immutable copy, re-indexes triggers, and records a diff.
+  Archiving removes the definition's triggers (it starts nothing new; running instances finish on their
+  version). Restoring lints the published version against the other published workflows first, like a
+  publish (`lintErrors`, e.g. a second fallback lifecycle published meanwhile: `lifecycleConflict`), then
+  re-indexes its triggers with its original first-publish time.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
   produce the same codes for the same definition.
+- **Test runs** (`POST /simulate`) report the definition's lint problems with the result. A lifecycle
+  tested on a record that would not get it (pinned to another lifecycle for the field, not meeting
+  `appliesWhen` with the test values on top, or another lifecycle comes first in publish order) still
+  runs, and its problems carry a `lifecycleNotSelected` warning saying so.
 - **Permissions.** `POST /definitions/{id}/permissions` with `{ changes: [{ node, who }], note? }`
   changes who may do parts of a published workflow and publishes straight away (publish permission).
   A `node` is a transition id (its `who`), `reset` (`lifecycle.reset.who`), `trigger` (a manual
   trigger's `who`) or an approval/task step id (its `assignees`). The new version is the current
   published version plus only these changes (linted as usual), so unpublished draft edits are neither
-  published nor lost; the draft gets the same changes where its nodes still exist. Errors:
-  `unknownNode`, `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged`.
+  published nor lost; the draft gets the same changes where its nodes still exist, and the nodes it no
+  longer has are returned (`draftSkipped`). What an empty `who` means depends on the node: a
+  transition or the reset, nobody by hand; a manual start (`trigger`), anyone who can see the record
+  (as when the builder leaves it empty); an approval or task needs someone, so it is refused
+  (`lintErrors`, `noAssignees`). A `who` field must be a person field of the record (lint). A change
+  that alters nothing publishes nothing (`changed: false`). After publishing, a lifecycle's record
+  instances (not cancelled) move from earlier versions to the new one (states and transitions are
+  unchanged, so they map 1:1; their state, timers and runs stay as they are), each audited as
+  `instance.migrated` with `reason: "permissions"`, so people whose permission was revoked stop acting
+  on existing records at once (`recordsMoved`). Automation runs already in progress, and a record's
+  child runs, keep their version: their open tasks keep their assignees. The response is the
+  definition summary plus `changed`, `draftSkipped` and `recordsMoved`. Errors: `unknownNode`,
+  `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged` (data: the new
+  `version`, `changes`, `draftSkipped`, `recordsMoved`).

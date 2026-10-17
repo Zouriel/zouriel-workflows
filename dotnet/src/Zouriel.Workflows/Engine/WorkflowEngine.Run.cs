@@ -352,6 +352,9 @@ public sealed partial class WorkflowEngine
             inst.EndedAt = u.Now;
             inst.UpdatedAt = u.Now;
             await u.S.UpdateInstanceAsync(inst, ct);
+            // A cancelled record instance unpins the record: it is selected again on next use (spec §6 applies to).
+            if (inst.Entity is not null && inst.EntityId is not null)
+                u.Pins.Add((inst.Entity, (await CompiledAsync(u, inst.DefinitionId, inst.Version, ct)).Lifecycle.Field, inst.EntityId, null));
             await u.AuditAsync(new AuditEntry
             {
                 Category = "instance", Action = "cancelled", SubjectType = "instance", SubjectId = inst.Id, InstanceId = inst.Id, DefinitionId = inst.DefinitionId,

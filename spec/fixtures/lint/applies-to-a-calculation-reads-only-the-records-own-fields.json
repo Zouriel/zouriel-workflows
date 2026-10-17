@@ -1,0 +1,75 @@
+{
+ "name": "applies to: a calculation inside the condition is held to the same rule: only the record's own fields, never the controlled field",
+ "registry": "../engine/_registry.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_c",
+  "key": "scored",
+  "kind": "lifecycle",
+  "title": "Scored",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "b",
+     "key": "approved",
+     "label": "Done",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t",
+     "key": "finish",
+     "label": "Finish",
+     "from": [
+      "a"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    }
+   ],
+   "appliesWhen": {
+    "match": "all",
+    "conditions": [
+     {
+      "ref": "entity.score",
+      "op": "gt",
+      "value": {
+       "calc": {
+        "op": "sum",
+        "args": [
+         {
+          "ref": "entity.programme.name"
+         },
+         {
+          "ref": "entity.status"
+         }
+        ]
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "expected": [
+  {
+   "code": "appliesWhenField"
+  },
+  {
+   "code": "appliesWhenField"
+  }
+ ]
+}

@@ -21,9 +21,22 @@ namespace Zouriel.Workflows.Engine;
 /// <param name="UpdatedAt">When the draft or status last changed.</param>
 /// <param name="UpdatedBy">Who changed it.</param>
 /// <param name="RunningInstances">Unfinished automation and record instances of any version.</param>
-public sealed record DefinitionSummary(
+public record DefinitionSummary(
     string Id, string Key, string Kind, string Title, string? Entity, string Status, int Version, bool HasDraftChanges,
     DateTimeOffset UpdatedAt, string? UpdatedBy, int RunningInstances);
+
+/// <summary>What <c>POST /definitions/{id}/permissions</c> did: the definition's summary plus the outcome of the change.</summary>
+/// <param name="Changed">False when the changes left everything as it was (no version was published).</param>
+/// <param name="DraftSkipped">The nodes the draft no longer has, so the draft did not get their change.</param>
+/// <param name="RecordsMoved">Lifecycles: how many record instances moved from earlier versions to the new one.</param>
+public sealed record PermissionsSummary(
+    string Id, string Key, string Kind, string Title, string? Entity, string Status, int Version, bool HasDraftChanges,
+    DateTimeOffset UpdatedAt, string? UpdatedBy, int RunningInstances, bool Changed, IReadOnlyList<string> DraftSkipped, int RecordsMoved)
+    : DefinitionSummary(Id, Key, Kind, Title, Entity, Status, Version, HasDraftChanges, UpdatedAt, UpdatedBy, RunningInstances)
+{
+    internal static PermissionsSummary Of(DefinitionSummary s, bool changed, IReadOnlyList<string> draftSkipped, int recordsMoved) =>
+        new(s.Id, s.Key, s.Kind, s.Title, s.Entity, s.Status, s.Version, s.HasDraftChanges, s.UpdatedAt, s.UpdatedBy, s.RunningInstances, changed, draftSkipped, recordsMoved);
+}
 
 /// <summary>A definition with its draft, latest published version, version history and the draft's lint problems.</summary>
 /// <param name="Summary">The list summary.</param>
@@ -243,11 +256,17 @@ public sealed partial class WorkflowEngine
     /// Changes who may do steps of a published workflow and publishes it straight away (spec §13
     /// permissions): the new version is the current published version plus only these changes, so
     /// unpublished draft edits are neither published nor lost (the same changes are applied to the draft
-    /// too). A node is a transition id (its <c>who</c>), <c>reset</c> (the lifecycle reset's <c>who</c>),
+    /// too, where it still has the node; the others are returned in <see cref="PermissionsSummary.DraftSkipped"/>).
+    /// A node is a transition id (its <c>who</c>), <c>reset</c> (the lifecycle reset's <c>who</c>),
     /// <c>trigger</c> (a manual trigger's <c>who</c>) or an approval/task step id (its <c>assignees</c>).
-    /// Audited as <c>definition.permissionsChanged</c>.
+    /// What an empty <c>who</c> means depends on the node: nobody by hand for a transition or the reset,
+    /// anyone who can see the record for a manual start; an approval or task needs someone (lint error).
+    /// A change that alters nothing publishes nothing. A lifecycle's record instances move to the new
+    /// version (states and transitions are unchanged, so they map 1:1), audited as <c>instance.migrated</c>
+    /// with reason <c>permissions</c>; automation runs already in progress keep their version. Audited as
+    /// <c>definition.permissionsChanged</c>.
     /// </summary>
-    public async Task<DefinitionSummary> UpdatePermissionsAsync(string id, IReadOnlyList<(string Node, JsonArray Who)> changes, string? note, WorkflowActor actor,
+    public async Task<PermissionsSummary> UpdatePermissionsAsync(string id, IReadOnlyList<(string Node, JsonArray Who)> changes, string? note, WorkflowActor actor,
         CancellationToken ct = default)
     {
         if (changes.Count == 0) throw new WorkflowException("invalidInput", "Say which permissions change.");
@@ -256,15 +275,19 @@ public sealed partial class WorkflowEngine
             var rec = await RequireDefinitionAsync(u, id, ct);
             if (rec.Version == 0 || rec.Status == DefinitionStatus.Archived)
                 throw new WorkflowException("notPublished", "Only a published workflow's permissions can be changed here.");
-            var published = JsonNode.Parse((await u.S.GetVersionAsync(id, rec.Version, ct))!.Json)!.AsObject();
+            var current = (await u.S.GetVersionAsync(id, rec.Version, ct))!;
+            var published = JsonNode.Parse(current.Json)!.AsObject();
             foreach (var (node, who) in changes) ApplyPermission(published, node, who);
+            // Nothing would change: no identical version is published.
+            if (Hash(published.ToJsonString()) == current.Hash) return PermissionsSummary.Of(await SummaryAsync(u, rec, ct), false, [], 0);
             var hadDraft = rec.HasDraftChanges;
             var draft = JsonNode.Parse(rec.DraftJson)!.AsObject();
             // The draft gets the same changes where its nodes still exist (it may have removed some).
+            var skipped = new List<string>();
             foreach (var (node, who) in changes)
             {
                 try { ApplyPermission(draft, node, who); }
-                catch (WorkflowException) { }
+                catch (WorkflowException) { skipped.Add(node); }
             }
             rec.DraftJson = published.ToJsonString();
             await u.S.UpdateDefinitionAsync(rec, ct);
@@ -279,19 +302,59 @@ public sealed partial class WorkflowEngine
                 await u.S.UpdateDefinitionAsync(rec, ct);
                 summary = await SummaryAsync(u, rec, ct);
             }
+            // Existing records follow the new permissions (revoked people stop acting on them).
+            var moved = rec.Kind == WorkflowKinds.Lifecycle ? await MoveRecordsToVersionAsync(u, id, summary.Version, actor, "permissions", ct) : 0;
             await u.AuditAsync(new AuditEntry
             {
                 Category = "definition", Action = "permissionsChanged", SubjectType = "definition", SubjectId = id, DefinitionId = id, Actor = actor,
                 Data = new Dictionary<string, object?>
                 {
-                    ["version"] = (double)rec.Version,
+                    ["version"] = (double)summary.Version,
                     ["changes"] = changes.Select(c => (object?)new Dictionary<string, object?> { ["node"] = c.Node, ["who"] = Values.FromJson(c.Who.ToJsonString()) }).ToList(),
+                    ["draftSkipped"] = skipped.Select(x => (object?)x).ToList(),
+                    ["recordsMoved"] = (double)moved,
                 },
             }, ct);
-            return summary;
+            return PermissionsSummary.Of(summary, true, skipped, moved);
         }, ct);
         await RefreshOwnershipAsync(ct);
         return result;
+    }
+
+    /// <summary>
+    /// Moves a lifecycle's record instances (not cancelled) from earlier versions to <paramref name="version"/>
+    /// without touching their state; only for versions whose states and transitions are the same (a
+    /// permissions change). Each move is audited as <c>instance.migrated</c> with the reason.
+    /// </summary>
+    private static async Task<int> MoveRecordsToVersionAsync(Uow u, string definitionId, int version, WorkflowActor actor, string reason, CancellationToken ct)
+    {
+        var moved = 0;
+        for (var skip = 0; ; skip += 500)
+        {
+            var page = await u.S.QueryInstancesAsync(new InstanceQuery
+            {
+                DefinitionId = definitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.OutOfSync, InstanceStatus.Completed],
+                Skip = skip, Take = 500,
+            }, ct);
+            foreach (var found in page)
+            {
+                var i = u.Records.TryGetValue(found.Id, out var held) ? held : found;
+                if (i.Version >= version) continue;
+                var from = i.Version;
+                i.Version = version;
+                i.UpdatedAt = u.Now;
+                await u.S.UpdateInstanceAsync(i, ct);
+                await u.AuditAsync(new AuditEntry
+                {
+                    Category = "instance", Action = "migrated", SubjectType = "instance", SubjectId = i.Id, InstanceId = i.Id, DefinitionId = definitionId, Entity = i.Entity,
+                    EntityId = i.EntityId, Actor = actor, CorrelationId = i.CorrelationId,
+                    Before = new Dictionary<string, object?> { ["version"] = (double)from }, After = new Dictionary<string, object?> { ["version"] = (double)version },
+                    Data = new Dictionary<string, object?> { ["reason"] = reason },
+                }, ct);
+                moved++;
+            }
+            if (page.Count < 500) return moved;
+        }
     }
 
     /// <summary>Sets who may do one node of a definition (see <see cref="UpdatePermissionsAsync"/>).</summary>
@@ -311,7 +374,7 @@ public sealed partial class WorkflowEngine
         if (def["lifecycle"]?["transitions"] is JsonArray transitions)
             foreach (var t in transitions)
                 if (t is JsonObject to && to["id"]?.GetValue<string>() == node) { to["who"] = Copy(); return; }
-        if (FindStep(def, node) is { } step)
+        if (AllSteps(def).FirstOrDefault(st => st["id"]?.GetValue<string>() == node) is { } step)
         {
             var type = step["type"]?.GetValue<string>();
             if (type is not ("approval" or "task")) throw new WorkflowException("unknownNode", $"Step '{node}' is not an approval or a task.");
@@ -321,21 +384,58 @@ public sealed partial class WorkflowEngine
         throw new WorkflowException("unknownNode", $"'{node}' is not a transition, the reset, the manual start or a step of this workflow.");
     }
 
-    /// <summary>The step object with this id, anywhere in a definition's JSON.</summary>
-    private static JsonObject? FindStep(JsonNode? node, string id)
+    /// <summary>
+    /// Every step object of a definition's JSON, walking only the places steps live (spec §6, §7): the
+    /// workflow's steps, a lifecycle's state, SLA, transition and reset steps, and the lists nested in steps.
+    /// Forms, conditions and webhook bodies are never searched, so a form field with the same id is not a step.
+    /// </summary>
+    private static IEnumerable<JsonObject> AllSteps(JsonObject def)
     {
-        switch (node)
+        static JsonObject? Obj(JsonNode? n) => n as JsonObject;
+        static JsonArray? Arr(JsonNode? n) => n as JsonArray;
+        static IEnumerable<JsonObject> In(JsonArray? list)
         {
-            case JsonObject o:
-                if (o["type"] is JsonValue && o["id"]?.GetValue<string>() == id) return o;
-                foreach (var (_, v) in o) if (FindStep(v, id) is { } found) return found;
-                return null;
-            case JsonArray a:
-                foreach (var v in a) if (FindStep(v, id) is { } found) return found;
-                return null;
-            default:
-                return null;
+            foreach (var s in (list ?? []).OfType<JsonObject>())
+            {
+                yield return s;
+                foreach (var nested in Nested(s))
+                foreach (var x in In(nested)) yield return x;
+            }
         }
+        static IEnumerable<JsonArray?> Nested(JsonObject s)
+        {
+            yield return Arr(s["steps"]);                              // forEach
+            yield return Arr(Obj(s["onError"])?["steps"]);
+            foreach (var p in Arr(s["paths"]) ?? []) yield return Arr(Obj(p)?["steps"]); // branch, parallel
+            foreach (var c in Arr(s["cases"]) ?? []) yield return Arr(Obj(c)?["steps"]); // switch
+            yield return Arr(Obj(s["otherwise"])?["steps"]);
+            switch (s["outcomes"])
+            {
+                case JsonObject o:                                         // approval
+                    yield return Arr(o["approved"]);
+                    yield return Arr(o["rejected"]);
+                    yield return Arr(o["timedOut"]);
+                    break;
+                case JsonArray a:                                          // task
+                    foreach (var o in a) yield return Arr(Obj(o)?["steps"]);
+                    break;
+            }
+            yield return Arr(Obj(s["onTimeout"])?["steps"]);              // task
+            yield return Arr(Obj(Obj(s["until"])?["onTimeout"])?["steps"]); // wait
+        }
+        var roots = new List<JsonArray?> { Arr(def["steps"]) };
+        if (Obj(def["lifecycle"]) is { } lc)
+        {
+            foreach (var st in Arr(lc["states"]) ?? [])
+            {
+                roots.Add(Arr(Obj(st)?["onEnter"]));
+                roots.Add(Arr(Obj(st)?["onExit"]));
+                roots.Add(Arr(Obj(Obj(st)?["sla"])?["steps"]));
+            }
+            foreach (var t in Arr(lc["transitions"]) ?? []) roots.Add(Arr(Obj(t)?["steps"]));
+            roots.Add(Arr(Obj(lc["reset"])?["steps"]));
+        }
+        return roots.SelectMany(In);
     }
 
     /// <summary>The trigger index rows of a definition version: one per lifecycle (its owned field) or automation trigger.</summary>
@@ -375,7 +475,8 @@ public sealed partial class WorkflowEngine
         var trig = def.Trigger;
         // Changes are compared with the first publish, not this version's: events still in the outbox when a
         // new version is published belong to the workflow and must not be dropped (spec §5).
-        var firstPublished = version == 1 ? u.Now : (await u.S.GetVersionAsync(rec.Id, 1, ct))?.PublishedAt ?? u.Now;
+        // Restoring version 1 keeps its first publish time too (publish order, spec §6).
+        var firstPublished = (await u.S.GetVersionAsync(rec.Id, 1, ct))?.PublishedAt ?? u.Now;
         await u.S.ReplaceTriggersAsync(rec.Id, TriggerRows(def, rec.Id, rec.Key, version, firstPublished), ct);
 
         // Re-plan schedule and date timers for the new version.
@@ -392,7 +493,11 @@ public sealed partial class WorkflowEngine
     public Task<DefinitionSummary> ArchiveAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
         SetStatusAsync(id, DefinitionStatus.Archived, "archived", actor, ct);
 
-    /// <summary>Restores an archived definition to published (or draft, if never published) and re-indexes its triggers. Audited as <c>definition.restored</c>.</summary>
+    /// <summary>
+    /// Restores an archived definition to published (or draft, if never published) and re-indexes its triggers.
+    /// The published version is linted against the other published workflows first and lint errors refuse it
+    /// (<c>lintErrors</c>), like publishing. Audited as <c>definition.restored</c>.
+    /// </summary>
     public Task<DefinitionSummary> RestoreAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
         SetStatusAsync(id, null, "restored", actor, ct);
 
@@ -407,6 +512,13 @@ public sealed partial class WorkflowEngine
         RunAsync(async u =>
         {
             var rec = await RequireDefinitionAsync(u, id, ct);
+            if (status is null && rec.Version > 0 && rec.Status == DefinitionStatus.Archived)
+            {
+                // Coming back must not clash with what was published meanwhile (two fallback lifecycles for one
+                // field, a key another workflow now uses…): the version is linted like a publish.
+                var errors = (await LintAsync(u, (await u.S.GetVersionAsync(id, rec.Version, ct))!.Json, ct)).Where(p => p.Severity == "error").ToList();
+                if (errors.Count > 0) throw new WorkflowException("lintErrors", $"Fix {errors.Count} problem(s) before restoring.", errors);
+            }
             rec.Status = status ?? (rec.Version > 0 ? DefinitionStatus.Published : DefinitionStatus.Draft);
             rec.UpdatedAt = u.Now;
             rec.UpdatedBy = actor.Id;

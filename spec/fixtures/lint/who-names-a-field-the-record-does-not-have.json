@@ -1,0 +1,61 @@
+{
+ "name": "who: a transition, reset or manual start naming a person field the record does not have (or one that does not hold a person) is an error",
+ "registry": "../engine/_registry.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_w",
+  "key": "who",
+  "kind": "lifecycle",
+  "title": "Who",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "b",
+     "key": "approved",
+     "label": "Done",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t",
+     "key": "finish",
+     "label": "Finish",
+     "from": [
+      "a"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "field": "entity.nope"
+      }
+     ]
+    }
+   ],
+   "reset": {
+    "who": [
+     {
+      "field": "entity.title"
+     }
+    ]
+   }
+  }
+ },
+ "expected": [
+  {
+   "code": "unknownToken",
+   "node": "t"
+  },
+  {
+   "code": "notAUser"
+  }
+ ]
+}

@@ -138,14 +138,17 @@ public sealed partial class WorkflowEngine
         var lifecycleTriggers = (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == "lifecycle" && t.Entity == change.Entity).ToList();
         if (change.Kind == ChangeKinds.Deleted)
         {
-            foreach (var t in lifecycleTriggers)
-                if (await FindRecordInstanceAsync(u, t.DefinitionId, change.Entity, change.EntityId, ct) is { } gone)
-                    await CancelInstanceAsync(u, gone, change.Actor, "The record was deleted.", ct);
+            // Every lifecycle the record was on ends with it, archived ones included.
+            foreach (var gone in await LiveRecordInstancesAsync(u, change.Entity, change.EntityId, ct))
+                await CancelInstanceAsync(u, gone, change.Actor, "The record was deleted.", ct);
         }
+        // A record keeps the lifecycle it has. One with none yet gets it from its values like the change
+        // hook decided ownership: a new record's own values, an existing record's values before this write.
+        var values = change.Kind == ChangeKinds.Deleted || lifecycleTriggers.Count == 0 ? null
+            : change.Kind == ChangeKinds.Created ? change.Fields.ToDictionary(kv => kv.Key, kv => kv.Value.To)
+            : await ValuesBeforeAsync(u, change, ct);
         foreach (var ownedField in change.Kind == ChangeKinds.Deleted ? [] : lifecycleTriggers.Select(t => t.Field).Distinct().ToList())
         {
-            // A new record's own values decide; an existing one keeps the lifecycle it has.
-            var values = change.Kind == ChangeKinds.Created ? change.Fields.ToDictionary(kv => kv.Key, kv => kv.Value.To) : null;
             var c = await LifecycleForRecordAsync(u, change.Entity, change.EntityId, ownedField, ct, values);
             if (c is null) continue;
             if (change.Kind == ChangeKinds.Created)
@@ -186,6 +189,14 @@ public sealed partial class WorkflowEngine
         }
         // 3. Date triggers follow changes to their date field (and are dropped with the record).
         await PlanDateTriggersAsync(u, change, ct);
+    }
+
+    /// <summary>A changed record's values before the change: its current values with the changed fields put back.</summary>
+    private static async Task<Dictionary<string, object?>> ValuesBeforeAsync(Uow u, EntityChange change, CancellationToken ct)
+    {
+        var values = new Dictionary<string, object?>((await u.S.Entities.GetAsync(change.Entity, change.EntityId, ct))?.Values ?? [], StringComparer.Ordinal);
+        foreach (var (k, fc) in change.Fields) values[k] = fc.From;
+        return values;
     }
 
     /// <summary>The automations a change event matches (spec §5 created/fieldChanged/deleted).</summary>

@@ -1,0 +1,200 @@
+{
+ "name": "Lifecycle applies to, publish order: when two conditional lifecycles both apply, a new record gets the one first published earliest, even when the other was published while it was archived",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": []
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_z",
+   "key": "zFirst",
+   "kind": "lifecycle",
+   "title": "Published first",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "enforce",
+    "appliesWhen": {
+     "match": "all",
+     "conditions": [
+      {
+       "ref": "entity.track",
+       "op": "eq",
+       "value": {
+        "const": "passport"
+       }
+      }
+     ]
+    },
+    "states": [
+     {
+      "id": "z_d",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "z_r",
+      "key": "underReview",
+      "label": "Review",
+      "category": "active"
+     },
+     {
+      "id": "z_ok",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "z_t1",
+      "key": "review",
+      "label": "Review",
+      "from": [
+       "z_d"
+      ],
+      "to": "z_r",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     },
+     {
+      "id": "z_t2",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "z_r"
+      ],
+      "to": "z_ok",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "advance": "PT1M"
+  },
+  {
+   "archive": "zFirst"
+  },
+  {
+   "publish": {
+    "specVersion": 1,
+    "id": "lc_a",
+    "key": "aSecond",
+    "kind": "lifecycle",
+    "title": "Published second",
+    "entity": "application",
+    "lifecycle": {
+     "field": "status",
+     "mode": "enforce",
+     "appliesWhen": {
+      "match": "all",
+      "conditions": [
+       {
+        "ref": "entity.track",
+        "op": "notEmpty"
+       }
+      ]
+     },
+     "states": [
+      {
+       "id": "a_d",
+       "key": "draft",
+       "label": "Draft",
+       "category": "initial"
+      },
+      {
+       "id": "a_r",
+       "key": "underReview",
+       "label": "Review",
+       "category": "active"
+      },
+      {
+       "id": "a_ok",
+       "key": "approved",
+       "label": "Done",
+       "category": "terminal"
+      }
+     ],
+     "transitions": [
+      {
+       "id": "a_t1",
+       "key": "review",
+       "label": "Review",
+       "from": [
+        "a_d"
+       ],
+       "to": "a_r",
+       "who": [
+        {
+         "role": "admin"
+        }
+       ]
+      },
+      {
+       "id": "a_t2",
+       "key": "finish",
+       "label": "Finish",
+       "from": [
+        "a_r"
+       ],
+       "to": "a_ok",
+       "who": [
+        {
+         "role": "admin"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "restore": "zFirst"
+  },
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "New",
+     "track": "passport"
+    }
+   },
+   "expect": {
+    "instanceKinds": [
+     "record"
+    ],
+    "instances": [
+     {
+      "definition": "zFirst",
+      "record": "a1",
+      "state": "draft"
+     }
+    ]
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "status": "underReview"
+    }
+   },
+   "expectError": "fieldOwned"
+  }
+ ]
+}

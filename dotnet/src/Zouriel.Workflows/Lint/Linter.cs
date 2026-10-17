@@ -698,6 +698,8 @@ public static class Linter
                 {
                     if (env is not null) CheckToken(a.Field, node, env, expectUser: true);
                     else if (!a.Field.StartsWith("entity.", StringComparison.Ordinal)) Error("unknownToken", node, $"'{a.Field}' is not a person on the record.");
+                    // Transitions, the reset and manual starts name people on the record: the field must exist and hold a person.
+                    else CheckToken(a.Field, node, new Env(def.Entity, null, [], false, null), expectUser: true);
                 }
                 if (a.ManagerOf is not null and not "initiator" and not "assignees" && env is not null) CheckToken(a.ManagerOf, node, env, expectUser: true);
                 if (a.Email is not null) CheckTemplate(a.Email, node, env ?? new Env(def.Entity, null, [], true, def.Trigger));
@@ -706,7 +708,7 @@ public static class Linter
 
         /// <summary>
         /// Whether two "applies to" conditions can never hold for the same record: both require the same field
-        /// to equal different constants (the common "Type is Passport" / "Type is Visa" case).
+        /// to equal constants that "is" (<c>eq</c>) treats as different (the common "Type is Passport" / "Type is Visa" case).
         /// </summary>
         private static bool ClearlyApart(Condition a, Condition b)
         {
@@ -721,7 +723,8 @@ public static class Linter
                 return rules.Where(r => r.Op == "eq" && r.Value is { HasConst: true }).GroupBy(r => r.Ref).ToDictionary(g => g.Key, g => g.First().Value!.Const);
             }
             var ra = Required(a);
-            return Required(b).Any(kv => ra.TryGetValue(kv.Key, out var v) && !Json.Values.DeepEquals(Json.Values.Normalize(v), Json.Values.Normalize(kv.Value)));
+            // Compared the way "is" compares (case, spaces, numbers and yes/no alike), so "passport" and "Passport" are not apart.
+            return Required(b).Any(kv => ra.TryGetValue(kv.Key, out var v) && !Conditions.Same(Json.Values.Normalize(v), Json.Values.Normalize(kv.Value)));
         }
 
         private void CheckCondition(Condition c, string? node, Env env)
@@ -750,7 +753,7 @@ public static class Linter
         {
             if (o.Ref is not null) CheckToken(o.Ref, node, env);
             if (o.Calc is not null)
-                foreach (var r in Engine.ValueScope.CalcRefs(o.Calc)) CheckToken(r, node, env);
+                foreach (var r in Conditions.CalcRefs(o.Calc)) CheckToken(r, node, env);
         }
 
         private void CheckTemplate(Template? t, string? node, Env env)

@@ -1,0 +1,178 @@
+{
+ "name": "Lifecycle applies to, existing records: a record that existed before publishing gets its lifecycle from its values before the write that first uses it, the same values the change hook decided ownership with",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": [
+   {
+    "id": "a1",
+    "title": "Old",
+    "track": "passport",
+    "status": "draft"
+   }
+  ]
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_pass",
+   "key": "passportApplication",
+   "kind": "lifecycle",
+   "title": "Passport",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "observe",
+    "appliesWhen": {
+     "match": "all",
+     "conditions": [
+      {
+       "ref": "entity.track",
+       "op": "eq",
+       "value": {
+        "const": "passport"
+       }
+      }
+     ]
+    },
+    "states": [
+     {
+      "id": "p_d",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "p_r",
+      "key": "underReview",
+      "label": "Review",
+      "category": "active"
+     },
+     {
+      "id": "p_ok",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "p_t1",
+      "key": "review",
+      "label": "Review",
+      "from": [
+       "p_d"
+      ],
+      "to": "p_r",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     },
+     {
+      "id": "p_t2",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "p_r"
+      ],
+      "to": "p_ok",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "specVersion": 1,
+   "id": "lc_any",
+   "key": "generalApplication",
+   "kind": "lifecycle",
+   "title": "General",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "observe",
+    "states": [
+     {
+      "id": "g_d",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "g_r",
+      "key": "underReview",
+      "label": "Review",
+      "category": "active"
+     },
+     {
+      "id": "g_ok",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "g_t1",
+      "key": "review",
+      "label": "Review",
+      "from": [
+       "g_d"
+      ],
+      "to": "g_r",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     },
+     {
+      "id": "g_t2",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "g_r"
+      ],
+      "to": "g_ok",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "track": "visa",
+     "status": "underReview"
+    }
+   },
+   "expect": {
+    "instanceKinds": [
+     "record"
+    ],
+    "instances": [
+     {
+      "definition": "passportApplication",
+      "record": "a1",
+      "state": "underReview",
+      "status": "active"
+     }
+    ]
+   }
+  }
+ ]
+}

@@ -65,6 +65,8 @@ public sealed partial class WorkflowEngine
         public HashSet<string> Driving { get; } = [];
         /// <summary>Lifecycle record instances loaded in this unit, by id (shared like <see cref="Execs"/>).</summary>
         public Dictionary<string, InstanceRecord> Records { get; } = [];
+        /// <summary>Records this unit pinned to a lifecycle (or unpinned: null), applied to the ownership cache once it commits.</summary>
+        public List<(string Entity, string Field, string Id, string? DefinitionId)> Pins { get; } = [];
 
         public ValueScope Scope(InstanceRecord? i = null, RunState? state = null, Token? token = null, TriggerInfo? trigger = null, string? entity = null, string? entityId = null)
         {
@@ -149,6 +151,7 @@ public sealed partial class WorkflowEngine
                     await StartQueuedAfterAsync(uow, ct);
                     await uow.Audit.FlushAsync(ct);
                     await session.CommitAsync(ct);
+                    ApplyPins(uow);
                     return result;
                 }
                 finally
@@ -191,24 +194,65 @@ public sealed partial class WorkflowEngine
 
     // ── Lifecycle ownership (for the change hook) ─────────────────────────
 
-    internal sealed record OwnedField(string DefinitionId, string DefinitionKey, string Entity, string Field, bool Enforce, string? InitialState, Condition? AppliesWhen);
+    internal sealed record OwnedField(string DefinitionId, string DefinitionKey, string Entity, string Field, bool Enforce, string? InitialState, Condition? AppliesWhen,
+        DateTimeOffset PublishedAt);
 
-    internal sealed class OwnershipMap(IReadOnlyList<OwnedField> fields, DateTimeOffset loadedAt)
+    /// <summary>
+    /// The order lifecycles sharing a field are tried in (spec §6 applies to): those with a condition first,
+    /// in publish order (first publish time, then definition id), then the fallback.
+    /// </summary>
+    internal static IEnumerable<T> InSelectionOrder<T>(IEnumerable<T> items, Func<T, bool> conditional, Func<T, DateTimeOffset> publishedAt, Func<T, string> definitionId) =>
+        items.OrderBy(x => conditional(x) ? 0 : 1).ThenBy(publishedAt).ThenBy(definitionId, StringComparer.Ordinal);
+
+    /// <summary>
+    /// The lifecycle-owned fields and, for fields where the lifecycle depends on the record (several
+    /// lifecycles, or an "applies to" condition), which lifecycle each record is pinned to. The change hook
+    /// reads it synchronously while the app saves, so it never queries the store itself.
+    /// </summary>
+    internal sealed class OwnershipMap
     {
-        public IReadOnlyList<OwnedField> Fields { get; } = fields;
-        public DateTimeOffset LoadedAt { get; } = loadedAt;
-        public IEnumerable<OwnedField> ForEntity(string entity) => Fields.Where(f => f.Entity == entity);
+        private readonly HashSet<(string Entity, string Field)> _pinnedPairs;
+        private readonly ConcurrentDictionary<(string Entity, string Field, string Id), string> _pins;
+
+        public OwnershipMap(IReadOnlyList<OwnedField> fields, DateTimeOffset loadedAt, WorkCalendar calendar,
+            HashSet<(string, string)>? pinnedPairs = null, ConcurrentDictionary<(string, string, string), string>? pins = null)
+        {
+            Fields = InSelectionOrder(fields, f => f.AppliesWhen is not null, f => f.PublishedAt, f => f.DefinitionId).ToList();
+            LoadedAt = loadedAt;
+            Calendar = calendar;
+            _pinnedPairs = pinnedPairs ?? [];
+            _pins = pins ?? new();
+        }
+
+        /// <summary>The owned fields, in selection order.</summary>
+        public IReadOnlyList<OwnedField> Fields { get; }
+        public DateTimeOffset LoadedAt { get; }
+        /// <summary>The settings' calendar, so "today" in a condition means the same day as in processing.</summary>
+        public WorkCalendar Calendar { get; }
+
+        /// <summary>The same map, marked stale (the pins are kept).</summary>
+        public OwnershipMap Stale() => new(Fields, DateTimeOffset.MinValue, Calendar, _pinnedPairs, _pins);
+
+        /// <summary>Records a record's lifecycle for a field (null: the record has none any more).</summary>
+        public void Pin(string entity, string field, string id, string? definitionId)
+        {
+            if (!_pinnedPairs.Contains((entity, field))) return;
+            if (definitionId is null) _pins.TryRemove((entity, field, id), out _);
+            else _pins[(entity, field, id)] = definitionId;
+        }
 
         /// <summary>
-        /// The lifecycle that controls <paramref name="field"/> of a record with these values (spec §6 applies to):
-        /// lifecycles with a condition are tried first, in publish order, then the one without.
+        /// The lifecycle that controls <paramref name="field"/> of a record (spec §6 applies to): the one the
+        /// record is pinned to (none while that lifecycle is archived); for a record with no lifecycle yet,
+        /// the first whose condition its values meet.
         /// </summary>
-        public OwnedField? For(string entity, string field, IReadOnlyDictionary<string, object?>? values, string today) =>
-            Fields.Where(f => f.Entity == entity && f.Field == field)
-                .OrderBy(f => f.AppliesWhen is null ? 1 : 0)
-                .FirstOrDefault(f => LifecycleSelection.Applies(f.AppliesWhen, values, today));
+        public OwnedField? For(string entity, string field, string id, IReadOnlyDictionary<string, object?>? values, string today)
+        {
+            if (_pinnedPairs.Contains((entity, field)) && _pins.TryGetValue((entity, field, id), out var pinned))
+                return Fields.FirstOrDefault(f => f.DefinitionId == pinned && f.Entity == entity && f.Field == field);
+            return Fields.Where(f => f.Entity == entity && f.Field == field).FirstOrDefault(f => LifecycleSelection.Applies(f.AppliesWhen, values, today));
+        }
     }
-
 
     /// <summary>
     /// The lifecycle-owned fields, as last loaded. Every unit of work refreshes a stale copy before it
@@ -235,26 +279,87 @@ public sealed partial class WorkflowEngine
         _ownership = await LoadOwnershipAsync(ct);
     }
 
+    /// <summary>Pin changes this engine committed, numbered, so a reload that read the store before they committed still gets them.</summary>
+    private readonly List<(long Seq, string Entity, string Field, string Id, string? DefinitionId)> _pinLog = [];
+    private long _pinSeq;
+
     internal async Task<OwnershipMap> LoadOwnershipAsync(CancellationToken ct)
     {
+        long seenSeq;
+        lock (_pinLog) seenSeq = _pinSeq;
         await using var s = await Options.Store.BeginAsync(ct);
         var triggers = await s.ListTriggersAsync(ct);
         var list = triggers.Where(t => t.Type == "lifecycle" && t.Entity is not null && t.Field is not null).Select(t =>
         {
             var data = Values.FromJson(t.Data ?? "{}") as Dictionary<string, object?> ?? [];
-            var applies = data.GetValueOrDefault("appliesWhen") is { } cond
-                ? System.Text.Json.JsonSerializer.Deserialize<Condition>(Values.Serialize(cond), Definitions.JsonOptions)
-                : null;
             return new OwnedField(t.DefinitionId, t.DefinitionKey, t.Entity!, t.Field!, data.GetValueOrDefault("mode") as string != "observe",
-                data.GetValueOrDefault("initial") as string, applies);
+                data.GetValueOrDefault("initial") as string, AppliesWhenOf(t), t.PublishedAt);
         }).ToList();
-        return new OwnershipMap(list, Now);
+        var calendar = GlobalSettings.Parse((await s.GetSettingsAsync(ct))?.Json).WorkCalendar();
+
+        // Pins matter where the lifecycle depends on the record: a field shared by several lifecycles
+        // (archived ones included, their records stay pinned) or one with a condition.
+        var lifecycles = new List<CompiledDefinition>();
+        foreach (var d in await s.ListDefinitionsAsync(ct))
+        {
+            if (d.Kind != WorkflowKinds.Lifecycle || d.Version == 0) continue;
+            if (!_compiled.TryGetValue((d.Id, d.Version), out var c))
+            {
+                var v = await s.GetVersionAsync(d.Id, d.Version, ct);
+                if (v is null) continue;
+                c = _compiled[(d.Id, d.Version)] = new CompiledDefinition(Definitions.Parse(v.Json), d.Id, d.Version);
+            }
+            if (c.Definition.Entity is not null && c.Definition.Lifecycle is not null) lifecycles.Add(c);
+        }
+        var pairs = new HashSet<(string, string)>();
+        var pins = new ConcurrentDictionary<(string, string, string), string>();
+        foreach (var g in lifecycles.GroupBy(c => (c.Definition.Entity!, c.Lifecycle.Field)))
+        {
+            if (g.Count() < 2 && g.All(c => c.Lifecycle.AppliesWhen is null)) continue;
+            pairs.Add(g.Key);
+            foreach (var c in g)
+            {
+                for (var skip = 0; ; skip += 1000)
+                {
+                    var page = await s.QueryInstancesAsync(new InstanceQuery
+                    {
+                        DefinitionId = c.DefinitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.OutOfSync, InstanceStatus.Completed],
+                        Skip = skip, Take = 1000,
+                    }, ct);
+                    foreach (var i in page)
+                        if (i.EntityId is not null) pins.TryAdd((g.Key.Item1, g.Key.Item2, i.EntityId), c.DefinitionId);
+                    if (page.Count < 1000) break;
+                }
+            }
+        }
+        var map = new OwnershipMap(list, Now, calendar, pairs, pins);
+        lock (_pinLog)
+        {
+            foreach (var p in _pinLog)
+                if (p.Seq > seenSeq) map.Pin(p.Entity, p.Field, p.Id, p.DefinitionId);
+            _pinLog.RemoveAll(p => p.Seq <= seenSeq);
+        }
+        return map;
+    }
+
+    /// <summary>Applies the pins a committed unit changed to the cached ownership map.</summary>
+    private void ApplyPins(Uow u)
+    {
+        if (u.Pins.Count == 0) return;
+        lock (_pinLog)
+        {
+            foreach (var (entity, field, id, definitionId) in u.Pins)
+            {
+                _pinLog.Add((++_pinSeq, entity, field, id, definitionId));
+                _ownership?.Pin(entity, field, id, definitionId);
+            }
+        }
     }
 
     /// <summary>Marks the lifecycle ownership cache stale; the next unit of work reloads it.</summary>
     public void InvalidateOwnership()
     {
-        if (_ownership is { } m) _ownership = new OwnershipMap(m.Fields, DateTimeOffset.MinValue);
+        if (_ownership is { } m) _ownership = m.Stale();
     }
 
     internal WorkflowActor? CurrentActor() => Options.ActorAccessor?.Current;
@@ -296,8 +401,9 @@ public sealed partial class WorkflowEngine
     /// revision. Refuses <c>invalidSettings</c> (bad time zone, hours, durations, connection addresses) and
     /// <c>staleSettings</c> (someone saved meanwhile). Audited as <c>settings.updated</c> with before and after.
     /// </summary>
-    public Task<int> SaveSettingsAsync(GlobalSettings settings, int expectedRevision, WorkflowActor actor, CancellationToken ct = default) =>
-        RunAsync(async u =>
+    public async Task<int> SaveSettingsAsync(GlobalSettings settings, int expectedRevision, WorkflowActor actor, CancellationToken ct = default)
+    {
+        var revision = await RunAsync(async u =>
         {
             var problems = SettingsProblems(settings);
             if (problems.Count > 0) throw new WorkflowException("invalidSettings", string.Join(" ", problems), problems);
@@ -314,6 +420,10 @@ public sealed partial class WorkflowEngine
             }, ct);
             return current + 1;
         }, ct);
+        // The change hook reads "today" in the settings' time zone.
+        InvalidateOwnership();
+        return revision;
+    }
 
     private static List<string> SettingsProblems(GlobalSettings s)
     {

@@ -118,7 +118,8 @@ public static class Conditions
         _ => "[object Object]",
     };
 
-    private static bool Same(object? a, object? b)
+    /// <summary>Whether <c>eq</c> treats two values as equal (case, surrounding spaces, numbers and yes/no are compared loosely).</summary>
+    public static bool Same(object? a, object? b)
     {
         if (a is bool || b is bool) return Truthy(a) == Truthy(b);
         var c = Compare(a, b);
@@ -216,8 +217,16 @@ public static class Conditions
             case ConditionRule rule:
                 if (!string.IsNullOrEmpty(rule.Ref)) yield return rule.Ref;
                 foreach (var o in new[] { rule.Value, rule.Value2 })
+                {
                     if (o?.Ref is { Length: > 0 } p) yield return p;
+                    if (o?.Calc is { } calc)
+                        foreach (var r in CalcRefs(calc)) yield return r;
+                }
                 break;
         }
     }
+
+    /// <summary>Every token path a calculation reads, nested calculations included.</summary>
+    public static IEnumerable<string> CalcRefs(Calc c) =>
+        c.Args.SelectMany(a => a.Ref is not null ? [a.Ref] : a.Calc is not null ? CalcRefs(a.Calc) : []);
 }

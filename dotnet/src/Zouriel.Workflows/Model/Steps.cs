@@ -355,7 +355,7 @@ public sealed class ApplyTransitionStep : Step
     public Dictionary<string, Operand>? Input { get; set; }
     /// <summary>Remarks recorded with the move (<c>trigger.comment</c>); the transition's required check does not apply to a workflow.</summary>
     public Template? Comment { get; set; }
-    /// <c>fail</c> (default) or <c>skip</c> (output <c>applied</c> false) when the record is not in a from state or the guard fails.
+    /// <c>fail</c> (default) or <c>skip</c> (output <c>applied</c> false) when the record is not in a from state, the guard fails or the lifecycle is not the record's own.
     public string? IfNotAllowed { get; set; }
 }
 
