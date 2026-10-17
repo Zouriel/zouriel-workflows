@@ -6,3 +6,6 @@ obj/
 TestResults/
 *.nupkg
 node_modules/
+*.db
+*.db-shm
+*.db-wal

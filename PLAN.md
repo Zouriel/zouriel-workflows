@@ -1,6 +1,6 @@
 # Zouriel Workflows — plan
 
-Status: plan, 2026-10-17. Nothing built yet.
+Status: written 2026-10-17 as the plan; the spec, the .NET engine and the UI are now built (see README.md). Kept for the reasoning behind the design.
 
 A workflow system in four parts that share one JSON format:
 
