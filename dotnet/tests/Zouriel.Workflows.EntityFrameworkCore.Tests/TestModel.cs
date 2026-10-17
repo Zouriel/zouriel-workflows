@@ -12,7 +12,7 @@ public sealed class Programme
     public string? CoordinatorId { get; set; }
 }
 
-public sealed class Application
+public class Application
 {
     public int Id { get; set; }
     public string Title { get; set; } = "";
@@ -25,6 +25,19 @@ public sealed class Application
     public int? ProgrammeId { get; set; }
     public Programme? Programme { get; set; }
     public List<Document> Documents { get; set; } = [];
+}
+
+/// <summary>A subclass in the same table (TPH): its changes must be seen as changes of an application.</summary>
+public sealed class UrgentApplication : Application
+{
+    public string? Reason { get; set; }
+}
+
+/// <summary>A string-keyed entity, for id paging.</summary>
+public sealed class Tag
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
 }
 
 public sealed class Document
@@ -40,10 +53,12 @@ public sealed class AppDb(DbContextOptions<AppDb> options, bool sqlite = false) 
     public DbSet<Application> Applications => Set<Application>();
     public DbSet<Programme> Programmes => Set<Programme>();
     public DbSet<Document> Documents => Set<Document>();
+    public DbSet<Tag> Tags => Set<Tag>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.Entity<Application>().Property(a => a.Status).HasConversion<string>();
+        b.Entity<UrgentApplication>();
         b.AddWorkflows(o => o.InstantsAsTicks = sqlite);
     }
 }

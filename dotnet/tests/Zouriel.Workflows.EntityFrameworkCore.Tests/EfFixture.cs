@@ -35,6 +35,21 @@ public sealed class StampNotes(AppDb db) : IWorkflowAction
     }
 }
 
+/// <summary>An action that writes to the record (tracked and saved) and then fails: its writes must be undone.</summary>
+public sealed class StampThenFail(AppDb db) : IWorkflowAction
+{
+    public async Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
+    {
+        var id = int.Parse(context.EntityId!, System.Globalization.CultureInfo.InvariantCulture);
+        var a = await db.Applications.FindAsync([id], ct);
+        a!.Notes = "half done";
+        db.Add(new Programme { Name = "created by a failed action" });
+        await db.SaveChangesAsync(ct);
+        a.Amount = 99;
+        throw new InvalidOperationException("The finance system is down.");
+    }
+}
+
 /// <summary>A service provider wired like a real app: AppDb with the workflow tables and interceptor.</summary>
 public sealed class TestApp : IAsyncDisposable
 {
@@ -72,6 +87,8 @@ public sealed class TestApp : IAsyncDisposable
                 .Relation(a => a.Programme, "programme")
                 .Collection(a => a.Documents, "documents"))
             .Entity<Document>("document", e => e.Field(d => d.Name).Field(d => d.Verified, f => f.Settable()))
+            .Entity<Tag>("tag", e => e.Field(t => t.Name))
+            .Action<StampThenFail>("stampThenFail", a => a.For("application"))
             .Action<StampNotes>("stamp", a => a.For("application").Input("text", "Text", required: true).Output("length", "Length", "number"))
             .Role("reviewer", "Reviewer"));
         Services = services.BuildServiceProvider();

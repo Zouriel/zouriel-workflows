@@ -6,8 +6,8 @@ using Zouriel.Workflows.Storage;
 
 namespace Zouriel.Workflows.EntityFrameworkCore;
 
-/// <summary>The lock row that serialises audit writers so the hash chain never forks.</summary>
-public sealed class AuditHeadRecord
+/// <summary>The head of an audit chain (one row per tenant key): the chain's own state, and the lock row that serialises audit writers so the chain never forks.</summary>
+internal sealed class AuditHeadRecord
 {
     public string TenantKey { get; set; } = "";
     public long Seq { get; set; }
@@ -15,13 +15,14 @@ public sealed class AuditHeadRecord
 }
 
 /// <summary>One row per (definition, change event) that already started (or was considered by) a trigger.</summary>
-public sealed class TriggerClaimRecord
+internal sealed class TriggerClaimRecord
 {
     public string DefinitionId { get; set; } = "";
     public string EventId { get; set; } = "";
     public DateTimeOffset ClaimedAt { get; set; }
 }
 
+/// <summary>How <see cref="WorkflowModelBuilderExtensions.AddWorkflows"/> maps the workflow tables.</summary>
 public sealed class WorkflowModelOptions
 {
     /// <summary>Database schema for the workflow tables (null = the default schema).</summary>
@@ -32,8 +33,15 @@ public sealed class WorkflowModelOptions
     public bool InstantsAsTicks { get; set; }
 }
 
+/// <summary>Adds the workflow tables to a DbContext model.</summary>
 public static class WorkflowModelBuilderExtensions
 {
+    /// <summary>
+    /// The audit table's non-null tenant column (<c>""</c> without tenancy). The unique index on it and
+    /// <c>Seq</c> backs up the chain head lock: NULL tenants would not collide in a unique index.
+    /// </summary>
+    internal const string AuditTenantKey = "TenantKey";
+
     /// <summary>
     /// Adds the workflow tables to your DbContext, so workflow state, audit and outbox rows commit in
     /// the same transaction as your own data. Call from <c>OnModelCreating</c>, then add a migration.
@@ -124,7 +132,9 @@ public static class WorkflowModelBuilderExtensions
         mb.Entity<AuditRecord>(e =>
         {
             e.HasKey(x => x.Id);
-            e.HasIndex(x => new { x.Tenant, x.Seq }).IsUnique();
+            e.Property<string>(AuditTenantKey).HasMaxLength(64).IsRequired();
+            e.HasIndex(AuditTenantKey, nameof(AuditRecord.Seq)).IsUnique();
+            e.HasIndex(x => new { x.Category, x.Seq });
             e.HasIndex(x => new { x.Entity, x.EntityId });
             e.HasIndex(x => x.InstanceId);
             e.HasIndex(x => new { x.Category, x.At });

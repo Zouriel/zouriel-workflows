@@ -6,6 +6,12 @@ using Zouriel.Workflows.Registry;
 
 namespace Zouriel.Workflows.EntityFrameworkCore;
 
+/// <summary>Wires workflows to Entity Framework Core.</summary>
+/// <remarks>
+/// The engine opens its own transaction for each unit of work. A DbContext configured with a retrying
+/// execution strategy (<c>EnableRetryOnFailure</c>) refuses user-started transactions, so the context the
+/// workflow store uses must not retry on its own; the engine retries units itself on conflicts.
+/// </remarks>
 public static class WorkflowEfExtensions
 {
     /// <summary>
