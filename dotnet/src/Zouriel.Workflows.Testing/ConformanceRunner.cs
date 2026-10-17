@@ -130,6 +130,10 @@ public static class ConformanceRunner
             await e.ApplyTransitionAsync(tr["entity"]!.GetValue<string>(), tr["id"]!.GetValue<string>(), tr["transition"]!.GetValue<string>(), Map(tr["input"]),
                 Actor(host, tr["actor"]), tr["lifecycle"]?.GetValue<string>(), ct);
         }
+        else if (s["reset"] is JsonObject rs)
+        {
+            await e.ResetAsync(rs["entity"]!.GetValue<string>(), rs["id"]!.GetValue<string>(), Map(rs["input"]), Actor(host, rs["actor"]), rs["lifecycle"]?.GetValue<string>(), ct);
+        }
         else if (s["forceState"] is JsonObject fs)
         {
             await e.ForceStateAsync(fs["entity"]!.GetValue<string>(), fs["id"]!.GetValue<string>(), fs["state"]!.GetValue<string>(), fs["reason"]?.GetValue<string>() ?? "",
@@ -311,6 +315,8 @@ public static class ConformanceRunner
             var keys = view.Transitions.Select(t => (object?)t.Key).ToList();
             CompareValue("available.transitions", Values.FromJson(av["transitions"]), keys);
             if (av["state"] is JsonValue st && view.State != st.GetValue<string>()) throw new ConformanceException($"available.state: expected {st}, got {view.State}");
+            if (av["reset"] is JsonValue rv && (view.Reset is not null) != rv.GetValue<bool>())
+                throw new ConformanceException($"available.reset: expected {rv}, got {view.Reset is not null}");
         }
         if (expect["audit"] is JsonArray wantAudit)
         {

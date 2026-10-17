@@ -255,6 +255,17 @@ public static class Linter
                 if (t.Input?.Form is { } form && form["pages"] is null) Error("badForm", t.Id, $"The form of '{t.Label}' is not a form definition.");
                 if (t.Steps is not null) LintSteps(t.Steps, env, $"transition:{t.Id}");
             }
+            if (lc.Reset is { } reset)
+            {
+                // Problems about the reset have no node of their own; the editor shows them on the lifecycle.
+                if (reset.To is { } back && !stateIds.Contains(back)) Error("unknownState", null, "The reset goes back to a state that does not exist.");
+                else if (lc.States.FirstOrDefault(s => s.Id == (reset.To ?? lc.States.FirstOrDefault(x => x.IsInitial)?.Id)) is { IsTerminal: true } final)
+                    Warn("resetToFinal", null, $"The reset goes back to the final state '{final.Label}', which ends the workflow.");
+                CheckAssignees(reset.Who, null, allowEmpty: true);
+                if (reset.Who is not { Count: > 0 }) Warn("resetNobody", null, "Nobody can reset this workflow yet; choose who may.");
+                if (reset.Input?.Form is { } resetForm && resetForm["pages"] is null) Error("badForm", null, "The reset's form is not a form definition.");
+                if (reset.Steps is not null) LintSteps(reset.Steps, new Env(entity?.Key, null, [], reset.Input is not null, null), "reset");
+            }
             // Reachability from the initial state.
             var initial = lc.States.FirstOrDefault(s => s.IsInitial);
             if (initial is not null)
@@ -673,6 +684,11 @@ public static class Linter
         private string? TargetEntity(string? target, Env env, string node)
         {
             if (target is null or "self") return env.Entity;
+            if (target == "item")
+            {
+                if (env.ItemEntity is null) Error("badTarget", node, "'item' can only be changed inside 'For each'.");
+                return env.ItemEntity;
+            }
             var f = FieldAt(target, env);
             if (f is null || f.Type != FieldTypes.Relation)
             {

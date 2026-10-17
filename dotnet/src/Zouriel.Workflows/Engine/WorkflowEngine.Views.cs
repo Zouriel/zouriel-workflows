@@ -105,6 +105,14 @@ public sealed record TaskView(
 /// <param name="Form">The input form to fill in, if the transition asks for one.</param>
 public sealed record TransitionOption(string Key, string Label, string To, string ToLabel, string? Tone, string? Confirm, JsonNode? Form);
 
+/// <summary>Starting the record's workflow over, offered to the people the lifecycle's reset allows (spec §6).</summary>
+/// <param name="Label">The button label ("Reset workflow" by default).</param>
+/// <param name="To">The state key it goes back to.</param>
+/// <param name="ToLabel">That state's label.</param>
+/// <param name="Confirm">A confirmation question to ask first, if set.</param>
+/// <param name="Form">The form to fill in (e.g. a reason), if the reset asks for one.</param>
+public sealed record ResetOption(string Label, string To, string ToLabel, string? Confirm, JsonNode? Form);
+
 /// <summary>
 /// Everything a record page shows (the record panel): its lifecycle state, the transitions the viewer may
 /// apply, open tasks, recent runs and manual starts. Reading never creates the lifecycle instance; a
@@ -125,10 +133,11 @@ public sealed record TransitionOption(string Key, string Label, string To, strin
 /// <param name="Instances">Recent automation runs and lifecycle child runs about the record.</param>
 /// <param name="Manual">Manual workflows the viewer may start from the record.</param>
 /// <param name="States">All states of the lifecycle: <c>{ key, label, category, tone }</c>.</param>
+/// <param name="Reset">Starting the workflow over, when the viewer may (null otherwise).</param>
 public sealed record RecordView(
     string Entity, string Id, string? Title, string? Lifecycle, string? LifecycleTitle, string? State, string? StateLabel, string? StateTone, string? Status,
     string? StateEnteredAt, IReadOnlyList<TransitionOption> Transitions, IReadOnlyList<TaskView> Tasks, IReadOnlyList<InstanceView> Instances,
-    IReadOnlyList<ManualOption> Manual, IReadOnlyList<object?> States);
+    IReadOnlyList<ManualOption> Manual, IReadOnlyList<object?> States, ResetOption? Reset);
 
 /// <summary>A manual-trigger workflow the viewer may start from a record (spec §5 <c>manual</c>).</summary>
 /// <param name="Key">The workflow key to start.</param>
@@ -381,6 +390,7 @@ public sealed partial class WorkflowEngine
         InstanceRecord? record = null;
         var options = new List<TransitionOption>();
         var states = new List<object?>();
+        ResetOption? reset = null;
         CompiledDefinition? rc = null;
         if (c is not null)
         {
@@ -402,6 +412,13 @@ public sealed partial class WorkflowEngine
                     options.Add(new TransitionOption(t.Key, t.Label, to.Key, to.Label, t.Tone, t.Confirm, t.Input?.Form.DeepClone()));
                 }
             }
+            if (lc.Reset is { } r && await MayResetAsync(u, rc, record, viewer, ct))
+            {
+                var back = ResetTarget(rc);
+                // Not offered when it would change nothing (already back, nothing running).
+                var changes = record.State != back.Id || record.Status == InstanceStatus.OutOfSync || (await RunningAboutAsync(u, record, r, ct)).Count > 0;
+                if (changes) reset = new ResetOption(r.Label ?? "Reset workflow", back.Key, back.Label, r.Confirm, r.Input?.Form.DeepClone());
+            }
         }
         var tasks = new List<TaskView>();
         foreach (var t in await u.S.QueryTasksAsync(new TaskQuery { Entity = entity, EntityId = id, Statuses = [TaskStatus.Open], Take = 100 }, ct))
@@ -419,7 +436,7 @@ public sealed partial class WorkflowEngine
         }
         var state = rc?.StateById(record?.State);
         return new RecordView(entity, id, title, c?.Definition.Key, c?.Definition.Title, state?.Key, state?.Label, state?.Tone, record?.Status,
-            record?.StateEnteredAt is null ? null : Values.FormatInstant(record.StateEnteredAt.Value), options, tasks, instances, manual, states);
+            record?.StateEnteredAt is null ? null : Values.FormatInstant(record.StateEnteredAt.Value), options, tasks, instances, manual, states, reset);
     }
 
     // ── Audit ─────────────────────────────────────────────────────────────

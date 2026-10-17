@@ -186,13 +186,17 @@ public sealed partial class WorkflowEngine
         if (record.State == to.Id) await EnterStateAsync(u, c, record, to, actor, trigger, depth, chain, ct, input);
     }
 
-    internal async Task<bool> MayApplyAsync(Uow u, ValueScope scope, Transition tr, WorkflowActor actor, InstanceRecord record, CancellationToken ct)
+    internal Task<bool> MayApplyAsync(Uow u, ValueScope scope, Transition tr, WorkflowActor actor, InstanceRecord record, CancellationToken ct) =>
+        IsAmongAsync(scope, tr.Who, actor, ct);
+
+    /// <summary>Whether a signed-in person is one of <paramref name="who"/> (empty = nobody).</summary>
+    private async Task<bool> IsAmongAsync(ValueScope scope, List<Assignee>? who, WorkflowActor actor, CancellationToken ct)
     {
-        if (!actor.IsUser || tr.Who is not { Count: > 0 }) return false;
-        var allowed = await ResolveAssigneesAsync(scope, tr.Who, null, actor.Id, ct);
+        if (!actor.IsUser || who is not { Count: > 0 }) return false;
+        var allowed = await ResolveAssigneesAsync(scope, who, null, actor.Id, ct);
         if (allowed.Contains(actor.Id!)) return true;
         // Roles the caller carries (from their login) count too, so apps need not list every member.
-        return actor.Roles is { Count: > 0 } roles && tr.Who.Any(w => w.Role is not null && roles.Contains(w.Role));
+        return actor.Roles is { Count: > 0 } roles && who.Any(w => w.Role is not null && roles.Contains(w.Role));
     }
 
     private async Task ExitStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State from, WorkflowActor actor, TriggerInfo trigger, CancellationToken ct)
@@ -346,6 +350,92 @@ public sealed partial class WorkflowEngine
             else if (!to.IsTerminal) await PlanStateTimersAsync(u, c, record, to, ct);
             return await RecordViewAsync(u, entity, id, admin, ct);
         }, ct);
+
+    // ── Reset ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A person starts a record's workflow over (spec §6 reset): one of <c>reset.who</c> moves it back to
+    /// <c>reset.to</c> (the initial state by default). The record's open runs and tasks are cancelled (and the
+    /// automations about it, unless <c>cancelAutomations</c> is false), the state is written, then the reset
+    /// steps run (they can change this record and related ones). Everything happens in one unit of work.
+    /// </summary>
+    public Task<RecordView> ResetAsync(string entity, string id, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default)
+    {
+        if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can reset a workflow.");
+        return RunAsync(async u =>
+        {
+            var c = await LifecycleOfAsync(u, entity, lifecycle, ct);
+            var record = await EnsureRecordInstanceAsync(u, c, entity, id, ct, user);
+            if (record.Version != c.Version) c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
+            var reset = c.Lifecycle.Reset ?? throw new WorkflowException("resetDisabled", $"{c.Definition.Title} cannot be reset.");
+            var label = reset.Label ?? "Reset workflow";
+            if (!await MayResetAsync(u, c, record, user, ct)) throw new WorkflowException("notAllowed", $"You are not allowed to “{label}”.");
+            var to = ResetTarget(c);
+            if (record.State == to.Id && record.Status != InstanceStatus.OutOfSync && (await RunningAboutAsync(u, record, reset, ct)).Count == 0)
+                throw new WorkflowException("nothingToReset", $"The record is already in “{to.Label}” with nothing running.");
+            input ??= [];
+            if (reset.Input?.Form is { } form)
+            {
+                var errors = Options.FormValidator.Validate(form, input, u.Today);
+                if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+            }
+            var from = c.StateById(record.State);
+            var trigger = new TriggerInfo
+            {
+                Type = "reset", Field = c.Lifecycle.Field, From = from?.Key, To = to.Key, ActorType = user.Type, ActorId = user.Id, ActorName = user.Name,
+                At = Values.FormatInstant(u.Now),
+            };
+            foreach (var run in await RunningAboutAsync(u, record, reset, ct))
+                await CancelInstanceAsync(u, run, user, $"The workflow was reset by {user.Name ?? user.Id}.", ct);
+            var runExitEnter = reset.RunExitEnter == true;
+            if (from is not null && runExitEnter) await ExitStateAsync(u, c, record, from, user, trigger, ct);
+            else foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+            await WriteStateAsync(u, c, entity, id, to, user, 0, record.Id, ct);
+            record.State = to.Id;
+            record.StateEnteredAt = u.Now;
+            record.Status = to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
+            record.EndedAt = to.IsTerminal ? u.Now : null;
+            record.UpdatedAt = u.Now;
+            await u.S.UpdateInstanceAsync(record, ct);
+            await u.AuditAsync(new AuditEntry
+            {
+                Category = "lifecycle", Action = "reset", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id, InstanceId = record.Id,
+                DefinitionId = c.DefinitionId, Actor = user, CorrelationId = record.CorrelationId,
+                Before = new Dictionary<string, object?> { ["state"] = from?.Key }, After = new Dictionary<string, object?> { ["state"] = to.Key },
+                Data = new Dictionary<string, object?> { ["label"] = label, ["input"] = input },
+            }, ct);
+            u.Log?.Add("lifecycle", "reset", id, $"{from?.Label ?? "?"} → {to.Label} ({label})");
+            await QueueLifecycleEventAsync(u, c, entity, id, from?.Key, to.Key, null, user, 0, record.CorrelationId, ct);
+            // The reset steps read the answers (input.*) and may change this record and related ones.
+            await StartRunAsync(u, record, c, "reset", "reset", trigger, user, input, ct);
+            if (record.State == to.Id)
+            {
+                if (runExitEnter) await EnterStateAsync(u, c, record, to, user, trigger, 0, 0, ct, input);
+                else if (!to.IsTerminal) await PlanStateTimersAsync(u, c, record, to, ct);
+            }
+            return await RecordViewAsync(u, entity, id, user, ct);
+        }, ct);
+    }
+
+    /// <summary>The state a reset goes back to: <c>reset.to</c>, else the initial state.</summary>
+    internal static State ResetTarget(CompiledDefinition c) =>
+        c.Lifecycle.Reset?.To is { } to && c.StateById(to) is { } st ? st : c.InitialState;
+
+    /// <summary>Whether the viewer may reset the record's workflow (it has a reset and they are in its <c>who</c>).</summary>
+    internal async Task<bool> MayResetAsync(Uow u, CompiledDefinition c, InstanceRecord record, WorkflowActor actor, CancellationToken ct) =>
+        c.Lifecycle.Reset is { } reset && await IsAmongAsync(u.Scope(record), reset.Who, actor, ct);
+
+    /// <summary>What a reset stops: the record's unfinished runs, and the automations about the record unless the reset keeps them.</summary>
+    internal async Task<List<InstanceRecord>> RunningAboutAsync(Uow u, InstanceRecord record, LifecycleReset reset, CancellationToken ct)
+    {
+        var running = new List<InstanceRecord>();
+        foreach (var run in await u.S.QueryInstancesAsync(new InstanceQuery { ParentId = record.Id, Kinds = [InstanceKinds.Run], Take = 1000 }, ct))
+            if (!InstanceStatus.IsFinished(run.Status) && !u.Driving.Contains(run.Id)) running.Add(run);
+        if (reset.CancelAutomations != false)
+            foreach (var a in await u.S.QueryInstancesAsync(new InstanceQuery { Entity = record.Entity, EntityId = record.EntityId, Kinds = [InstanceKinds.Automation], Take = 1000 }, ct))
+                if (!InstanceStatus.IsFinished(a.Status) && !u.Driving.Contains(a.Id)) running.Add(a);
+        return running;
+    }
 
     /// <summary>
     /// Observe mode (spec §6): an outside write moved the field. It is recorded as the transition from the

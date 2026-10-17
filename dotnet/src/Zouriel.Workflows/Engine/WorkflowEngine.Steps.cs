@@ -327,6 +327,8 @@ public sealed partial class WorkflowEngine
     internal async Task<(string? Entity, string? Id)> TargetAsync(ValueScope scope, string? target, CancellationToken ct)
     {
         if (target is null or "self") return (scope.Entity, scope.EntityId);
+        // Inside forEach: the current item of the collection.
+        if (target == "item") return (scope.ItemEntity, scope.Item?.GetValueOrDefault("id") as string);
         var (entity, id, field) = await CollectionOwnerAsync(scope, target, ct);
         if (entity is null || id is null || field is null) return (null, null);
         var f = Registry.Field(entity, field);

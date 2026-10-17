@@ -223,6 +223,26 @@
         "layout": {
           "type": "object",
           "additionalProperties": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
+        },
+        "reset": {
+          "description": "Lets people start a record's workflow over (spec §6 reset).",
+          "type": "object",
+          "properties": {
+            "label": { "type": "string", "maxLength": 80 },
+            "to": { "$ref": "#/$defs/id" },
+            "who": { "$ref": "#/$defs/assignees" },
+            "confirm": { "type": "string", "maxLength": 500 },
+            "input": {
+              "type": "object",
+              "required": ["form"],
+              "properties": { "form": { "$ref": "#/$defs/formDefinition" } },
+              "additionalProperties": false
+            },
+            "runExitEnter": { "type": "boolean" },
+            "cancelAutomations": { "type": "boolean" },
+            "steps": { "$ref": "#/$defs/steps" }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

@@ -1,0 +1,98 @@
+{
+ "name": "Lifecycle reset: who may reset, the form, open tasks and runs cancelled, back to the initial state, reset steps changing the record, a related record and each item of a collection, audited, and not offered when it would change nothing",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "programme": [{ "id": "p1", "name": "Engineering", "coordinator": "head", "budget": 50000 }],
+  "document": [
+   { "id": "d1", "name": "Passport", "kind": "id", "verified": true },
+   { "id": "d2", "name": "Transcript", "kind": "transcript", "verified": true }
+  ],
+  "application": []
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_reset",
+   "key": "applicationReview",
+   "kind": "lifecycle",
+   "title": "Application review",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "enforce",
+    "states": [
+     { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "active" },
+     {
+      "id": "st_rev", "key": "underReview", "label": "Under review", "category": "active",
+      "onEnter": [
+       { "id": "ap", "type": "approval", "title": "Review", "assignees": [{ "role": "reviewer" }], "rule": { "type": "any" }, "due": "P3D",
+         "outcomes": { "approved": [], "rejected": [], "timedOut": [] } }
+      ]
+     },
+     { "id": "st_ok", "key": "approved", "label": "Approved", "category": "terminal" }
+    ],
+    "transitions": [
+     { "id": "t_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "field": "entity.applicant" }] },
+     { "id": "t_start", "key": "startReview", "label": "Start review", "from": ["st_sub"], "to": "st_rev", "who": [{ "role": "reviewer" }],
+       "steps": [{ "id": "assign", "type": "setFields", "values": [{ "field": "reviewer", "value": { "ref": "trigger.actor" } }] }] }
+    ],
+    "reset": {
+     "label": "Start over",
+     "who": [{ "role": "admin" }],
+     "confirm": "Start this application over?",
+     "input": { "form": { "schemaVersion": 1, "id": "f_reset", "title": "Reset", "pages": [{ "id": "p", "elements": [
+      { "kind": "field", "id": "f_reason", "key": "reason", "type": "textarea", "label": "Why", "required": true }
+     ] }] } },
+     "steps": [
+      { "id": "r_self", "type": "setFields", "values": [
+       { "field": "reviewer", "value": { "const": null } },
+       { "field": "notes", "value": { "ref": "input.reason" } }
+      ] },
+      { "id": "r_prog", "type": "setFields", "target": "entity.programme", "values": [{ "field": "budget", "value": { "const": 60000 } }] },
+      { "id": "r_docs", "type": "forEach", "collection": "entity.documents", "mode": "sequential", "max": 100, "steps": [
+       { "id": "r_doc", "type": "setFields", "target": "item", "values": [{ "field": "verified", "value": { "const": false } }] }
+      ] }
+     ]
+    }
+   }
+  }
+ ],
+ "steps": [
+  {
+   "create": { "entity": "application", "id": "a1", "values": { "title": "Bursary", "applicant": "ali", "amount": 20000, "programme": "p1", "documents": ["d1", "d2"] } },
+   "expect": { "available": { "entity": "application", "id": "a1", "user": "head", "transitions": [], "state": "draft", "reset": false } }
+  },
+  { "reset": { "entity": "application", "id": "a1", "actor": "head", "input": { "reason": "Nothing yet" } }, "expectError": "nothingToReset" },
+  { "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "ali" } },
+  {
+   "transition": { "entity": "application", "id": "a1", "transition": "startReview", "actor": "rev1" },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "underReview", "reviewer": "rev1" } },
+    "tasks": [{ "step": "ap", "status": "open" }],
+    "available": { "entity": "application", "id": "a1", "user": "head", "transitions": [], "state": "underReview", "reset": true }
+   }
+  },
+  { "expect": { "available": { "entity": "application", "id": "a1", "user": "ali", "transitions": [], "reset": false } } },
+  { "reset": { "entity": "application", "id": "a1", "actor": "ali", "input": { "reason": "Mine" } }, "expectError": "notAllowed" },
+  { "reset": { "entity": "application", "id": "a1", "actor": "head", "input": {} }, "expectError": "invalidInput" },
+  {
+   "reset": { "entity": "application", "id": "a1", "actor": "head", "input": { "reason": "Wrong programme picked" } },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "draft", "reviewer": null, "notes": "Wrong programme picked" } },
+    "tasks": [{ "step": "ap", "status": "cancelled" }],
+    "instances": [{ "definition": "applicationReview", "kind": "record", "status": "active", "state": "draft", "record": "a1" }],
+    "audit": [{ "is": "lifecycle.reset", "actor": "head", "data": { "label": "Start over", "input": { "reason": "Wrong programme picked" } } }],
+    "available": { "entity": "application", "id": "a1", "user": "head", "transitions": [], "state": "draft", "reset": false }
+   }
+  },
+  { "expect": { "record": { "entity": "programme", "id": "p1", "values": { "budget": 60000 } } } },
+  { "expect": { "record": { "entity": "document", "id": "d1", "values": { "verified": false } } } },
+  { "expect": { "record": { "entity": "document", "id": "d2", "values": { "verified": false } } } },
+  {
+   "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "ali" },
+   "expect": { "record": { "entity": "application", "id": "a1", "values": { "status": "submitted" } } }
+  }
+ ]
+}

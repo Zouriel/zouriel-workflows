@@ -158,9 +158,36 @@ public sealed class Lifecycle
     public List<Transition> Transitions { get; set; } = [];
     /// <summary>Editor positions of states in the diagram (state id → [x, y]); ignored by engines.</summary>
     public Dictionary<string, double[]>? Layout { get; set; }
+    /// <summary>Lets people start a record's workflow over (spec §6 reset); absent = no reset.</summary>
+    public LifecycleReset? Reset { get; set; }
 
     /// <summary>True unless <see cref="Mode"/> is <c>observe</c>.</summary>
     [JsonIgnore] public bool Enforce => Mode != "observe";
+}
+
+/// <summary>
+/// Starting a record's workflow over (spec §6): the people in <see cref="Who"/> may move the record back
+/// to <see cref="To"/> (the initial state by default). Its open tasks and runs are cancelled first, then
+/// <see cref="Steps"/> run, which can change this record and related ones.
+/// </summary>
+public sealed class LifecycleReset
+{
+    /// <summary>The button text (default "Reset workflow").</summary>
+    public string? Label { get; set; }
+    /// <summary>The state id to go back to; null = the initial state.</summary>
+    public string? To { get; set; }
+    /// <summary>Who may reset by hand; null or empty = nobody (the API refuses).</summary>
+    public List<Assignee>? Who { get; set; }
+    /// <summary>A confirmation question the record panel asks first.</summary>
+    public string? Confirm { get; set; }
+    /// <summary>A form (e.g. a reason) whose answers are validated and read as <c>input.*</c> by the steps.</summary>
+    public TransitionInput? Input { get; set; }
+    /// <summary>Run the current state's <c>onExit</c> and the target's <c>onEnter</c> (default false: a reset is not a move).</summary>
+    public bool? RunExitEnter { get; set; }
+    /// <summary>Also cancel running automations about the record (default true); the lifecycle's own runs always stop.</summary>
+    public bool? CancelAutomations { get; set; }
+    /// <summary>Steps run after the record is back in <see cref="To"/> (list id <c>reset</c>).</summary>
+    public List<Step>? Steps { get; set; }
 }
 
 /// <summary>A lifecycle state; its key is the field value it stands for.</summary>

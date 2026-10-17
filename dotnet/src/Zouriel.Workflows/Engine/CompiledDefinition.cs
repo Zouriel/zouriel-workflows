@@ -7,7 +7,7 @@ internal sealed record StepLocation(Step Step, string ListId, int Index, string?
 
 /// <summary>
 /// A parsed definition with every step list indexed. List ids: <c>root</c> for an automation's
-/// steps; <c>transition:ID</c>, <c>onEnter:ID</c>, <c>onExit:ID</c>, <c>sla:ID</c> for lifecycle runs;
+/// steps; <c>transition:ID</c>, <c>onEnter:ID</c>, <c>onExit:ID</c>, <c>sla:ID</c>, <c>reset</c> for lifecycle runs;
 /// <c>STEPID/SLOT</c> for lists nested in a step (e.g. <c>s3/path:p1</c>, <c>s5/outcome:approved</c>).
 /// </summary>
 internal sealed class CompiledDefinition
@@ -37,6 +37,7 @@ internal sealed class CompiledDefinition
             }
             foreach (var t in lc.Transitions)
                 if (t.Steps is not null) AddList($"transition:{t.Id}", t.Steps, null);
+            if (lc.Reset?.Steps is { } resetSteps) AddList("reset", resetSteps, null);
         }
     }
 

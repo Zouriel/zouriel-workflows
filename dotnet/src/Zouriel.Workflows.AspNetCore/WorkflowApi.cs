@@ -360,6 +360,13 @@ public static class WorkflowApi
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.ApplyTransitionAsync(entity, id, key, Map(body?.Input), Actor(http), body?.Lifecycle, ct));
         }), o.ViewPolicy);
+        // Starting a record's workflow over: the lifecycle's reset.who decides who may (spec §6 reset).
+        Secure(g.MapPost("/records/{entity}/{id}/reset", async (string entity, string id, InputBody? body, WorkflowEngine e,
+            IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
+        {
+            await RequireRecordAsync(entity, id, access, http, ct);
+            return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct));
+        }), o.ViewPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/force-state", async (string entity, string id, ForceStateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.ForceStateAsync(entity, id, body.State, body.Reason, body.SkipSteps, Actor(http), body.Lifecycle, ct))), o.InterventionPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/manual/{workflow}", async (string entity, string id, string workflow, InputBody? body, WorkflowEngine e,
@@ -514,7 +521,7 @@ public static class WorkflowApi
         {
             "notAllowed" => 403,
             "notFound" or "noRecord" or "definitionNotFound" => 404,
-            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" => 409,
+            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" => 409,
             "tooLarge" => 413,
             _ => 400,
         };

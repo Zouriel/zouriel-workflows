@@ -107,7 +107,7 @@ against the record **after** the change). The record is the instance's `entity`.
 |---|---|
 | `created` | Once when a record of the entity is created and committed. `trigger.from` is `null`. |
 | `fieldChanged` | When a committed change modifies `field`. Options: `to` (array of values; fires only when the new value is one of them), `from` (array; the old value must be one of them). Both empty = any change. |
-| `stateEntered` | Lifecycle sugar: `{ lifecycle: <definition key>, states: [stateKey…] }`. Fires when the record's lifecycle enters one of those states (by transition, auto transition or forced state). |
+| `stateEntered` | Lifecycle sugar: `{ lifecycle: <definition key>, states: [stateKey…] }`. Fires when the record's lifecycle enters one of those states (by transition, auto transition, forced state or reset). |
 | `transitionApplied` | `{ lifecycle, transitions: [transitionKey…] }`. Fires after one of those transitions is applied. |
 | `deleted` | When a record is deleted. `entity.*` reads the snapshot taken before deletion. |
 | `dateReached` | `{ field: <date/dateTime field>, offset: <signed ISO duration>, at?: "HH:MM" }`. Fires once per record when `field + offset` arrives (date fields fire at `at`, default `09:00`, in the settings time zone). Changing the field reschedules; clearing it or deleting the record cancels; a time already in the past when computed does not fire. Publishing plans the trigger for every existing record, replacing what an earlier version planned. |
@@ -193,6 +193,23 @@ most one lifecycle per (entity, field) may be published; publishing a second is 
 - **Force state.** Admins with `workflows.intervene` may move a record to any state with a reason
   (`POST /records/{entity}/{id}/force-state`). No guards or inputs are checked; `onExit`/`onEnter`
   run unless `skipSteps: true`. Audited as `lifecycle.forced`.
+- **Reset.** `reset?: { label?, to?, who, confirm?, input?: { form }, runExitEnter?, cancelAutomations?,
+  steps? }` lets people start a record's workflow over (`POST /records/{entity}/{id}/reset` with
+  `{ input? }`). Without `reset` a lifecycle cannot be reset. Applying it, in one atomic operation:
+  check the caller is a signed-in person among `who` (empty = nobody; `notAllowed`) → refuse when the
+  record is already in `to` (default: the initial state) and in sync with nothing running
+  (`nothingToReset`) → validate the input form (`invalidInput`) → cancel the record instance's
+  unfinished child runs, and the unfinished automation instances about the record unless
+  `cancelAutomations: false` (their open tasks are cancelled with them) → drop the instance's timers
+  → run the current state's `onExit` only when `runExitEnter: true` → write the field to `to` → audit
+  `lifecycle.reset` (before/after state, data: label, input masked) → run `steps` as a child run
+  (list id `reset`, reason `reset`; `input.*` reads the answers, `trigger.type` is `reset`) → run
+  `to`'s `onEnter` only when `runExitEnter: true`, otherwise plan its timers. The steps can change
+  the record and other records: `setFields` with `target: <relation path>` changes a related record,
+  and `forEach` over a collection with `setFields` `target: "item"` changes each of its items.
+  The record view offers `reset: { label, to, toLabel, confirm, form }` to people among `who` when a
+  reset would change something, and `null` otherwise. Like any move into a state, a reset fires
+  `stateEntered` triggers.
 - **Versions.** The record instance is pinned to the version it started on. Publishing a new version
   does not move existing records; `POST /instances/{id}/migrate` (or bulk by definition) moves them,
   mapping states by key (a `stateMap` overrides; unmapped states make the request fail). Migrating
@@ -228,7 +245,7 @@ value cannot add path segments, a query or another host; webhooks do not follow 
 | `approval` | `assignees`, `rule: { type: "any"|"all"|"count"|"percent", value? }`, `due` (required), `calendar?`, `reminders?: [duration…]`, `escalation?: { after, assignees, notify? }`, `form?`, `instructions?: template`, `allowDelegation?`, `requireComment?: "never"|"reject"|"always"`, `outcomes: { approved: [...], rejected: [...], timedOut: [...] }` | `outcome` (`approved`/`rejected`/`timedOut`), `decidedBy` (user ids), `comments`, `data` (form answers of the last decision) |
 | `task` | Like `approval` but `outcomes: [{ id, key, label, tone?, steps }]` (1–8), `onTimeout: { steps }`, rule is always first decision wins. | `outcome` (key), `decidedBy`, `comment`, `data` |
 | `wait` | `until`: `{ type: "duration", duration, calendar? }` · `{ type: "date", date: <operand>, offset?, at? }` · `{ type: "condition", when, timeout, onTimeout: { steps } }` · `{ type: "signal", signal, timeout?, onTimeout? }` | `timedOut` (bool), `data` (signal data) |
-| `setFields` | `target?: "self"|<relation token path>`, `values: [{ field, value: operand }]` (fields must be `settable`). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
+| `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
 | `setVariables` | `values: [{ variable: <variable id>, value: operand }]` | — |
 | `applyTransition` | `target?: "self"|<relation path>`, `lifecycle: <definition key>`, `transition: <key>`, `input?: { <key>: operand }`, `ifNotAllowed: "fail"|"skip"` | `applied` (bool) |
 | `notify` | `channel`, `to: recipients`, `subject?: template`, `body: template`, `link?: "record"|template` | `sent` (count) |
@@ -299,7 +316,7 @@ Categories and actions:
 - `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked),
   `autoTransitioned`, `autoSkipped` (an automatic transition's time came but its guard failed or the
   record had left the state), `slaBreached` (data: state, within), `forced` (data: reason),
-  `writeRefused`, `writeObserved`, `outOfSync`.
+  `reset` (before/after state, data: label, input masked), `writeRefused`, `writeObserved`, `outOfSync`.
 - `task`: `created`, `assigned`, `reminded`, `escalated`, `delegated`, `reassigned`, `decided`
   (data: outcome, comment, answers masked), `cancelled`, `timedOut`.
 - `trigger`: `suppressed`, `skipped`, `paused`, `resumed`, `failed` (data: eventId, error).

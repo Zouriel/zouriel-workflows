@@ -1,0 +1,36 @@
+{
+ "name": "a reset that goes back to the start and changes related records and each document has no problems",
+ "registry": "../engine/_registry.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_ok",
+  "key": "review",
+  "kind": "lifecycle",
+  "title": "Review",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    { "id": "a", "key": "draft", "label": "Draft", "category": "initial" },
+    { "id": "b", "key": "approved", "label": "Approved", "category": "terminal" }
+   ],
+   "transitions": [
+    { "id": "t", "key": "approve", "label": "Approve", "from": ["a"], "to": "b", "who": [{ "role": "admin" }] }
+   ],
+   "reset": {
+    "who": [{ "role": "admin" }],
+    "input": { "form": { "schemaVersion": 1, "id": "f", "title": "Reset", "pages": [{ "id": "p", "elements": [
+     { "kind": "field", "id": "fr", "key": "reason", "type": "textarea", "label": "Why", "required": true }
+    ] }] } },
+    "steps": [
+     { "id": "s1", "type": "setFields", "values": [{ "field": "notes", "value": { "ref": "input.reason" } }] },
+     { "id": "s2", "type": "setFields", "target": "entity.programme", "values": [{ "field": "budget", "value": { "const": 1 } }] },
+     { "id": "s3", "type": "forEach", "collection": "entity.documents", "mode": "sequential", "max": 100, "steps": [
+      { "id": "s4", "type": "setFields", "target": "item", "values": [{ "field": "verified", "value": { "const": false } }] }
+     ] }
+    ]
+   }
+  }
+ },
+ "expected": []
+}

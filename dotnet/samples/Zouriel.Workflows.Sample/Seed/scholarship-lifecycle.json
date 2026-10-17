@@ -42,6 +42,24 @@
         "confirm": "Withdraw this application?" },
       { "id": "tr_expire", "key": "expire", "label": "Expire unsent drafts", "from": ["st_draft"], "to": "st_withdrawn", "auto": { "after": "P30D" }, "hidden": true }
     ],
+    "reset": {
+      "label": "Start over",
+      "who": [ { "role": "head" } ],
+      "confirm": "Start this application over? Open reviews and payments stop, the reviewer is cleared and every document needs checking again.",
+      "input": { "form": { "schemaVersion": 1, "id": "f_reset", "title": "Start over", "pages": [ { "id": "p1", "elements": [
+        { "kind": "field", "id": "f_reason", "key": "reason", "type": "textarea", "label": "Why is it starting over?", "required": true,
+          "validators": [ { "id": "v_reset_min", "type": "minLength", "params": { "min": 10 } } ] } ] } ] } },
+      "steps": [
+        { "id": "r_clear", "type": "setFields", "title": "Clear the reviewer", "values": [
+          { "field": "reviewer", "value": { "const": null } },
+          { "field": "notes", "value": { "ref": "input.reason" } } ] },
+        { "id": "r_docs", "type": "forEach", "title": "Check every document again", "collection": "entity.documents", "mode": "sequential", "max": 100, "steps": [
+          { "id": "r_doc", "type": "setFields", "title": "Mark as not checked", "target": "item", "values": [ { "field": "verified", "value": { "const": false } } ] } ] },
+        { "id": "r_tell", "type": "notify", "title": "Tell the applicant", "channel": "email", "to": [ { "field": "entity.applicant" } ],
+          "subject": ["“", { "ref": "entity.title" }, "” is starting over"],
+          "body": ["Your application is back in draft: ", { "ref": "input.reason" }, ". Please check it and submit it again."], "link": "record" }
+      ]
+    },
     "layout": {
       "st_draft": [0, 120], "st_submitted": [260, 120], "st_review": [520, 120], "st_approved": [800, 30], "st_rejected": [800, 210], "st_withdrawn": [260, 300]
     }

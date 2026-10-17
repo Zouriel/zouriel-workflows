@@ -1,0 +1,34 @@
+{
+ "name": "reset problems: a target state that does not exist, nobody allowed, and 'item' changed outside For each",
+ "registry": "../engine/_registry.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_r",
+  "key": "review",
+  "kind": "lifecycle",
+  "title": "Review",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    { "id": "a", "key": "draft", "label": "Draft", "category": "initial" },
+    { "id": "b", "key": "approved", "label": "Approved", "category": "terminal" }
+   ],
+   "transitions": [
+    { "id": "t", "key": "approve", "label": "Approve", "from": ["a"], "to": "b", "who": [{ "role": "admin" }] }
+   ],
+   "reset": {
+    "to": "nope",
+    "who": [],
+    "steps": [
+     { "id": "s1", "type": "setFields", "target": "item", "values": [{ "field": "verified", "value": { "const": false } }] }
+    ]
+   }
+  }
+ },
+ "expected": [
+  { "code": "unknownState" },
+  { "code": "resetNobody", "severity": "warning" },
+  { "code": "badTarget", "node": "s1" }
+ ]
+}
