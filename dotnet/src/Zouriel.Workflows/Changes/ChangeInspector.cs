@@ -84,7 +84,8 @@ public sealed class ChangeInspector
     /// <summary>The outbox row for a change event.</summary>
     public OutboxRecord ToOutbox(EntityChange change) => new()
     {
-        Id = Guid.NewGuid().ToString("N"), Kind = OutboxKinds.Change, Payload = change.ToJson(), CreatedAt = change.At,
+        Id = OutboxRecord.NewId(change.At), Kind = OutboxKinds.Change, Payload = change.ToJson(), CreatedAt = change.At,
+        RecordKey = OutboxRecord.KeyOf(change.Entity, change.EntityId),
     };
 }
 

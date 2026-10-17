@@ -33,10 +33,17 @@ public sealed partial class WorkflowEngine
             rows = await s.ClaimOutboxAsync(Now, Now + ClaimLock, batch, ct);
             await s.CommitAsync(ct);
         }
-        foreach (var row in rows.OrderBy(r => r.CreatedAt))
+        foreach (var row in rows.OrderBy(r => r.CreatedAt).ThenBy(r => r.Id, StringComparer.Ordinal))
         {
             // The claim covers the whole batch; once it lapses another worker may take the rest, so stop.
             if (row.LockedUntil is { } until && Now >= until) break;
+            // One record's events in the order they were written: a newer one waits while an older one is pending
+            // (failed and backing off, or not yet done), so a later change is never applied before an earlier one.
+            if (row.RecordKey is not null && await HasEarlierPendingAsync(row, ct))
+            {
+                await DeferOutboxAsync(row, ct);
+                continue;
+            }
             try
             {
                 switch (row.Kind)
@@ -99,6 +106,21 @@ public sealed partial class WorkflowEngine
                 }, ct), ct);
             }
         }
+    }
+
+    private async Task<bool> HasEarlierPendingAsync(OutboxRecord row, CancellationToken ct)
+    {
+        await using var s = await Options.Store.BeginAsync(ct);
+        return await s.HasEarlierPendingOutboxAsync(row, ct);
+    }
+
+    /// <summary>Leaves a row for a later round (an older row of its record is pending); not counted as an attempt.</summary>
+    private async Task DeferOutboxAsync(OutboxRecord row, CancellationToken ct)
+    {
+        await using var s = await Options.Store.BeginAsync(ct);
+        row.LockedUntil = Now + TimeSpan.FromSeconds(30);
+        await s.UpdateOutboxAsync(row, ct);
+        await s.CommitAsync(ct);
     }
 
     private async Task MarkOutboxAsync(OutboxRecord row, string? error, CancellationToken ct)

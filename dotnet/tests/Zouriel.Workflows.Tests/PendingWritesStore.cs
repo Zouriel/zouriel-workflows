@@ -17,6 +17,9 @@ internal sealed class PendingSession(IWorkflowSession inner) : IWorkflowSession
 {
     private readonly List<Func<Task>> _pending = [];
 
+    /// <summary>How many of the next trigger listings fail (to make processing a change event fail once).</summary>
+    public static int FailTriggerListings;
+
     /// <summary>Queues a record write as if made on a data context and not saved yet.</summary>
     public void Defer(Func<IEntityGateway, Task> write) => _pending.Add(() => write(inner.Entities));
 
@@ -47,7 +50,8 @@ internal sealed class PendingSession(IWorkflowSession inner) : IWorkflowSession
     public Task<DefinitionVersionRecord?> GetVersionAsync(string definitionId, int version, CancellationToken ct = default) => inner.GetVersionAsync(definitionId, version, ct);
     public Task<IReadOnlyList<DefinitionVersionRecord>> ListVersionsAsync(string definitionId, CancellationToken ct = default) => inner.ListVersionsAsync(definitionId, ct);
     public Task AddVersionAsync(DefinitionVersionRecord v, CancellationToken ct = default) => inner.AddVersionAsync(v, ct);
-    public Task<IReadOnlyList<TriggerRecord>> ListTriggersAsync(CancellationToken ct = default) => inner.ListTriggersAsync(ct);
+    public Task<IReadOnlyList<TriggerRecord>> ListTriggersAsync(CancellationToken ct = default) =>
+        Interlocked.Decrement(ref FailTriggerListings) >= 0 ? throw new InvalidOperationException("The database is unavailable.") : inner.ListTriggersAsync(ct);
     public Task ReplaceTriggersAsync(string definitionId, IReadOnlyList<TriggerRecord> triggers, CancellationToken ct = default) => inner.ReplaceTriggersAsync(definitionId, triggers, ct);
     public Task<bool> TryClaimTriggerEventAsync(string definitionId, string eventId, CancellationToken ct = default) => inner.TryClaimTriggerEventAsync(definitionId, eventId, ct);
     public Task<InstanceRecord?> GetInstanceAsync(string id, CancellationToken ct = default) => inner.GetInstanceAsync(id, ct);
@@ -75,6 +79,7 @@ internal sealed class PendingSession(IWorkflowSession inner) : IWorkflowSession
     public Task AddOutboxAsync(OutboxRecord o, CancellationToken ct = default) => inner.AddOutboxAsync(o, ct);
     public Task<IReadOnlyList<OutboxRecord>> ClaimOutboxAsync(DateTimeOffset now, DateTimeOffset lockUntil, int limit, CancellationToken ct = default) => inner.ClaimOutboxAsync(now, lockUntil, limit, ct);
     public Task UpdateOutboxAsync(OutboxRecord o, CancellationToken ct = default) => inner.UpdateOutboxAsync(o, ct);
+    public Task<bool> HasEarlierPendingOutboxAsync(OutboxRecord row, CancellationToken ct = default) => inner.HasEarlierPendingOutboxAsync(row, ct);
     public Task<AuditHead?> GetAuditHeadAsync(string? tenant, CancellationToken ct = default) => inner.GetAuditHeadAsync(tenant, ct);
     public Task SetAuditHeadAsync(string? tenant, AuditHead head, CancellationToken ct = default) => inner.SetAuditHeadAsync(tenant, head, ct);
     public Task AddAuditAsync(AuditRecord a, CancellationToken ct = default) => inner.AddAuditAsync(a, ct);

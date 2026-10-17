@@ -183,6 +183,20 @@ public sealed class InstanceRecord
     public DateTimeOffset? EndedAt { get; set; }
     /// <summary>Optimistic concurrency token, incremented on every update.</summary>
     public long RowVersion { get; set; }
+    /// <summary>
+    /// Unique among instances while set (stores enforce it: a unique index on the non-null values). A lifecycle record
+    /// instance holds <c>record:DEFINITION:ENTITY:ID</c> until it is cancelled, so a record never gets two live instances
+    /// of one lifecycle; a running automation of a <c>perRecordSerial</c> or <c>skipIfRunning</c> workflow holds
+    /// <c>serial:DEFINITION:ENTITY:ID</c> until it finishes, so two units starting it at once cannot both run it. A unit
+    /// that would store a duplicate fails to commit (a concurrency conflict) and is retried, then finds the other one.
+    /// </summary>
+    public string? LiveKey { get; set; }
+
+    /// <summary>The <see cref="LiveKey"/> of a lifecycle record instance.</summary>
+    public static string RecordKey(string definitionId, string entity, string id) => $"record:{definitionId}:{entity}:{id}";
+
+    /// <summary>The <see cref="LiveKey"/> of a running serial automation.</summary>
+    public static string SerialKey(string definitionId, string? entity, string id) => $"serial:{definitionId}:{entity}:{id}";
 }
 
 /// <summary>Statuses of one step execution.</summary>
@@ -432,6 +446,23 @@ public sealed class OutboxRecord
     public DateTimeOffset? LockedUntil { get; set; }
     /// <summary>The last processing error.</summary>
     public string? Error { get; set; }
+    /// <summary>
+    /// For change and lifecycle events: the record they are about (<c>entity:id</c>). Rows of one record are processed
+    /// in the order they were written; a newer one waits while an older one is still pending (spec §5).
+    /// </summary>
+    public string? RecordKey { get; set; }
+
+    /// <summary>The <see cref="RecordKey"/> of a record.</summary>
+    public static string KeyOf(string entity, string id) => $"{entity}:{id}";
+
+    private static long _idCounter;
+
+    /// <summary>
+    /// A new row id (32 characters) that sorts after every id this process made before: the clock in milliseconds, a
+    /// counter, then random hex. Rows written in one unit share a <see cref="CreatedAt"/>, so the id keeps their order.
+    /// </summary>
+    public static string NewId(DateTimeOffset now) =>
+        $"{Math.Max(0, now.ToUnixTimeMilliseconds()):D13}{Interlocked.Increment(ref _idCounter) % 10_000_000:D7}{Guid.NewGuid():N}"[..32];
 }
 
 /// <summary>One hash-chained audit entry (spec §11).</summary>

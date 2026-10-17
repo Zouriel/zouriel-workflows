@@ -220,6 +220,13 @@ public interface IWorkflowSession : IAsyncDisposable
     Task<IReadOnlyList<OutboxRecord>> ClaimOutboxAsync(DateTimeOffset now, DateTimeOffset lockUntil, int limit, CancellationToken ct = default);
     /// <summary>Saves an outbox row (processed, failed or re-locked).</summary>
     Task UpdateOutboxAsync(OutboxRecord o, CancellationToken ct = default);
+    /// <summary>
+    /// Whether an unprocessed outbox row of the same <see cref="OutboxRecord.RecordKey"/> was written before
+    /// <paramref name="row"/> (earlier <c>CreatedAt</c>, or the same and a smaller <c>Id</c>), whatever its lock: the
+    /// engine then leaves <paramref name="row"/> for later, so one record's events are processed in order. Stores
+    /// should implement it (indexed on RecordKey, ProcessedAt); the default answers false (no ordering).
+    /// </summary>
+    Task<bool> HasEarlierPendingOutboxAsync(OutboxRecord row, CancellationToken ct = default) => Task.FromResult(false);
 
     /// <summary>
     /// The head of a tenant's audit chain (null before the first entry), locked for the rest of the unit so

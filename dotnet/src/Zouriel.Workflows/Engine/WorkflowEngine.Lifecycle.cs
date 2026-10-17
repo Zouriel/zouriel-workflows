@@ -113,7 +113,7 @@ public sealed partial class WorkflowEngine
             Entity = entity, EntityId = id, Status = state is null ? InstanceStatus.OutOfSync : state.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active,
             State = state?.Id, StateEnteredAt = u.Now, Data = "{}", CorrelationId = NewId(), StartedAt = u.Now, UpdatedAt = u.Now,
             InitiatorId = actor?.IsUser == true ? actor.Id : null, InitiatorName = actor?.IsUser == true ? actor.Name : null,
-            EndedAt = state?.IsTerminal == true ? u.Now : null,
+            EndedAt = state?.IsTerminal == true ? u.Now : null, LiveKey = InstanceRecord.RecordKey(c.DefinitionId, entity, id),
         };
         await u.S.AddInstanceAsync(inst, ct);
         u.Records[inst.Id] = inst;
@@ -442,7 +442,8 @@ public sealed partial class WorkflowEngine
         };
         await u.S.AddOutboxAsync(new OutboxRecord
         {
-            Id = NewId(), Kind = OutboxKinds.Lifecycle, Payload = System.Text.Json.JsonSerializer.Serialize(ev, Definitions.JsonOptions), CreatedAt = u.Now,
+            Id = OutboxRecord.NewId(u.Now), Kind = OutboxKinds.Lifecycle, Payload = System.Text.Json.JsonSerializer.Serialize(ev, Definitions.JsonOptions), CreatedAt = u.Now,
+            RecordKey = OutboxRecord.KeyOf(entity, id),
         }, ct);
     }
 

@@ -123,7 +123,9 @@ start it; publishing a later version does not drop changes still waiting to be p
 committed change event starts at most one instance per published trigger (engines enforce it with a
 unique `(triggerId, eventId)`). A change that is rolled back never starts anything. Each start is its
 own unit of work: an automation that fails to start is audited as `trigger.failed` and does not stop
-the others the same event starts.
+the others the same event starts. The change and lifecycle events of one record are processed in the
+order they were written: while an older event of the record is still pending (failed and backing off,
+or parked for an admin), newer ones wait.
 
 **Loop protection.** Every instance carries `depth` (0 when started by a person or schedule; parent
 depth + 1 when started by a change the engine itself made). A lifecycle's child runs (§6) carry the
@@ -140,7 +142,11 @@ back what a workflow did (§6) start no automations at all (the change event car
 
 **Concurrency** (`settings.concurrency`): `perRecordSerial` (default) — a new instance of the same
 definition for the same record waits in `queued` status until earlier ones finish; `parallel` — no
-queueing; `skipIfRunning` — the new start is dropped (audited as `trigger.skipped`).
+queueing; `skipIfRunning` — the new start is dropped (audited as `trigger.skipped`). Engines enforce
+this in the store, not only by checking first: a running serial instance holds a unique key
+(definition, record) until it finishes, as a lifecycle's live record instance does until it is
+cancelled; a unit that would add a second one fails to commit and is retried, and then queues, skips
+or finds the existing instance.
 
 ## 6. Lifecycles
 

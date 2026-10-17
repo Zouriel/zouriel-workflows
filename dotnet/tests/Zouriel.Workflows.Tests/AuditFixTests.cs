@@ -416,6 +416,92 @@ public sealed class AuditFixTests3(ITestOutputHelper output)
         Assert.Equal(1, change.Depth);
         Assert.Equal("workflow", change.ActorType);
     }
+
+    // ── 16. One record's change events are processed in order, also after a failure ──
+
+    [Fact]
+    public async Task A_newer_change_of_a_record_waits_while_an_older_one_is_failing()
+    {
+        var h = await HostAsync(o => new WorkflowEngineOptions
+        {
+            Registry = o.Registry, Store = new PendingWritesStore(o.Store), Identity = o.Identity, Notifications = o.Notifications, Webhooks = o.Webhooks,
+            Actions = o.Actions, Time = o.Time, RecordLinkTemplate = o.RecordLinkTemplate,
+        });
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_s", "key": "stages", "kind": "automation", "title": "Stages", "entity": "application",
+          "trigger": { "type": "fieldChanged", "field": "stage" }, "settings": { "concurrency": "parallel" },
+          "steps": [ { "id": "v", "type": "setVariables", "values": [] } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q", ["stage"] = "new" });
+        await h.SettleAsync();
+        await h.Store.ChangeRecordAsync("application", "a1", new() { ["stage"] = "checked" });
+        h.Clock.Advance(TimeSpan.FromMilliseconds(5));
+        await h.Store.ChangeRecordAsync("application", "a1", new() { ["stage"] = "done" });
+        PendingSession.FailTriggerListings = 1;
+        await h.Engine.ProcessOutboxAsync();
+        var rows = h.Store.All<OutboxRecord>("outbox").Where(o => o.ProcessedAt is null).OrderBy(o => o.CreatedAt).ToList();
+        Assert.Equal(2, rows.Count);
+        Assert.Equal(1, rows[0].Attempts);
+        Assert.NotNull(rows[0].Error);
+        Assert.Equal(0, rows[1].Attempts);
+        Assert.DoesNotContain(h.Store.All<InstanceRecord>("instances"), i => i.DefinitionKey == "stages");
+
+        h.Clock.Advance(TimeSpan.FromMinutes(2));
+        await h.SettleAsync();
+        var order = h.Store.All<InstanceRecord>("instances").Where(i => i.DefinitionKey == "stages").OrderBy(i => i.StartedAt)
+            .Select(i => (string?)Values.Text(TriggerInfo.FromJson(i.TriggerJson)!.To)).ToList();
+        Assert.Equal(["checked", "done"], order);
+    }
+
+    // ── 17. A store refuses a second live record instance / running serial automation ──
+
+    [Fact]
+    public async Task The_store_refuses_two_units_storing_the_same_live_key()
+    {
+        var store = new InMemoryWorkflowStore();
+        var key = InstanceRecord.RecordKey("lc", "application", "a1");
+        await using var s1 = await store.BeginAsync();
+        await using var s2 = await store.BeginAsync();
+        await s1.AddInstanceAsync(new InstanceRecord { Id = "i1", Kind = InstanceKinds.Record, LiveKey = key });
+        await s2.AddInstanceAsync(new InstanceRecord { Id = "i2", Kind = InstanceKinds.Record, LiveKey = key });
+        await s1.CommitAsync();
+        await Assert.ThrowsAsync<WorkflowConcurrencyException>(() => s2.CommitAsync());
+        // Once the first lets go of the key (cancelled), another may take it.
+        await using var s3 = await store.BeginAsync();
+        var i1 = (await s3.GetInstanceAsync("i1"))!;
+        i1.LiveKey = null;
+        await s3.UpdateInstanceAsync(i1);
+        await s3.AddInstanceAsync(new InstanceRecord { Id = "i3", Kind = InstanceKinds.Record, LiveKey = key });
+        await s3.CommitAsync();
+    }
+
+    [Fact]
+    public async Task Live_keys_are_held_while_live_and_released_when_finished()
+    {
+        var h = await HostAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "lc_k", "key": "lck", "kind": "lifecycle", "title": "LC", "entity": "application",
+          "lifecycle": { "field": "status", "states": [ { "id": "d", "key": "draft", "label": "Draft", "category": "initial" }, { "id": "o", "key": "approved", "label": "OK", "category": "terminal" } ],
+            "transitions": [ { "id": "t", "key": "approve", "label": "OK", "from": ["d"], "to": "o", "who": [ { "role": "reviewer" } ] } ] } }
+        """);
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_k", "key": "serialWait", "kind": "automation", "title": "S", "entity": "application", "trigger": { "type": "manual", "label": "Go" },
+          "steps": [ { "id": "w", "type": "wait", "until": { "type": "duration", "duration": "PT1H" } } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        Assert.Equal(InstanceRecord.RecordKey("lc_k", "application", "a1"), h.Store.All<InstanceRecord>("instances").Single(i => i.Kind == "record").LiveKey);
+        await h.Engine.StartManualAsync("serialWait", "application", "a1", null, WorkflowActor.User("ali", "Ali"));
+        await h.Engine.StartManualAsync("serialWait", "application", "a1", null, WorkflowActor.User("ali", "Ali"));
+        var runs = h.Store.All<InstanceRecord>("instances").Where(i => i.DefinitionKey == "serialWait").ToList();
+        Assert.Single(runs, r => r.LiveKey == InstanceRecord.SerialKey("wf_k", "application", "a1"));
+        Assert.Single(runs, r => r.Status == InstanceStatus.Queued && r.LiveKey is null);
+        await h.AdvanceAsync(TimeSpan.FromHours(3));
+        Assert.All(h.Store.All<InstanceRecord>("instances").Where(i => i.DefinitionKey == "serialWait"), r => Assert.Null(r.LiveKey));
+        await h.Store.DeleteRecordAsync("application", "a1");
+        await h.SettleAsync();
+        Assert.Null(h.Store.All<InstanceRecord>("instances").Single(i => i.Kind == "record").LiveKey);
+    }
 }
 
 /// <summary>Collects log messages for assertions.</summary>

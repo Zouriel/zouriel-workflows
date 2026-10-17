@@ -507,7 +507,7 @@ public sealed partial class WorkflowEngine
         }
         await u.S.AddOutboxAsync(new OutboxRecord
         {
-            Id = NewId(), Kind = OutboxKinds.Notify, Payload = System.Text.Json.JsonSerializer.Serialize(n, Definitions.JsonOptions), CreatedAt = u.Now,
+            Id = OutboxRecord.NewId(u.Now), Kind = OutboxKinds.Notify, Payload = System.Text.Json.JsonSerializer.Serialize(n, Definitions.JsonOptions), CreatedAt = u.Now,
         }, ct);
     }
 

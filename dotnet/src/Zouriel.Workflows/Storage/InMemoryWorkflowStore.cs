@@ -299,6 +299,10 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         public Task AddOutboxAsync(OutboxRecord o, CancellationToken ct = default) { Put("outbox", o.Id, o); return Task.CompletedTask; }
         public Task UpdateOutboxAsync(OutboxRecord o, CancellationToken ct = default) { Put("outbox", o.Id, o); return Task.CompletedTask; }
 
+        public Task<bool> HasEarlierPendingOutboxAsync(OutboxRecord row, CancellationToken ct = default) =>
+            Task.FromResult(row.RecordKey is not null && All<OutboxRecord>("outbox").Any(o => o.Id != row.Id && o.RecordKey == row.RecordKey && o.ProcessedAt is null
+                && (o.CreatedAt < row.CreatedAt || (o.CreatedAt == row.CreatedAt && string.CompareOrdinal(o.Id, row.Id) < 0))));
+
         public Task<IReadOnlyList<OutboxRecord>> ClaimOutboxAsync(DateTimeOffset now, DateTimeOffset lockUntil, int limit, CancellationToken ct = default)
         {
             var rows = All<OutboxRecord>("outbox").Where(o => o.ProcessedAt is null && (o.LockedUntil is null || o.LockedUntil <= now))
@@ -400,6 +404,14 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
                 foreach (var (tenant, _) in _newHeads)
                     if (_store.AuditHeads.GetValueOrDefault(tenant) != _readHeads.GetValueOrDefault(tenant))
                         throw new Engine.WorkflowConcurrencyException("The audit chain moved; retry.");
+                // Live keys are unique (a lifecycle's live record instance, a running serial automation).
+                var liveKeys = new Dictionary<string, string>(StringComparer.Ordinal);
+                if (_store.Tables.TryGetValue("instances", out var instances))
+                    foreach (var (k, v) in instances)
+                        if (!_overlay.ContainsKey(("instances", k)) && v is InstanceRecord { LiveKey: { } lk }) liveKeys[lk] = k;
+                foreach (var ((table, key), value) in _overlay)
+                    if (table == "instances" && value is InstanceRecord { LiveKey: { } lk } && !liveKeys.TryAdd(lk, key) && liveKeys[lk] != key)
+                        throw new Engine.WorkflowConcurrencyException($"Another unit started the same instance ({lk}); retry.");
                 // Optimistic concurrency: a row written here must not have changed since this unit read it.
                 foreach (var ((table, key), value) in _overlay)
                 {
