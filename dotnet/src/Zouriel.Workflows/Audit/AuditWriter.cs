@@ -145,11 +145,18 @@ public sealed class AuditChainVerifier
 {
     private readonly List<SeqRange> _purged;
     private readonly List<(long From, long To)> _gaps = [];
+    private readonly long _firstSeq;
     private AuditRecord? _prev;
 
-    /// <summary>Starts a check. <paramref name="purged"/> are the ranges audit purge checkpoints recorded.</summary>
-    public AuditChainVerifier(IEnumerable<SeqRange>? purged = null) =>
+    /// <summary>
+    /// Starts a check. <paramref name="purged"/> are the ranges audit purge checkpoints recorded;
+    /// <paramref name="firstSeq"/> is where the check starts (entries before it must be purged ones).
+    /// </summary>
+    public AuditChainVerifier(IEnumerable<SeqRange>? purged = null, long firstSeq = 1)
+    {
         _purged = (purged ?? []).OrderBy(r => r.From).ToList();
+        _firstSeq = firstSeq;
+    }
 
     /// <summary>How many entries were fed so far.</summary>
     public long Checked { get; private set; }
@@ -166,6 +173,7 @@ public sealed class AuditChainVerifier
         if (_prev is null)
         {
             if (e.Seq == 1 && e.PrevHash != AuditChain.GenesisHash) return Fail(e.Seq, "The first entry does not start the chain.");
+            if (e.Seq > _firstSeq && !Covered(_firstSeq, e.Seq - 1)) return Fail(_firstSeq, $"Entries {_firstSeq}–{e.Seq - 1} are missing and no purge covers them.");
         }
         else if (e.Seq <= _prev.Seq)
         {
@@ -186,8 +194,19 @@ public sealed class AuditChainVerifier
         return true;
     }
 
-    /// <summary>The verdict after the last entry.</summary>
-    public AuditVerification Result() => Failure ?? new AuditVerification(true, Checked, null, null, _gaps);
+    /// <summary>
+    /// The verdict after the last entry. With the chain's recorded <paramref name="head"/>, entries missing
+    /// at the end (after the last one read) must be purged ones too, and the head must match the last entry.
+    /// </summary>
+    public AuditVerification Result(AuditHead? head = null)
+    {
+        if (Failure is not null || head is null) return Failure ?? new AuditVerification(true, Checked, null, null, _gaps);
+        var last = _prev?.Seq ?? _firstSeq - 1;
+        if (head.Seq < last) return new AuditVerification(false, Checked, head.Seq, "The chain head is behind its newest entry.", _gaps);
+        if (head.Seq == last && _prev is not null && head.Hash != _prev.Hash) return new AuditVerification(false, Checked, last, "The newest entry does not match the chain head.", _gaps);
+        if (head.Seq > last && !Covered(last + 1, head.Seq)) return new AuditVerification(false, Checked, last + 1, $"Entries {last + 1}–{head.Seq} are missing and no purge covers them.", _gaps);
+        return new AuditVerification(true, Checked, null, null, _gaps);
+    }
 
     private bool Fail(long seq, string problem)
     {

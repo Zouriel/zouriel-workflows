@@ -172,52 +172,58 @@ public sealed partial class WorkflowEngine
     }
 
     private Task<DefinitionSummary> PublishCoreAsync(string id, string? note, WorkflowActor actor, CancellationToken ct) =>
-        RunAsync(async u =>
+        RunAsync(u => PublishInUnitAsync(u, id, note, actor, ct), ct);
+
+    /// <summary>Publishes the draft inside an open unit of work (lint, new version, trigger index, audit).</summary>
+    private async Task<DefinitionSummary> PublishInUnitAsync(Uow u, string id, string? note, WorkflowActor actor, CancellationToken ct)
+    {
+        var rec = await RequireDefinitionAsync(u, id, ct);
+        var problems = await LintAsync(u, rec.DraftJson, ct);
+        var errors = problems.Where(p => p.Severity == "error").ToList();
+        if (errors.Count > 0) throw new WorkflowException("lintErrors", $"Fix {errors.Count} problem(s) before publishing.", errors);
+        var def = Definitions.Parse(rec.DraftJson);
+        JsonNode? previous = null;
+        if (rec.Version > 0) previous = JsonNode.Parse((await u.S.GetVersionAsync(id, rec.Version, ct))!.Json);
+        var version = rec.Version + 1;
+        var draft = JsonNode.Parse(rec.DraftJson)!.AsObject();
+        draft["revision"] = version;
+        var json = draft.ToJsonString();
+        await u.S.AddVersionAsync(new DefinitionVersionRecord
         {
-            var rec = await RequireDefinitionAsync(u, id, ct);
-            var problems = await LintAsync(u, rec.DraftJson, ct);
-            var errors = problems.Where(p => p.Severity == "error").ToList();
-            if (errors.Count > 0) throw new WorkflowException("lintErrors", $"Fix {errors.Count} problem(s) before publishing.", errors);
-            var def = Definitions.Parse(rec.DraftJson);
-            JsonNode? previous = null;
-            if (rec.Version > 0) previous = JsonNode.Parse((await u.S.GetVersionAsync(id, rec.Version, ct))!.Json);
-            var version = rec.Version + 1;
-            var draft = JsonNode.Parse(rec.DraftJson)!.AsObject();
-            draft["revision"] = version;
-            var json = draft.ToJsonString();
-            await u.S.AddVersionAsync(new DefinitionVersionRecord
-            {
-                DefinitionId = id, Version = version, Key = rec.Key, Json = json, Hash = Hash(json), Note = note, PublishedAt = u.Now, PublishedBy = actor.Id,
-            }, ct);
-            rec.DraftJson = json;
-            rec.Version = version;
-            rec.Status = DefinitionStatus.Published;
-            rec.HasDraftChanges = false;
-            rec.UpdatedAt = u.Now;
-            rec.UpdatedBy = actor.Id;
-            await u.S.UpdateDefinitionAsync(rec, ct);
-            await IndexTriggersAsync(u, rec, Definitions.Parse(json), version, ct);
-            var diff = previous is null ? null : DefinitionDiff.Describe(Definitions.Parse(previous.ToJsonString()), def);
-            await u.AuditAsync(new AuditEntry
-            {
-                Category = "definition", Action = "published", SubjectType = "definition", SubjectId = id, DefinitionId = id, Actor = actor,
-                Data = new Dictionary<string, object?> { ["version"] = (double)version, ["note"] = note, ["diff"] = diff },
-            }, ct);
-            InvalidateOwnership();
-            return await SummaryAsync(u, rec, ct);
+            DefinitionId = id, Version = version, Key = rec.Key, Json = json, Hash = Hash(json), Note = note, PublishedAt = u.Now, PublishedBy = actor.Id,
         }, ct);
+        rec.DraftJson = json;
+        rec.Version = version;
+        rec.Status = DefinitionStatus.Published;
+        rec.HasDraftChanges = false;
+        rec.UpdatedAt = u.Now;
+        rec.UpdatedBy = actor.Id;
+        await u.S.UpdateDefinitionAsync(rec, ct);
+        await IndexTriggersAsync(u, rec, Definitions.Parse(json), version, ct);
+        var diff = previous is null ? null : DefinitionDiff.Describe(Definitions.Parse(previous.ToJsonString()), def);
+        await u.AuditAsync(new AuditEntry
+        {
+            Category = "definition", Action = "published", SubjectType = "definition", SubjectId = id, DefinitionId = id, Actor = actor,
+            Data = new Dictionary<string, object?> { ["version"] = (double)version, ["note"] = note, ["diff"] = diff },
+        }, ct);
+        InvalidateOwnership();
+        return await SummaryAsync(u, rec, ct);
+    }
 
     /// <summary>Builds the trigger index rows for a published version (and timers for schedules and date triggers).</summary>
     private async Task IndexTriggersAsync(Uow u, DefinitionRecord rec, WorkflowDefinition def, int version, CancellationToken ct)
     {
         var rows = new List<TriggerRecord>();
         var trig = def.Trigger;
+        // Changes are compared with the first publish, not this version's: events still in the outbox when a
+        // new version is published belong to the workflow and must not be dropped (spec §5).
+        var firstPublished = version == 1 ? u.Now : (await u.S.GetVersionAsync(rec.Id, 1, ct))?.PublishedAt ?? u.Now;
         if (def.IsLifecycle && def.Lifecycle is { } lc)
         {
             var initial = lc.States.FirstOrDefault(s => s.IsInitial)?.Key;
             rows.Add(new TriggerRecord
             {
-                Id = NewId(), DefinitionId = rec.Id, DefinitionKey = rec.Key, Version = version, Type = "lifecycle", Entity = def.Entity, Field = lc.Field, PublishedAt = u.Now,
+                Id = NewId(), DefinitionId = rec.Id, DefinitionKey = rec.Key, Version = version, Type = "lifecycle", Entity = def.Entity, Field = lc.Field, PublishedAt = firstPublished,
                 Data = Values.Serialize(new Dictionary<string, object?> { ["mode"] = lc.Mode ?? "enforce", ["initial"] = initial }),
             });
         }
@@ -225,7 +231,7 @@ public sealed partial class WorkflowEngine
         {
             rows.Add(new TriggerRecord
             {
-                Id = NewId(), DefinitionId = rec.Id, DefinitionKey = rec.Key, Version = version, Type = trig.Type, Entity = def.Entity, Field = trig.Field, PublishedAt = u.Now,
+                Id = NewId(), DefinitionId = rec.Id, DefinitionKey = rec.Key, Version = version, Type = trig.Type, Entity = def.Entity, Field = trig.Field, PublishedAt = firstPublished,
                 Lifecycle = trig.Lifecycle, Signal = trig.Signal, Data = trig.Cron is null ? null : Values.Serialize(new Dictionary<string, object?> { ["cron"] = trig.Cron }),
             });
         }
@@ -239,10 +245,8 @@ public sealed partial class WorkflowEngine
             if (next is not null)
                 await u.S.AddBookmarkAsync(new BookmarkRecord { Id = NewId(), Kind = BookmarkKinds.Schedule, Purpose = "schedule", DefinitionId = rec.Id, DueAt = next, CreatedAt = u.Now }, ct);
         }
-        if (trig?.Type != TriggerTypes.DateReached)
-        {
-            foreach (var b in await u.S.FindDefinitionBookmarksAsync(rec.Id, BookmarkKinds.DateReached, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
-        }
+        if (trig?.Type == TriggerTypes.DateReached) await PlanDateTriggersForAllAsync(u, new CompiledDefinition(def, rec.Id, version), ct);
+        else foreach (var b in await u.S.FindDefinitionBookmarksAsync(rec.Id, BookmarkKinds.DateReached, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
     }
 
     public Task<DefinitionSummary> ArchiveAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
@@ -283,10 +287,13 @@ public sealed partial class WorkflowEngine
             return await SummaryAsync(u, rec, ct);
         }, ct);
 
-    /// <summary>Publishes a copy of an earlier version as the newest version.</summary>
+    /// <summary>
+    /// Publishes a copy of an earlier version as the newest version, in one unit of work: if the copy no
+    /// longer passes lint (the registry changed), nothing changes, the draft included.
+    /// </summary>
     public async Task<DefinitionSummary> RollbackAsync(string id, int version, WorkflowActor actor, CancellationToken ct = default)
     {
-        await RunAsync(async u =>
+        var result = await RunAsync(async u =>
         {
             var rec = await RequireDefinitionAsync(u, id, ct);
             var v = await u.S.GetVersionAsync(id, version, ct) ?? throw new WorkflowException("notFound", "That version does not exist.");
@@ -298,8 +305,10 @@ public sealed partial class WorkflowEngine
                 Category = "definition", Action = "rolledBack", SubjectType = "definition", SubjectId = id, DefinitionId = id, Actor = actor,
                 Data = new Dictionary<string, object?> { ["toVersion"] = (double)version },
             }, ct);
+            return await PublishInUnitAsync(u, id, $"Rolled back to version {version}", actor, ct);
         }, ct);
-        return await PublishAsync(id, $"Rolled back to version {version}", actor, ct);
+        await RefreshOwnershipAsync(ct);
+        return result;
     }
 
     /// <summary>Deletes a workflow that was never published.</summary>

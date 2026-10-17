@@ -1,0 +1,68 @@
+{
+ "name": "notify delivery is retried by the outbox, so retry and on-error on a notify step are flagged",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf_n",
+  "key": "notifyRetry",
+  "kind": "automation",
+  "title": "Notify",
+  "entity": "application",
+  "trigger": {
+   "type": "created"
+  },
+  "steps": [
+   {
+    "id": "n1",
+    "type": "notify",
+    "channel": "email",
+    "to": [
+     {
+      "user": "ali"
+     }
+    ],
+    "body": "Hi",
+    "retry": {
+     "max": 3,
+     "backoff": "fixed",
+     "initial": "PT1M"
+    }
+   },
+   {
+    "id": "n2",
+    "type": "notify",
+    "channel": "email",
+    "to": [
+     {
+      "user": "ali"
+     }
+    ],
+    "body": "Hi",
+    "onError": "continue"
+   },
+   {
+    "id": "n3",
+    "type": "notify",
+    "channel": "email",
+    "to": [
+     {
+      "user": "ali"
+     }
+    ],
+    "body": "Hi"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "notifyDelivery",
+   "node": "n1",
+   "severity": "warning"
+  },
+  {
+   "code": "notifyDelivery",
+   "node": "n2",
+   "severity": "warning"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

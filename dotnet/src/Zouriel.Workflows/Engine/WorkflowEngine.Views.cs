@@ -54,48 +54,34 @@ public sealed partial class WorkflowEngine
         string? entityTitle = null;
         if (i.Entity is not null && i.EntityId is not null) entityTitle = await RecordTitleAsync(u.Scope(i), i.Entity, i.EntityId, ct);
         var state = c.StateById(i.State);
+        // Everything that leaves the engine is masked (spec §11): step data, outputs, variables and the trigger.
+        var mask = await u.MaskerAsync(i.Entity, i.EntityId, ct);
         IReadOnlyList<StepView>? steps = null;
         IReadOnlyList<TokenView>? tokens = null;
         IReadOnlyList<TaskView>? tasks = null;
         object? outputs = null, vars = null;
         if (full)
         {
-            var sensitive = SensitiveFields(u, i.Entity);
             steps = (await u.S.ListStepsAsync(i.Id, ct)).OrderBy(s => s.StartedAt).Select(s => new StepView(
-                s.Id, s.NodeId, s.StepType, c.Step(s.NodeId)?.Title, s.Attempt, s.Status, MaskValue(s.Input, sensitive), MaskValue(s.Output, sensitive), s.Error,
-                Values.FormatInstant(s.StartedAt), s.EndedAt is null ? null : Values.FormatInstant(s.EndedAt.Value))).ToList();
+                s.Id, s.NodeId, s.StepType, c.Step(s.NodeId)?.Title, s.Attempt, s.Status, mask.Mask(s.Input is null ? null : Values.FromJson(s.Input)), mask.Mask(s.Output is null ? null : Values.FromJson(s.Output)),
+                mask.MaskText(s.Error), Values.FormatInstant(s.StartedAt), s.EndedAt is null ? null : Values.FormatInstant(s.EndedAt.Value))).ToList();
             var st = RunState.FromJson(i.Data);
             tokens = st.Tokens.Select(t => new TokenView(t.Id, t.Status, t.Waiting, t.Frames.Count == 0 ? null : CurrentStepId(c, t))).ToList();
-            outputs = st.Outputs;
-            vars = st.Vars;
+            outputs = mask.Mask(st.Outputs);
+            vars = mask.Mask(st.Vars);
             var list = new List<TaskView>();
             foreach (var t in await u.S.QueryTasksAsync(new TaskQuery { InstanceId = i.Id, Take = 500 }, ct)) list.Add(await TaskViewAsync(u, t, null, ct));
             tasks = list;
         }
         return new InstanceView(i.Id, i.DefinitionId, i.DefinitionKey, c.Definition.Title, i.Version, i.Kind, i.ParentId, i.Reason, i.Entity, i.EntityId, entityTitle,
             i.Status, state?.Key, state?.Label, i.Error, i.ErrorStepId, i.InitiatorId, i.InitiatorName, Values.FormatInstant(i.StartedAt), Values.FormatInstant(i.UpdatedAt),
-            i.EndedAt is null ? null : Values.FormatInstant(i.EndedAt.Value), i.TriggerJson is null ? null : Values.FromJson(i.TriggerJson), steps, tokens, outputs, vars, tasks);
+            i.EndedAt is null ? null : Values.FormatInstant(i.EndedAt.Value), i.TriggerJson is null ? null : mask.MaskTrigger(Values.FromJson(i.TriggerJson)), steps, tokens, outputs, vars, tasks);
     }
 
     private static string? CurrentStepId(CompiledDefinition c, Token t)
     {
         var f = t.Top;
         return c.Lists.TryGetValue(f.List, out var l) && f.Index < l.Count ? l[f.Index].Id : null;
-    }
-
-    private static object? MaskValue(string? json, HashSet<string> sensitive)
-    {
-        if (json is null) return null;
-        var v = Values.FromJson(json);
-        if (sensitive.Count == 0) return v;
-        return Mask(v, sensitive);
-
-        static object? Mask(object? v, HashSet<string> keys) => v switch
-        {
-            Dictionary<string, object?> d => d.ToDictionary(kv => kv.Key, kv => keys.Contains(kv.Key) && kv.Value is not null and not Dictionary<string, object?> ? "***" : Mask(kv.Value, keys)),
-            List<object?> l => l.Select(x => Mask(x, keys)).ToList(),
-            _ => v,
-        };
     }
 
     internal async Task<InstanceView> InstanceViewAsync(Uow u, string id, CancellationToken ct)
@@ -122,50 +108,69 @@ public sealed partial class WorkflowEngine
             return await InstanceViewAsync(u, id, ct);
         }, ct);
 
-    /// <summary>Runs the failed step of an instance in incident again.</summary>
-    public Task<InstanceView> RetryAsync(string id, WorkflowActor admin, CancellationToken ct = default) =>
+    /// <summary>Runs the failed step of an instance in incident again (the first incident, when there are several).</summary>
+    public Task<InstanceView> RetryAsync(string id, WorkflowActor admin, CancellationToken ct = default) => RetryAsync(id, admin, null, ct);
+
+    /// <summary>
+    /// Runs one failed step again. <paramref name="target"/> picks the incident by token id or failed step id
+    /// (null = the first). Other incidents stay; the instance remains <c>incident</c> until none is left.
+    /// </summary>
+    public Task<InstanceView> RetryAsync(string id, WorkflowActor admin, string? target, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
-            var x = await LoadExecAsync(u, id, ct);
-            if (x.I.Status != InstanceStatus.Incident) throw new WorkflowException("notInIncident", "Only a stopped instance can be retried.");
-            var t = x.S.Tokens.FirstOrDefault(t => t.Waiting == "incident") ?? throw new WorkflowException("notInIncident", "Nothing is waiting to be retried.");
-            await u.AuditAsync(new AuditEntry
-            {
-                Category = "instance", Action = "retried", SubjectType = "instance", SubjectId = id, InstanceId = id, DefinitionId = x.I.DefinitionId,
-                Entity = x.I.Entity, EntityId = x.I.EntityId, Actor = admin, CorrelationId = x.I.CorrelationId, Data = new Dictionary<string, object?> { ["step"] = x.I.ErrorStepId },
-            }, ct);
+            var (x, t) = await IncidentAsync(u, id, target, ct);
+            await u.AuditAsync(IncidentAudit(x, "retried", admin, new Dictionary<string, object?> { ["step"] = t.IncidentStepId, ["token"] = t.Id }), ct);
             t.Top.Attempt = 1;
-            Resume(t);
-            x.I.Status = InstanceStatus.Running;
-            x.I.Error = null;
-            x.I.ErrorStepId = null;
-            await DriveAsync(x, ct);
+            await ResumeIncidentAsync(x, t, advance: false, ct);
             return await InstanceViewAsync(u, id, ct);
         }, ct);
 
-    /// <summary>Continues an instance in incident after its failed step, optionally giving that step's outputs.</summary>
-    public Task<InstanceView> SkipAsync(string id, Dictionary<string, object?>? outputs, WorkflowActor admin, CancellationToken ct = default) =>
+    /// <summary>Continues an instance in incident after its failed step (the first incident, when there are several).</summary>
+    public Task<InstanceView> SkipAsync(string id, Dictionary<string, object?>? outputs, WorkflowActor admin, CancellationToken ct = default) => SkipAsync(id, outputs, admin, null, ct);
+
+    /// <summary>
+    /// Continues after one failed step, optionally giving that step's outputs. <paramref name="target"/> picks
+    /// the incident by token id or failed step id (null = the first); other incidents stay.
+    /// </summary>
+    public Task<InstanceView> SkipAsync(string id, Dictionary<string, object?>? outputs, WorkflowActor admin, string? target, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
-            var x = await LoadExecAsync(u, id, ct);
-            if (x.I.Status != InstanceStatus.Incident) throw new WorkflowException("notInIncident", "Only a stopped instance can skip a step.");
-            var t = x.S.Tokens.FirstOrDefault(t => t.Waiting == "incident") ?? throw new WorkflowException("notInIncident", "Nothing is waiting.");
-            var stepId = x.I.ErrorStepId;
+            var (x, t) = await IncidentAsync(u, id, target, ct);
+            var stepId = t.IncidentStepId;
             foreach (var (k, v) in outputs ?? []) if (stepId is not null) x.S.SetOutput(stepId, k, v);
-            await u.AuditAsync(new AuditEntry
-            {
-                Category = "instance", Action = "skipped", SubjectType = "instance", SubjectId = id, InstanceId = id, DefinitionId = x.I.DefinitionId,
-                Entity = x.I.Entity, EntityId = x.I.EntityId, Actor = admin, CorrelationId = x.I.CorrelationId,
-                Data = new Dictionary<string, object?> { ["step"] = stepId, ["outputs"] = outputs },
-            }, ct);
-            Resume(t);
-            if (stepId is not null) Advance(t);
-            x.I.Status = InstanceStatus.Running;
-            x.I.Error = null;
-            x.I.ErrorStepId = null;
-            await DriveAsync(x, ct);
+            await u.AuditAsync(IncidentAudit(x, "skipped", admin, new Dictionary<string, object?> { ["step"] = stepId, ["token"] = t.Id, ["outputs"] = outputs }), ct);
+            await ResumeIncidentAsync(x, t, advance: stepId is not null, ct);
             return await InstanceViewAsync(u, id, ct);
         }, ct);
+
+    private async Task<(Exec X, Token T)> IncidentAsync(Uow u, string id, string? target, CancellationToken ct)
+    {
+        var x = await LoadExecAsync(u, id, ct);
+        if (x.I.Status != InstanceStatus.Incident) throw new WorkflowException("notInIncident", "Only a stopped instance can be retried or skipped.");
+        var t = x.S.Tokens.FirstOrDefault(t => t.Waiting == "incident" && (target is null || t.Id == target || t.IncidentStepId == target))
+                ?? throw new WorkflowException("notInIncident", target is null ? "Nothing is waiting to be retried." : $"No incident matches '{target}'.");
+        return (x, t);
+    }
+
+    /// <summary>Resumes one incident token; the instance shows the next incident, if any is left, while the token runs on.</summary>
+    private async Task ResumeIncidentAsync(Exec x, Token t, bool advance, CancellationToken ct)
+    {
+        Resume(t);
+        t.IncidentError = null;
+        t.IncidentStepId = null;
+        if (advance) Advance(t);
+        var next = x.S.Tokens.FirstOrDefault(o => o.Waiting == "incident");
+        x.I.Status = next is null ? InstanceStatus.Running : InstanceStatus.Incident;
+        x.I.Error = next?.IncidentError;
+        x.I.ErrorStepId = next?.IncidentStepId;
+        await DriveAsync(x, ct);
+    }
+
+    private static AuditEntry IncidentAudit(Exec x, string action, WorkflowActor admin, Dictionary<string, object?> data) => new()
+    {
+        Category = "instance", Action = action, SubjectType = "instance", SubjectId = x.I.Id, InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId,
+        Entity = x.I.Entity, EntityId = x.I.EntityId, Actor = admin, CorrelationId = x.I.CorrelationId, Data = data,
+    };
 
     /// <summary>
     /// Moves a lifecycle record (or a waiting automation) to another version. Record states map by key
@@ -192,16 +197,27 @@ public sealed partial class WorkflowEngine
                 i.State = target?.Id;
                 i.Version = toVersion;
                 i.UpdatedAt = u.Now;
+                if (target is not null)
+                {
+                    i.Status = target.IsTerminal ? InstanceStatus.Completed : i.Status == InstanceStatus.OutOfSync ? InstanceStatus.Active : i.Status;
+                    i.EndedAt = target.IsTerminal ? u.Now : null;
+                }
                 if (target is not null && !target.IsTerminal) await PlanStateTimersAsync(u, to, i, target, ct);
                 await u.S.UpdateInstanceAsync(i, ct);
             }
             else
             {
+                // Every position a live token holds must point at the same step in the new version.
                 var state = RunState.FromJson(i.Data);
                 foreach (var t in state.Tokens.Where(t => t.Status is TokenStatus.Active or TokenStatus.Waiting))
                 foreach (var f in t.Frames)
-                    if (!to.Lists.TryGetValue(f.List, out var list) || f.Index > list.Count)
-                        throw new WorkflowException("cannotMigrate", $"Version {toVersion} no longer has the step this run is at. Cancel it or keep it on version {i.Version}.");
+                {
+                    var old = from.Lists.GetValueOrDefault(f.List);
+                    var same = to.Lists.TryGetValue(f.List, out var list) && old is not null && (f.Index < old.Count
+                        ? f.Index < list.Count && list[f.Index].Id == old[f.Index].Id
+                        : f.Index >= list.Count);
+                    if (!same) throw new WorkflowException("cannotMigrate", $"Version {toVersion} no longer has the step this run is at. Cancel it or keep it on version {i.Version}.");
+                }
                 i.Version = toVersion;
                 i.UpdatedAt = u.Now;
                 await u.S.UpdateInstanceAsync(i, ct);
@@ -234,7 +250,8 @@ public sealed partial class WorkflowEngine
         var assignees = (Values.FromJson(t.Assignees) as List<object?> ?? []).Select(Values.Text).ToList();
         var names = new List<string>();
         foreach (var a in assignees) names.Add((await Options.Identity.GetUserAsync(a, ct))?.Name ?? a);
-        var decisions = ParseDecisions(t);
+        var mask = await u.MaskerAsync(t.Entity, t.EntityId, ct);
+        var decisions = ParseDecisions(t).Select(d => d with { Data = d.Data is null ? null : mask.MaskMap(d.Data), Comment = mask.MaskText(d.Comment) }).ToList();
         var canDecide = t.Status == TaskStatus.Open && viewer?.IsUser == true && assignees.Contains(viewer.Id!) && decisions.All(d => d.UserId != viewer.Id);
         return new TaskView(t.Id, t.InstanceId, t.Kind, t.Title, t.Instructions, t.DefinitionKey, t.Entity, t.EntityId, t.EntityTitle, t.Status, assignees, names,
             t.Rule is null ? null : Values.FromJson(t.Rule), Values.FromJson(t.Outcomes) ?? new List<object?>(), decisions, t.Form is null ? null : JsonNode.Parse(t.Form),
@@ -260,7 +277,8 @@ public sealed partial class WorkflowEngine
         CompiledDefinition? rc = null;
         if (c is not null)
         {
-            record = await EnsureRecordInstanceAsync(u, c, entity, id, ct);
+            // Reading never writes: a record without a lifecycle instance yet is shown as it would be created.
+            record = await FindRecordInstanceAsync(u, c.DefinitionId, entity, id, ct) ?? TransientRecordInstance(c, entity, id, snap, u.Now);
             rc = record.Version == c.Version ? c : await CompiledAsync(u, record.DefinitionId, record.Version, ct);
             var lc = rc.Lifecycle;
             foreach (var s in lc.States)
@@ -323,7 +341,7 @@ public sealed partial class WorkflowEngine
             if (page.Count < AuditPage) break;
             next = page[^1].Seq + 1;
         }
-        var verifier = new AuditChainVerifier(purged);
+        var verifier = new AuditChainVerifier(purged, fromSeq);
         for (var next = fromSeq; ;)
         {
             var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { FromSeq = next, Take = AuditPage }, ct), ct);
@@ -332,7 +350,10 @@ public sealed partial class WorkflowEngine
             if (page.Count < AuditPage) break;
             next = page[^1].Seq + 1;
         }
-        return verifier.Result();
+        // The head is read without the unit's write lock: a writer committing meanwhile can only move it ahead,
+        // which shows up as entries missing at the end; read it before the last page in a busy system.
+        await using var s = await Options.Store.BeginAsync(ct);
+        return verifier.Result(await s.GetAuditHeadAsync(Options.Tenant, ct));
     }
 
     /// <summary>The exact ranges an <c>audit.purged</c> checkpoint recorded (<c>data.ranges: [[from, to], …]</c>).</summary>

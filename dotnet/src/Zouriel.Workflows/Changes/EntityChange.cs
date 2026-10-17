@@ -77,6 +77,8 @@ public sealed class LifecycleEvent
     public string? ActorId { get; set; }
     public string? ActorName { get; set; }
     public int Depth { get; set; }
+    /// <summary>The definition whose step applied the transition, if any (so it does not start itself again, spec §5).</summary>
+    public string? CausationDefinitionId { get; set; }
     public string? CorrelationId { get; set; }
     public DateTimeOffset At { get; set; }
 

@@ -37,7 +37,7 @@ public sealed partial class WorkflowEngine
                 default: throw new WorkflowException("unknownStepType", $"This engine cannot run '{step.Type}' steps.");
             }
         }
-        catch (Exception e) when (e is not OperationCanceledException and not WorkflowConcurrencyException and not WorkflowFieldOwnedException || e is WorkflowFieldOwnedException)
+        catch (Exception e) when (e is not OperationCanceledException and not WorkflowConcurrencyException)
         {
             await HandleStepErrorAsync(x, t, step, e, null, ct);
         }
@@ -236,7 +236,7 @@ public sealed partial class WorkflowEngine
             }
             case "date":
             {
-                var due = DateWaitDue(x, await scope.OperandAsync(u.Date, ct), u.Offset, u.At);
+                var due = DateWaitDue(x.U.Calendar, await scope.OperandAsync(u.Date, ct), u.Offset, u.At);
                 if (due is null || due <= x.U.Now)
                 {
                     x.S.SetOutput(w.Id, "timedOut", false);
@@ -284,7 +284,8 @@ public sealed partial class WorkflowEngine
         await x.U.AuditAsync(StepAudit(x, w, "waiting", new Dictionary<string, object?> { ["until"] = u.Type }), ct);
     }
 
-    internal static DateTimeOffset? DateWaitDue(Exec x, object? value, string? offset, string? at)
+    /// <summary>When a date or date-time value plus an offset arrives (date values land at <paramref name="at"/>, default 09:00, in the settings time zone).</summary>
+    internal static DateTimeOffset? DateWaitDue(WorkCalendar calendar, object? value, string? offset, string? at)
     {
         if (value is not string s || s.Length < 10) return null;
         DateTimeOffset baseTime;
@@ -292,10 +293,10 @@ public sealed partial class WorkflowEngine
         {
             if (!DateOnly.TryParseExact(s, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)) return null;
             var time = at is not null && TimeOnly.TryParseExact(at, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var tt) ? tt : new TimeOnly(9, 0);
-            baseTime = x.U.Calendar.AtLocal(d, time);
+            baseTime = calendar.AtLocal(d, time);
         }
         else if (!DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out baseTime)) return null;
-        return offset is null ? baseTime : x.U.Calendar.Add(baseTime, IsoDuration.Parse(offset));
+        return offset is null ? baseTime : calendar.Add(baseTime, IsoDuration.Parse(offset));
     }
 
     // ── Data ──────────────────────────────────────────────────────────────
@@ -362,7 +363,8 @@ public sealed partial class WorkflowEngine
         bool applied;
         try
         {
-            await ApplyTransitionCoreAsync(x.U, at.Lifecycle, entity, id, at.Transition, input, x.Actor, isPerson: false, auto: false, x.I.Depth + 1, ct);
+            using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
+                await ApplyTransitionCoreAsync(x.U, at.Lifecycle, entity, id, at.Transition, input, x.Actor, isPerson: false, auto: false, x.I.Depth + 1, ct);
             applied = true;
         }
         catch (WorkflowException e) when (at.IfNotAllowed == "skip" && e.Code is "notInFromState" or "guardFailed" or "notAllowed")
@@ -435,22 +437,27 @@ public sealed partial class WorkflowEngine
     {
         var scope = x.Scope(t);
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Values from records go into the path URL-encoded, so they cannot add segments, a query or another host.
+        var path = wh.Path is null ? "" : await RenderAsync(scope, wh.Path, ct, Uri.EscapeDataString);
         string url;
         if (wh.Connection is not null)
         {
             var conn = x.U.Settings.Webhooks?.Connections?.FirstOrDefault(c => c.Key == wh.Connection)
                        ?? throw new WorkflowException("unknownConnection", $"There is no connection called '{wh.Connection}'.");
-            url = conn.BaseUrl.TrimEnd('/') + "/" + (await RenderAsync(scope, wh.Path, ct)).TrimStart('/');
-            if (conn.Auth == "secret" && conn.SecretName is not null)
+            url = conn.BaseUrl.TrimEnd('/') + "/" + path.TrimStart('/');
+            if (conn.Auth == "secret" && conn.SecretName is not null && !x.U.Simulation)
             {
                 var secret = await Options.Secrets.GetSecretAsync(conn.SecretName, ct) ?? throw new WorkflowException("missingSecret", $"The secret for '{conn.Label}' is not set up.");
                 headers[conn.Header ?? "Authorization"] = conn.Header is null ? $"Bearer {secret}" : secret;
             }
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var connUri) || connUri.Authority != new Uri(conn.BaseUrl).Authority)
+                throw new WorkflowException("webhookOriginNotAllowed", "The webhook path must stay on the connection's address.");
         }
         else
         {
-            url = wh.Url! + (wh.Path is null ? "" : await RenderAsync(scope, wh.Path, ct));
-            var uri = new Uri(url);
+            url = wh.Url! + path;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+                throw new WorkflowException("webhookOriginNotAllowed", $"'{url}' is not a web address.");
             var origin = $"{uri.Scheme}://{uri.Authority}";
             if (x.U.Settings.Webhooks?.AllowedOrigins?.Contains(origin, StringComparer.OrdinalIgnoreCase) != true)
                 throw new WorkflowException("webhookOriginNotAllowed", $"{origin} is not an allowed address.");
@@ -472,7 +479,8 @@ public sealed partial class WorkflowEngine
             {
                 res = await Options.Webhooks.SendAsync(new WebhookRequest(wh.Method, url, headers, body, key, timeout), ct);
             }
-            catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+            // A timeout fails the attempt (and may be retried); the host shutting down stops the unit instead.
+            catch (Exception e) when (e is HttpRequestException || (e is OperationCanceledException && !ct.IsCancellationRequested))
             {
                 await HandleStepErrorAsync(x, t, wh, e, rec, ct);
                 return;
@@ -531,8 +539,27 @@ public sealed partial class WorkflowEngine
         else
         {
             var handler = Options.Actions.Resolve(desc) ?? throw new WorkflowException("actionUnavailable", $"No handler is registered for '{desc.Label}'.");
-            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            if (a.Timeout is not null) cts.CancelAfter(IsoDuration.Parse(a.Timeout).Approximate);
+            outputs = await RunActionAsync(x, t, a, handler, input, ct);
+        }
+        foreach (var (k, v) in outputs) x.S.SetOutput(a.Id, k, v);
+        await CompleteStepAsync(x, rec, a, x.S.Outputs.GetValueOrDefault(a.Id), ct);
+        scope.Invalidate();
+        Advance(t);
+    }
+
+    /// <summary>
+    /// Calls an action handler inside a savepoint: if it fails, whatever it wrote is undone before the step
+    /// fails (spec §7: a failed step changes nothing). A timeout of the step's own fails the attempt.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, object?>> RunActionAsync(Exec x, Token t, ActionStep a, IWorkflowAction handler, Dictionary<string, object?> input, CancellationToken ct)
+    {
+        var savepoint = "wf_action_" + NewId();
+        var undoable = await x.U.S.CreateSavepointAsync(savepoint, ct);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        if (a.Timeout is not null) cts.CancelAfter(IsoDuration.Parse(a.Timeout).Approximate);
+        try
+        {
+            IReadOnlyDictionary<string, object?> outputs;
             using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
             {
                 outputs = await handler.ExecuteAsync(new WorkflowActionContext
@@ -542,11 +569,19 @@ public sealed partial class WorkflowEngine
                     Initiator = x.I.InitiatorId is null ? null : WorkflowActor.User(x.I.InitiatorId, x.I.InitiatorName),
                 }, cts.Token);
             }
+            if (undoable) await x.U.S.ReleaseSavepointAsync(savepoint, ct);
+            return outputs;
         }
-        foreach (var (k, v) in outputs) x.S.SetOutput(a.Id, k, v);
-        await CompleteStepAsync(x, rec, a, x.S.Outputs.GetValueOrDefault(a.Id), ct);
-        scope.Invalidate();
-        Advance(t);
+        catch (Exception e) when (e is not WorkflowConcurrencyException && !ct.IsCancellationRequested)
+        {
+            if (undoable) await x.U.S.RollbackToSavepointAsync(savepoint, ct);
+            if (e is OperationCanceledException) throw new WorkflowException("timeout", $"'{a.Title ?? a.Action}' took longer than {a.Timeout}.");
+            throw;
+        }
+        finally
+        {
+            if (x.I.Entity is not null && x.I.EntityId is not null) x.U.ForgetMasker(x.I.Entity, x.I.EntityId);
+        }
     }
 
     private async Task SubWorkflowAsync(Exec x, Token t, SubWorkflowStep sub, CancellationToken ct)
@@ -677,6 +712,8 @@ public sealed partial class WorkflowEngine
     internal async Task RaiseIncidentAsync(Exec x, Token t, Step? step, string message, CancellationToken ct)
     {
         Wait(t, "incident", null);
+        t.IncidentError = message;
+        t.IncidentStepId = step?.Id;
         x.I.Status = InstanceStatus.Incident;
         x.I.Error = message;
         x.I.ErrorStepId = step?.Id;

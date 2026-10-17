@@ -9,29 +9,44 @@ public readonly partial record struct IsoDuration(bool Negative, int Years, int 
     [GeneratedRegex(@"^(-)?P(?!$)(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)W)?(?:(\d+)D)?(?:T(?=\d)(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$")]
     private static partial Regex Pattern();
 
+    /// <summary>The longest duration accepted (50 years); longer ones are refused as invalid.</summary>
+    public static readonly TimeSpan MaxLength = TimeSpan.FromDays(50 * 365);
+
+    /// <summary>Reads an ISO 8601 duration. False for malformed text and for durations longer than <see cref="MaxLength"/>.</summary>
     public static bool TryParse(string? s, out IsoDuration d)
     {
         d = default;
         if (string.IsNullOrWhiteSpace(s)) return false;
         var m = Pattern().Match(s.Trim());
         if (!m.Success) return false;
-        int G(int i) => m.Groups[i].Success ? int.Parse(m.Groups[i].Value, CultureInfo.InvariantCulture) : 0;
-        d = new IsoDuration(m.Groups[1].Success, G(2), G(3), G(4), G(5), G(6), G(7), G(8));
+        var parts = new int[9];
+        for (var i = 2; i <= 8; i++)
+        {
+            if (!m.Groups[i].Success) continue;
+            // Anything that does not fit an int is far beyond MaxLength anyway.
+            if (!int.TryParse(m.Groups[i].Value, NumberStyles.None, CultureInfo.InvariantCulture, out parts[i]) || parts[i] > 50 * 366 * 24 * 60) return false;
+        }
+        var days = parts[2] * 365.0 + parts[3] * 30.0 + parts[4] * 7.0 + parts[5] + parts[6] / 24.0 + parts[7] / 1440.0 + parts[8] / 86400.0;
+        if (days > MaxLength.TotalDays) return false;
+        var candidate = new IsoDuration(m.Groups[1].Success, parts[2], parts[3], parts[4], parts[5], parts[6], parts[7], parts[8]);
+        d = candidate;
         return true;
     }
 
+    /// <summary>Reads an ISO 8601 duration, refusing invalid ones with the code <c>badDuration</c>.</summary>
     public static IsoDuration Parse(string s) =>
-        TryParse(s, out var d) ? d : throw new FormatException($"'{s}' is not an ISO 8601 duration.");
+        TryParse(s, out var d) ? d : throw new WorkflowException("badDuration", $"'{s}' is not a duration (ISO 8601, at most 50 years).");
 
     public bool IsZero => Years == 0 && Months == 0 && Weeks == 0 && Days == 0 && Hours == 0 && Minutes == 0 && Seconds == 0;
 
     /// <summary>Whole days in the date part (weeks count 7).</summary>
     public int TotalDays => Weeks * 7 + Days;
 
+    /// <summary>The time part (hours, minutes, seconds).</summary>
     public TimeSpan TimePart => new(Hours, Minutes, Seconds);
 
     /// <summary>An approximate length, for ordering and limits only (months = 30 days).</summary>
-    public TimeSpan Approximate => TimeSpan.FromDays(Years * 365 + Months * 30 + TotalDays) + TimePart;
+    public TimeSpan Approximate => TimeSpan.FromDays(Years * 365.0 + Months * 30.0 + Weeks * 7.0 + Days) + TimeSpan.FromHours(Hours) + TimeSpan.FromMinutes(Minutes) + TimeSpan.FromSeconds(Seconds);
 }
 
 /// <summary>Adds durations to instants, in plain or working time.</summary>

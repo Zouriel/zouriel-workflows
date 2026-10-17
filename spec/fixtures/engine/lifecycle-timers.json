@@ -1,5 +1,5 @@
 {
- "name": "Lifecycle timers and modes: auto-after moves a record when time passes; leaving a state cancels its onEnter runs; observe mode records outside writes",
+ "name": "Lifecycle timers and modes: auto-after moves a record when time passes; leaving a state cancels its onEnter runs; a record that existed before publishing is shown in its state without creating anything until something changes it",
  "registry": "_registry.json",
  "users": "_users.json",
  "records": {
@@ -331,12 +331,39 @@
       "kind": "record",
       "record": "a1",
       "state": "withdrawn"
+     }
+    ]
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "old",
+    "transition": "startReview",
+    "actor": "rev1"
+   },
+   "expect": {
+    "instances": [
+     {
+      "definition": "applicationReview",
+      "kind": "record",
+      "record": "a1",
+      "state": "withdrawn"
      },
      {
       "definition": "applicationReview",
       "kind": "record",
       "record": "old",
-      "state": "submitted"
+      "state": "underReview"
+     }
+    ],
+    "audit": [
+     "lifecycle.created",
+     {
+      "is": "lifecycle.transitioned",
+      "data": {
+       "transition": "startReview"
+      }
      }
     ]
    }

@@ -53,7 +53,15 @@ public sealed partial class WorkflowEngine
         public List<string> Deferred { get; } = [];
         /// <summary>Instances that finished in this unit, so queued instances can start after them.</summary>
         public List<InstanceRecord> Finished { get; } = [];
-        public int StepBudget { get; set; } = engine.Options.MaxStepsPerRun;
+        /// <summary>
+        /// Every instance loaded in this unit, by id. An instance is only ever held once per unit, so code that
+        /// reaches the same instance twice (a run cancelling itself, a child resuming its parent) shares one copy.
+        /// </summary>
+        public Dictionary<string, Exec> Execs { get; } = [];
+        /// <summary>Instances whose steps are executing right now (a run never cancels itself while it does).</summary>
+        public HashSet<string> Driving { get; } = [];
+        /// <summary>Lifecycle record instances loaded in this unit, by id (shared like <see cref="Execs"/>).</summary>
+        public Dictionary<string, InstanceRecord> Records { get; } = [];
 
         public ValueScope Scope(InstanceRecord? i = null, RunState? state = null, Token? token = null, TriggerInfo? trigger = null, string? entity = null, string? entityId = null)
         {

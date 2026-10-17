@@ -108,22 +108,26 @@ against the record **after** the change). The record is the instance's `entity`.
 | `stateEntered` | Lifecycle sugar: `{ lifecycle: <definition key>, states: [stateKey…] }`. Fires when the record's lifecycle enters one of those states (by transition, auto transition or forced state). |
 | `transitionApplied` | `{ lifecycle, transitions: [transitionKey…] }`. Fires after one of those transitions is applied. |
 | `deleted` | When a record is deleted. `entity.*` reads the snapshot taken before deletion. |
-| `dateReached` | `{ field: <date/dateTime field>, offset: <signed ISO duration>, at?: "HH:MM" }`. Fires once per record when `field + offset` arrives (date fields fire at `at`, default `09:00`, in the settings time zone). Changing the field reschedules; clearing it cancels; a time already in the past when computed does not fire. |
+| `dateReached` | `{ field: <date/dateTime field>, offset: <signed ISO duration>, at?: "HH:MM" }`. Fires once per record when `field + offset` arrives (date fields fire at `at`, default `09:00`, in the settings time zone). Changing the field reschedules; clearing it or deleting the record cancels; a time already in the past when computed does not fire. Publishing plans the trigger for every existing record, replacing what an earlier version planned. |
 | `schedule` | `{ cron: "<5-field cron>" }` (settings time zone). With `forEach: { when?: condition, limit }` it starts one instance per matching record (at most `limit`, max 500); without it, one instance with no record (`entity.*` is `null`; `entity` must then be omitted). |
 | `manual` | `{ label, form?: <form definition>, who?: assignees }`. Started by a person from a record (`POST /records/{entity}/{id}/manual/{key}`). `input.*` reads the form. |
-| `signal` | `{ signal: <signal key> }`. Started by the app raising the signal for a record; `trigger.data.*` reads its data. |
+| `signal` | `{ signal: <signal key> }`. Started by the app raising the signal; `trigger.data.*` reads its data. A signal raised for a record starts automations of that record's entity; a signal raised for no record starts automations that have no `entity` (with no record, so they never queue). It resumes `wait` steps the same way: only waits about that record, or only waits about no record. |
 
 **Edge semantics.** A `fieldChanged` trigger fires on a change *into* a matching value. It does not
-fire for records already holding the value when the workflow is published, nor when a change leaves
-the value unchanged (`draft → draft`). One committed change event starts at most one instance per
-published trigger (engines enforce it with a unique `(triggerId, eventId)`). A change that is rolled
-back never starts anything.
+fire for records already holding the value when the workflow is first published, nor when a change
+leaves the value unchanged (`draft → draft`). Changes committed before the *first* publish never
+start it; publishing a later version does not drop changes still waiting to be processed. One
+committed change event starts at most one instance per published trigger (engines enforce it with a
+unique `(triggerId, eventId)`). A change that is rolled back never starts anything. Each start is its
+own unit of work: an automation that fails to start is audited as `trigger.failed` and does not stop
+the others the same event starts.
 
 **Loop protection.** Every instance carries `depth` (0 when started by a person or schedule; parent
 depth + 1 when started by a change the engine itself made). Changes made at depth ≥ `maxChainDepth`
 (settings, default 5) do not start instances; the engine writes an audit entry
 `trigger.suppressed` instead. A workflow's own writes never re-trigger the *same* definition unless
-its trigger sets `"retrigger": true`.
+its trigger sets `"retrigger": true`; this covers transitions its `applyTransition` steps apply
+(`stateEntered`/`transitionApplied` triggers) as well as field writes.
 
 **Concurrency** (`settings.concurrency`): `perRecordSerial` (default) — a new instance of the same
 definition for the same record waits in `queued` status until earlier ones finish; `parallel` — no
@@ -152,35 +156,46 @@ most one lifecycle per (entity, field) may be published; publishing a second is 
     long in a `from` state), or `{ when: <condition> }` (applied by the system when the condition
     becomes true while in a `from` state; checked on entering the state and after every committed
     change to the record). Auto transitions ignore `who` but respect `when` (guard).
-  - `hidden: true` keeps it off the record panel (only automations/system apply it).
+  - `hidden: true` keeps it off the record panel; people can never apply it, only automations and
+    the system.
 - **Applying a transition** (by a person, by `applyTransition`, or automatically) is one atomic
-  operation: check the record is in a `from` state → check `who` (people only) → check the guard →
+  operation: check the record is in a `from` state → check `who` and `hidden` (people only; the API
+  only accepts a signed-in person, never an anonymous or system caller) → check the guard →
   validate the input → run the current state's `onExit` (synchronous part) → write the field →
-  record the transition → run `onEnter` of the new state and the transition's `steps` → commit. Steps
+  record the transition → run the transition's `steps`, then `onEnter` of the new state (skipped if
+  those steps already moved the record on) → commit. Steps
   run until they first wait; the rest continues in the background. If any check fails nothing
   changes and the API returns the error code (`notInFromState`, `notAllowed`, `guardFailed`,
   `invalidInput`, `staleState`).
 - **Record instance.** A lifecycle has one long-lived instance per record (`status: active` until
   the record reaches a terminal state, then `completed`). It is created when the record is created
   (state = the record's value, or the initial state when empty, which also writes the field) or,
-  for records that existed before publishing, lazily on first access with the record's current
-  value. A value that matches no state puts the instance in `outOfSync`.
+  for records that existed before publishing, lazily the first time something changes the record
+  through the lifecycle (a transition, a forced state, an observed write) with the record's current
+  value. Reading a record never creates anything: the record panel shows the state the instance would
+  have. A value that matches no state puts the instance in `outOfSync`.
 - **Runs.** `onEnter`, `onExit`, `sla` and transition `steps` each execute as a *child run* of the
   record instance (`parentId` set), pinned to the same version. Runs started by `onEnter`/`sla` of a
   state are cancelled when the record leaves the state, unless the state sets `"keepRunsOnExit":
-  true`. Transition runs are never cancelled by later transitions.
+  true`; a run whose own step moves the record out is not cancelled (it finishes its steps).
+  Transition runs are never cancelled by later transitions.
 - **Field ownership.** `mode: "enforce"` (default): a committed write to the field that did not go
   through the engine is refused (the engine's change hook raises `fieldOwned` before commit) and
   audited (`lifecycle.writeRefused`). `mode: "observe"`: the write is accepted; if a transition from
   the old state to the new one exists it is recorded as applied by `system` (its guard, input and
-  `who` are not checked, its steps run); otherwise the instance becomes `outOfSync` until a valid
-  state is reached. Both are audited.
+  `who` are not checked, its steps run); otherwise the instance becomes `outOfSync` (`lifecycle.outOfSync`
+  with the value): the state's runs are cancelled and its timers dropped, and the instance keeps the
+  last state it agrees with. It is in sync again when the value returns to that state, when a write
+  reaches a state a transition from it leads to (recorded as that transition), or when a state is
+  forced. Both are audited.
 - **Force state.** Admins with `workflows.intervene` may move a record to any state with a reason
   (`POST /records/{entity}/{id}/force-state`). No guards or inputs are checked; `onExit`/`onEnter`
   run unless `skipSteps: true`. Audited as `lifecycle.forced`.
 - **Versions.** The record instance is pinned to the version it started on. Publishing a new version
   does not move existing records; `POST /instances/{id}/migrate` (or bulk by definition) moves them,
-  mapping states by key (a `stateMap` overrides; unmapped states make the request fail).
+  mapping states by key (a `stateMap` overrides; unmapped states make the request fail). Migrating
+  into a terminal state completes the instance. An automation instance can migrate only when every
+  position its live tokens hold points at the same step id in the new version.
 
 ## 7. Steps
 
@@ -192,7 +207,15 @@ applies to steps that call out (`action`, `webhook`, `notify`, `subWorkflow`). D
 *n* (1-based retries): fixed = `initial`; exponential = `initial × 2^(n-1)` capped at `maxDelay`.
 `onError`: `"stop"` (default — the run waits in `incident` for an admin), `"continue"` (carry on;
 outputs `error` holds the message), or `{ "steps": [...] }` (run these, then continue after the
-step). `timeout` (a duration) fails the attempt if the call takes longer.
+step). `timeout` (a duration) fails the attempt if the call takes longer (it counts as a failed
+attempt: retried, then `onError`). A failed `action` attempt undoes the record writes its handler
+made before failing.
+
+`notify` steps queue the message in the transactional outbox and complete; delivery happens after
+commit and is retried by the outbox (backing off up to an hour, parked for an admin after 10
+attempts). A step's `retry` and `onError` never apply to delivery, so lint warns about them on a
+`notify` step (`notifyDelivery`). Webhook `path` templates URL-encode the values they insert, so a
+value cannot add path segments, a query or another host; webhooks do not follow redirects.
 
 | Type | Shape | Outputs |
 |---|---|---|
@@ -220,7 +243,9 @@ be reached. When `due` passes first → `timedOut` (open tasks are cancelled). E
 assignees at `after` (counted from the step's start) without removing the original ones.
 
 Assignees resolve when the step starts; later changes to roles do not change an open task, except
-delegation and reassignment (audited).
+delegation and reassignment (audited). A task cannot be delegated to someone already on it or who
+already decided; after delegation or reassignment the rule is checked again, so a task the remaining
+decisions already settle completes at once.
 
 ## 8. Assignees and recipients
 
@@ -237,14 +262,17 @@ Durations are ISO 8601 (`P3D`, `PT4H`, `P1DT12H`, `P2W`, `P1M`; months/years add
 With `calendar: "working"` the duration counts only working time from settings (`calendar.days`,
 `calendar.hours` `["09:00","17:00"]`, `calendar.holidays` `["2026-12-25", …]`, `timeZone`): days count
 working days (landing at the same time of day, moved forward into working hours), hours count
-working hours. With no calendar in settings, `working` behaves as `calendar`.
+working hours. With no calendar in settings, `working` behaves as `calendar`. A duration longer than
+50 years is invalid (`badDuration`).
 
 ## 10. Instances, runs and statuses
 
 Instance statuses: `queued`, `running`, `waiting` (on a person, timer or signal), `incident`
 (a step failed with `onError: stop`), `completed`, `failed`, `cancelled`, and for record instances
 `active`/`outOfSync`. Admin operations: `cancel`, `retry` (re-run the failed step now), `skip`
-(continue after the failed step, with optional outputs), `migrate` (§6).
+(continue after the failed step, with optional outputs), `migrate` (§6). When parallel paths stop in
+several incidents, `retry` and `skip` act on one of them (chosen by token or failed step id, else the
+first); the instance stays `incident`, showing the next one's error, until none is left.
 
 ## 11. Audit
 
@@ -261,20 +289,34 @@ Categories and actions:
 
 - `definition`: `created`, `draftSaved`, `published` (data: `version`, `note`, `diff`), `archived`,
   `restored`, `rolledBack`, `deleted`.
-- `instance`: `started` (data: trigger), `queued`, `completed`, `failed`, `cancelled`, `migrated`,
-  `retried`, `skipped`, `incident`.
+- `instance`: `started` (data: trigger), `queued`, `completed`, `failed`, `cancelled` (actor: who
+  cancelled it, data: reason), `migrated`, `retried`, `skipped`, `incident`, `timerFailed` (a timer
+  could not be processed; data: purpose, error).
 - `step`: `started`, `completed` (data: outputs, masked), `failed` (data: error, attempt),
   `retryScheduled`, `skipped`, `branchTaken` (data: path), `waiting`.
 - `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked),
-  `autoTransitioned`, `forced` (data: reason), `writeRefused`, `writeObserved`, `outOfSync`.
+  `autoTransitioned`, `autoSkipped` (an automatic transition's time came but its guard failed or the
+  record had left the state), `slaBreached` (data: state, within), `forced` (data: reason),
+  `writeRefused`, `writeObserved`, `outOfSync`.
 - `task`: `created`, `assigned`, `reminded`, `escalated`, `delegated`, `reassigned`, `decided`
   (data: outcome, comment, answers masked), `cancelled`, `timedOut`.
-- `trigger`: `suppressed`, `skipped`, `paused`, `resumed`.
+- `trigger`: `suppressed`, `skipped`, `paused`, `resumed`, `failed` (data: eventId, error).
 - `settings`: `updated` (before/after).
-- `audit`: `exported`, `purged` (data: range, count — the checkpoint that keeps the chain verifiable).
+- `audit`: `exported`, `purged` (data: `category`, `before`, `count`, `ranges`: the exact
+  `[from, to]` runs of sequence numbers deleted — the checkpoint that keeps the chain verifiable).
 
-Masking: values of `sensitive` fields, and form answers marked sensitive in settings, are replaced by
-`"***"` in `before`, `after` and `data`.
+The chain head (last sequence number and hash) is kept as its own state, so purging the newest
+entries never restarts the chain. Verification checks each entry's hash, each link, strictly
+increasing sequence numbers, and accepts a gap only when every missing number lies in a range a purge
+recorded.
+
+Masking: values of `sensitive` fields, `entity.field` entries of `settings.audit.maskedFields`, and
+form answers listed there as `input.key`, are replaced by `"***"` wherever data leaves the engine:
+audit `before`, `after` and `data` (including step outputs and the trigger of `instance.started`), run
+and task views, and test runs. A value is masked under such a key anywhere in the data, and also when
+it equals (or, inside text, contains) the current value of a sensitive field of the record concerned,
+so values copied into variables or messages are hidden too. Fields that are not `readable` never
+appear in test runs.
 
 ## 12. Global settings
 

@@ -51,6 +51,7 @@ public sealed partial class WorkflowEngine
     /// </summary>
     public async Task<SimulationResult> SimulateAsync(string definitionJson, SimulationRequest req, WorkflowActor actor, CancellationToken ct = default)
     {
+        if (req.Events is { Count: > MaxSimulationEvents }) throw new WorkflowException("tooManyEvents", $"A test run can have at most {MaxSimulationEvents} events.");
         Normalize(req);
         var problems = await ValidateAsync(definitionJson, ct);
         if (problems.Any(p => p.Severity == "error")) return new SimulationResult(problems, [], [], [], null, "Fix the problems before testing.");
@@ -133,15 +134,21 @@ public sealed partial class WorkflowEngine
             foreach (var t in await u.S.QueryTasksAsync(new TaskQuery { Statuses = [Storage.TaskStatus.Open], Take = 1000 }, ct))
                 tasks.Add(await sim.TaskViewAsync(u, t, null, ct));
         }, ct);
+        // What a test run shows is masked like the audit log, and fields not readable by workflows are left out.
         Dictionary<string, object?>? record = null;
-        if (def.Entity is not null && req.EntityId is not null)
+        await using var view = await store.BeginAsync(ct);
+        var mask = await (await sim.OpenAsync(view, ct)).MaskerAsync(def.Entity, req.EntityId, ct);
+        if (def.Entity is not null && req.EntityId is not null && (await view.Entities.GetAsync(def.Entity, req.EntityId, ct))?.Values is { } current)
         {
-            await using var s = await store.BeginAsync(ct);
-            record = (await s.Entities.GetAsync(def.Entity, req.EntityId, ct))?.Values;
-            if (record is not null) record = AuditMask(record, SensitiveFields(await sim.OpenAsync(s, ct), def.Entity));
+            var readable = current.Where(kv => Registry.Field(def.Entity, kv.Key)?.IsReadable != false).ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+            record = mask.MaskMap(readable);
         }
-        return new SimulationResult(problems, log.Entries, instances, tasks, record, error);
+        var entries = log.Entries.Select(e => e with { Text = mask.MaskText(e.Text), Data = mask.Mask(e.Data) }).ToList();
+        return new SimulationResult(problems, entries, instances, tasks, record, error);
     }
+
+    /// <summary>The most events one test run may replay.</summary>
+    public const int MaxSimulationEvents = 50;
 
     /// <summary>Request bodies arrive with JSON elements inside; turn them into workflow values.</summary>
     private static void Normalize(SimulationRequest req)
@@ -156,9 +163,6 @@ public sealed partial class WorkflowEngine
             e.Values = N(e.Values);
         }
     }
-
-    private static Dictionary<string, object?> AuditMask(Dictionary<string, object?> values, HashSet<string> sensitive) =>
-        values.ToDictionary(kv => kv.Key, kv => sensitive.Contains(kv.Key) && kv.Value is not null ? "***" : kv.Value);
 
     private static async Task DrainAsync(WorkflowEngine sim, CancellationToken ct)
     {

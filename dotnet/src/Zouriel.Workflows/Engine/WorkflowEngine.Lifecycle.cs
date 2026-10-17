@@ -30,16 +30,14 @@ public sealed partial class WorkflowEngine
     }
 
     /// <summary>The record's lifecycle instance, created on first use for records that existed before the lifecycle was published.</summary>
-    internal async Task<InstanceRecord> EnsureRecordInstanceAsync(Uow u, CompiledDefinition c, string entity, string id, CancellationToken ct, WorkflowActor? actor = null)
+    internal async Task<InstanceRecord> EnsureRecordInstanceAsync(Uow u, CompiledDefinition c, string entity, string id, CancellationToken ct, WorkflowActor? actor = null,
+        object? initialValue = null)
     {
-        var existing = (await u.S.QueryInstancesAsync(new InstanceQuery
-        {
-            DefinitionId = c.DefinitionId, Entity = entity, EntityId = id, Kinds = [InstanceKinds.Record], Take = 10,
-        }, ct)).Where(i => i.Status != InstanceStatus.Cancelled).OrderByDescending(i => i.StartedAt).FirstOrDefault();
+        var existing = await FindRecordInstanceAsync(u, c.DefinitionId, entity, id, ct);
         if (existing is not null) return existing;
         var snap = await u.S.Entities.GetAsync(entity, id, ct) ?? throw new WorkflowException("noRecord", $"{entity} {id} does not exist.");
         var lc = c.Lifecycle;
-        var value = snap[lc.Field];
+        var value = initialValue ?? snap[lc.Field];
         var state = c.StateByKey(value);
         var writeInitial = false;
         if (state is null && Values.IsEmpty(value))
@@ -56,6 +54,7 @@ public sealed partial class WorkflowEngine
             EndedAt = state?.IsTerminal == true ? u.Now : null,
         };
         await u.S.AddInstanceAsync(inst, ct);
+        u.Records[inst.Id] = inst;
         await u.AuditAsync(new AuditEntry
         {
             Category = "lifecycle", Action = state is null ? "outOfSync" : "created", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id,
@@ -68,9 +67,36 @@ public sealed partial class WorkflowEngine
         return inst;
     }
 
+    /// <summary>The instance a record would get on first use (spec §6), built for display only and never saved.</summary>
+    internal static InstanceRecord TransientRecordInstance(CompiledDefinition c, string entity, string id, RecordSnapshot snap, DateTimeOffset now)
+    {
+        var value = snap[c.Lifecycle.Field];
+        var state = c.StateByKey(value) ?? (Values.IsEmpty(value) ? c.InitialState : null);
+        return new InstanceRecord
+        {
+            DefinitionId = c.DefinitionId, DefinitionKey = c.Definition.Key, Version = c.Version, Kind = InstanceKinds.Record, Entity = entity, EntityId = id,
+            State = state?.Id, Status = state is null ? InstanceStatus.OutOfSync : state.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active, StartedAt = now, UpdatedAt = now,
+        };
+    }
+
+    /// <summary>The record's lifecycle instance (not cancelled), as this unit holds it, or null when there is none yet.</summary>
+    internal static async Task<InstanceRecord?> FindRecordInstanceAsync(Uow u, string definitionId, string entity, string id, CancellationToken ct)
+    {
+        var held = u.Records.Values.FirstOrDefault(i => i.DefinitionId == definitionId && i.Entity == entity && i.EntityId == id && i.Status != InstanceStatus.Cancelled);
+        if (held is not null) return held;
+        var found = (await u.S.QueryInstancesAsync(new InstanceQuery
+        {
+            DefinitionId = definitionId, Entity = entity, EntityId = id, Kinds = [InstanceKinds.Record], Take = 10,
+        }, ct)).Where(i => i.Status != InstanceStatus.Cancelled).OrderByDescending(i => i.StartedAt).FirstOrDefault();
+        if (found is null) return null;
+        return u.Records.TryGetValue(found.Id, out var same) ? same : u.Records[found.Id] = found;
+    }
+
     private async Task WriteStateAsync(Uow u, CompiledDefinition c, string entity, string id, State state, WorkflowActor actor, int depth, string instanceId, CancellationToken ct)
     {
-        using var scope = WorkflowWriteScope.Begin(actor, depth, instanceId, c.DefinitionId);
+        // A workflow step applying the transition stays the cause of the field change, so it does not start itself again.
+        var outer = WorkflowWriteScope.Current;
+        using var scope = WorkflowWriteScope.Begin(actor, depth, outer?.InstanceId ?? instanceId, outer?.DefinitionId ?? c.DefinitionId, outer?.CorrelationId);
         scope.AllowOwned(entity, id, c.Lifecycle.Field);
         await u.S.Entities.SetFieldsAsync(entity, id, new Dictionary<string, object?> { [c.Lifecycle.Field] = state.Key }, ct);
     }
@@ -156,7 +182,8 @@ public sealed partial class WorkflowEngine
         u.Log?.Add("lifecycle", "transitioned", id, $"{from.Label} → {to.Label} ({tr.Label})");
         await QueueLifecycleEventAsync(u, c, entity, id, from.Key, to.Key, tr.Key, actor, depth, record.CorrelationId, ct);
         await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, actor, input, ct);
-        await EnterStateAsync(u, c, record, to, actor, trigger, depth, chain, ct, input);
+        // The transition's own steps may have moved the record on already; then that state was entered instead.
+        if (record.State == to.Id) await EnterStateAsync(u, c, record, to, actor, trigger, depth, chain, ct, input);
     }
 
     internal async Task<bool> MayApplyAsync(Uow u, ValueScope scope, Transition tr, WorkflowActor actor, InstanceRecord record, CancellationToken ct)
@@ -172,16 +199,22 @@ public sealed partial class WorkflowEngine
     {
         foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct))
             if (b.Purpose.StartsWith("auto:", StringComparison.Ordinal) || b.Purpose.StartsWith("sla:", StringComparison.Ordinal)) await u.S.RemoveBookmarkAsync(b.Id, ct);
-        if (from.KeepRunsOnExit != true)
-        {
-            foreach (var run in await u.S.QueryInstancesAsync(new InstanceQuery { ParentId = record.Id, Kinds = [InstanceKinds.Run], Take = 1000 }, ct))
-            {
-                if (InstanceStatus.IsFinished(run.Status)) continue;
-                if (run.Reason == $"onEnter:{from.Id}" || run.Reason == $"sla:{from.Id}")
-                    await CancelInstanceAsync(u, run, WorkflowActor.System, $"The record left “{from.Label}”.", ct);
-            }
-        }
+        if (from.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, from, ct);
         await StartRunAsync(u, record, c, $"onExit:{from.Id}", $"onExit:{from.Id}", trigger, actor, null, ct);
+    }
+
+    /// <summary>
+    /// Cancels the onEnter and SLA runs a state started (the record left it). A run that is executing right now
+    /// is the one moving the record, so it is left to finish its own steps.
+    /// </summary>
+    private async Task CancelStateRunsAsync(Uow u, InstanceRecord record, State state, CancellationToken ct)
+    {
+        foreach (var run in await u.S.QueryInstancesAsync(new InstanceQuery { ParentId = record.Id, Kinds = [InstanceKinds.Run], Take = 1000 }, ct))
+        {
+            if (InstanceStatus.IsFinished(run.Status) || u.Driving.Contains(run.Id)) continue;
+            if (run.Reason == $"onEnter:{state.Id}" || run.Reason == $"sla:{state.Id}")
+                await CancelInstanceAsync(u, run, WorkflowActor.System, $"The record left “{state.Label}”.", ct);
+        }
     }
 
     private async Task EnterStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State to, WorkflowActor actor, TriggerInfo trigger, int depth, int chain,
@@ -189,7 +222,8 @@ public sealed partial class WorkflowEngine
     {
         // onEnter steps can read the answers of the transition that entered the state (input.*).
         await StartRunAsync(u, record, c, $"onEnter:{to.Id}", $"onEnter:{to.Id}", trigger, actor, input, ct);
-        if (to.IsTerminal) return;
+        // The onEnter steps may already have moved the record on; then the new state planned its own timers.
+        if (to.IsTerminal || record.State != to.Id) return;
         await PlanStateTimersAsync(u, c, record, to, ct);
         await CheckAutoWhenAsync(u, c, record, depth, chain, ct);
     }
@@ -240,10 +274,38 @@ public sealed partial class WorkflowEngine
         {
             Lifecycle = c.Definition.Key, Entity = entity, EntityId = id, FromState = from, ToState = to, Transition = transition,
             ActorType = actor.Type, ActorId = actor.Id, ActorName = actor.Name, Depth = depth, CorrelationId = correlation, At = u.Now,
+            CausationDefinitionId = WorkflowWriteScope.Current?.DefinitionId,
         };
         await u.S.AddOutboxAsync(new OutboxRecord
         {
             Id = NewId(), Kind = OutboxKinds.Lifecycle, Payload = System.Text.Json.JsonSerializer.Serialize(ev, Definitions.JsonOptions), CreatedAt = u.Now,
+        }, ct);
+    }
+
+    /// <summary>Puts an out-of-sync record instance back in sync at a state (no steps run; its timers are planned).</summary>
+    private async Task FollowStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct)
+    {
+        if (record.State != state.Id) record.StateEnteredAt = u.Now;
+        record.State = state.Id;
+        record.Status = state.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
+        record.EndedAt = state.IsTerminal ? u.Now : null;
+        record.UpdatedAt = u.Now;
+        await u.S.UpdateInstanceAsync(record, ct);
+        if (!state.IsTerminal) await PlanStateTimersAsync(u, c, record, state, ct);
+    }
+
+    /// <summary>The record's value matches no state a transition leads to: stop the state's runs and timers and wait for a valid value.</summary>
+    private async Task MarkOutOfSyncAsync(Uow u, CompiledDefinition c, InstanceRecord record, State? state, object? value, CancellationToken ct)
+    {
+        foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+        if (state is not null && state.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, state, ct);
+        record.Status = InstanceStatus.OutOfSync;
+        record.UpdatedAt = u.Now;
+        await u.S.UpdateInstanceAsync(record, ct);
+        await u.AuditAsync(new AuditEntry
+        {
+            Category = "lifecycle", Action = "outOfSync", SubjectType = "record", SubjectId = record.EntityId!, Entity = record.Entity, EntityId = record.EntityId,
+            InstanceId = record.Id, DefinitionId = c.DefinitionId, CorrelationId = record.CorrelationId, Data = new Dictionary<string, object?> { ["value"] = value },
         }, ct);
     }
 
@@ -285,16 +347,22 @@ public sealed partial class WorkflowEngine
             return await RecordViewAsync(u, entity, id, admin, ct);
         }, ct);
 
-    /// <summary>Observe mode: an outside write moved the field. Record it as a transition when one fits.</summary>
+    /// <summary>
+    /// Observe mode (spec §6): an outside write moved the field. It is recorded as the transition from the
+    /// state the lifecycle agrees with to the new value when one exists (its steps run). Otherwise the
+    /// instance becomes <c>outOfSync</c> (the state's runs are cancelled and its timers dropped) until the
+    /// value returns to that state or a write reaches a state a transition leads to.
+    /// </summary>
     internal async Task ObserveWriteAsync(Uow u, CompiledDefinition c, EntityChange change, FieldChange fc, CancellationToken ct)
     {
-        var record = await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct);
+        // A record that existed before the lifecycle starts from the value it had before this write.
+        var record = await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct, initialValue: fc.From);
         if (record.Version != c.Version) c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
         var lc = c.Lifecycle;
         var to = c.StateByKey(fc.To);
         var from = c.StateById(record.State);
-        if (to is not null && from?.Id == to.Id) return;
         var tr = to is null || from is null ? null : lc.Transitions.FirstOrDefault(t => t.To == to.Id && t.From.Allows(lc, from.Id, t.To));
+        if (to is not null && from?.Id == to.Id && record.Status != InstanceStatus.OutOfSync) return;
         await u.AuditAsync(new AuditEntry
         {
             Category = "lifecycle", Action = "writeObserved", SubjectType = "record", SubjectId = change.EntityId, Entity = change.Entity, EntityId = change.EntityId,
@@ -302,25 +370,21 @@ public sealed partial class WorkflowEngine
             Before = new Dictionary<string, object?> { ["state"] = fc.From }, After = new Dictionary<string, object?> { ["state"] = fc.To },
             Data = new Dictionary<string, object?> { ["transition"] = tr?.Key },
         }, ct);
-        if (to is null || tr is null || from is null)
+        if (to is not null && from?.Id == to.Id)
         {
-            record.Status = to is null ? InstanceStatus.OutOfSync : to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
-            if (to is not null)
-            {
-                // No transition fits, but the value is a known state: follow it so the record stays in sync.
-                foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
-                record.State = to.Id;
-                record.StateEnteredAt = u.Now;
-                if (!to.IsTerminal) await PlanStateTimersAsync(u, c, record, to, ct);
-            }
-            record.UpdatedAt = u.Now;
-            await u.S.UpdateInstanceAsync(record, ct);
-            if (to is null)
-                await u.AuditAsync(new AuditEntry
-                {
-                    Category = "lifecycle", Action = "outOfSync", SubjectType = "record", SubjectId = change.EntityId, Entity = change.Entity, EntityId = change.EntityId,
-                    InstanceId = record.Id, DefinitionId = c.DefinitionId, Data = new Dictionary<string, object?> { ["value"] = fc.To },
-                }, ct);
+            // Back in the state the lifecycle agrees with: in sync again.
+            await FollowStateAsync(u, c, record, to, ct);
+            return;
+        }
+        if (from is null && to is not null)
+        {
+            // Out of sync on a value no state matched: any known state is valid again.
+            await FollowStateAsync(u, c, record, to, ct);
+            return;
+        }
+        if (tr is null || from is null || to is null)
+        {
+            await MarkOutOfSyncAsync(u, c, record, from, fc.To, ct);
             return;
         }
         var trigger = new TriggerInfo

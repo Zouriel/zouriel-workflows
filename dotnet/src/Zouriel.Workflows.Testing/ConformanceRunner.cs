@@ -157,11 +157,11 @@ public static class ConformanceRunner
         }
         else if (s["retry"] is JsonObject rt)
         {
-            await e.RetryAsync((await FindInstanceAsync(host, rt["definition"]!.GetValue<string>(), ct)).Id, Actor(host, JsonValue.Create("admin")), ct);
+            await e.RetryAsync((await FindInstanceAsync(host, rt["definition"]!.GetValue<string>(), ct)).Id, Actor(host, JsonValue.Create("admin")), rt["step"]?.GetValue<string>(), ct);
         }
         else if (s["skip"] is JsonObject sk)
         {
-            await e.SkipAsync((await FindInstanceAsync(host, sk["definition"]!.GetValue<string>(), ct)).Id, Map(sk["outputs"]), Actor(host, JsonValue.Create("admin")), ct);
+            await e.SkipAsync((await FindInstanceAsync(host, sk["definition"]!.GetValue<string>(), ct)).Id, Map(sk["outputs"]), Actor(host, JsonValue.Create("admin")), sk["step"]?.GetValue<string>(), ct);
         }
         else if (s["cancel"] is JsonObject cn)
         {

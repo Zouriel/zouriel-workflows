@@ -15,7 +15,12 @@ public sealed partial class WorkflowEngine
     /// <summary>How long a claimed outbox row or timer stays locked to one worker.</summary>
     public TimeSpan ClaimLock { get; set; } = TimeSpan.FromMinutes(2);
 
-    /// <summary>Processes committed change events and lifecycle events, and sends queued notifications. Returns how many rows it handled.</summary>
+    /// <summary>
+    /// Processes committed change events and lifecycle events, and sends queued notifications. Returns how
+    /// many rows it claimed. Each automation an event starts runs in its own unit of work: one failing
+    /// definition is audited (<c>trigger.failed</c>) and does not hold up the others; trigger claims keep a
+    /// reprocessed event from starting anything twice.
+    /// </summary>
     public async Task<int> ProcessOutboxAsync(int batch = 50, CancellationToken ct = default)
     {
         IReadOnlyList<OutboxRecord> rows;
@@ -26,24 +31,34 @@ public sealed partial class WorkflowEngine
         }
         foreach (var row in rows.OrderBy(r => r.CreatedAt))
         {
+            // The claim covers the whole batch; once it lapses another worker may take the rest, so stop.
+            if (row.LockedUntil is { } until && Now >= until) break;
             try
             {
-                if (row.Kind == OutboxKinds.Notify)
+                switch (row.Kind)
                 {
-                    var n = JsonSerializer.Deserialize<WorkflowNotification>(row.Payload, Definitions.JsonOptions)!;
-                    await Options.Notifications.SendAsync(n, ct);
-                    await MarkOutboxAsync(row, null, ct);
-                    continue;
+                    case OutboxKinds.Notify:
+                        await Options.Notifications.SendAsync(JsonSerializer.Deserialize<WorkflowNotification>(row.Payload, Definitions.JsonOptions)!, ct);
+                        break;
+                    case OutboxKinds.Change:
+                    {
+                        var change = EntityChange.FromJson(row.Payload);
+                        var starts = await RunAsync(async u =>
+                        {
+                            await ProcessChangeAsync(u, change, ct);
+                            return await ChangeStartsAsync(u, change, ct);
+                        }, ct);
+                        await StartEachAsync(starts, ct);
+                        break;
+                    }
+                    case OutboxKinds.Lifecycle:
+                    {
+                        var ev = JsonSerializer.Deserialize<LifecycleEvent>(row.Payload, Definitions.JsonOptions)!;
+                        await StartEachAsync(await RunAsync(u => LifecycleStartsAsync(u, ev, ct), ct), ct);
+                        break;
+                    }
                 }
-                await RunAsync(async u =>
-                {
-                    if (row.Kind == OutboxKinds.Change) await ProcessChangeAsync(u, EntityChange.FromJson(row.Payload), ct);
-                    else if (row.Kind == OutboxKinds.Lifecycle) await ProcessLifecycleEventAsync(u, JsonSerializer.Deserialize<LifecycleEvent>(row.Payload, Definitions.JsonOptions)!, ct);
-                    row.ProcessedAt = u.Now;
-                    row.LockedUntil = null;
-                    row.Error = null;
-                    await u.S.UpdateOutboxAsync(row, ct);
-                }, ct);
+                await MarkOutboxAsync(row, null, ct);
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
@@ -51,6 +66,35 @@ public sealed partial class WorkflowEngine
             }
         }
         return rows.Count;
+    }
+
+    /// <summary>An automation an event may start, worked out in one unit and started in its own.</summary>
+    internal sealed record EventStart(
+        string DefinitionId, int Version, string? Entity, string? EntityId, string EventId, TriggerInfo Info, WorkflowActor Actor, int Depth,
+        string? CausationDefinitionId, Dictionary<string, object?>? Snapshot, string? CorrelationId);
+
+    private async Task StartEachAsync(IReadOnlyList<EventStart> starts, CancellationToken ct)
+    {
+        foreach (var start in starts)
+        {
+            try
+            {
+                await RunAsync(async u =>
+                {
+                    var c = await CompiledAsync(u, start.DefinitionId, start.Version, ct);
+                    await TryStartFromEventAsync(u, c, start, ct);
+                }, ct);
+            }
+            catch (Exception e) when (e is not OperationCanceledException and not WorkflowConcurrencyException)
+            {
+                await RunAsync(u => u.AuditAsync(new AuditEntry
+                {
+                    Category = "trigger", Action = "failed", SubjectType = "definition", SubjectId = start.DefinitionId, DefinitionId = start.DefinitionId,
+                    Entity = start.Entity, EntityId = start.EntityId,
+                    Data = new Dictionary<string, object?> { ["eventId"] = start.EventId, ["error"] = e is WorkflowException ? e.Message : $"{e.GetType().Name}: {e.Message}" },
+                }, ct), ct);
+            }
+        }
     }
 
     private async Task MarkOutboxAsync(OutboxRecord row, string? error, CancellationToken ct)
@@ -99,8 +143,7 @@ public sealed partial class WorkflowEngine
                 await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct, change.Actor);
                 continue;
             }
-            var record = (await u.S.QueryInstancesAsync(new InstanceQuery { DefinitionId = c.DefinitionId, Entity = change.Entity, EntityId = change.EntityId, Kinds = [InstanceKinds.Record], Take = 5 }, ct))
-                .FirstOrDefault(i => i.Status != InstanceStatus.Cancelled);
+            var record = await FindRecordInstanceAsync(u, c.DefinitionId, change.Entity, change.EntityId, ct);
             if (change.Kind == ChangeKinds.Deleted)
             {
                 if (record is not null) await CancelInstanceAsync(u, record, change.Actor, "The record was deleted.", ct);
@@ -135,15 +178,18 @@ public sealed partial class WorkflowEngine
             // 2. Condition waits on this record.
             foreach (var b in await u.S.FindBookmarksAsync(BookmarkKinds.Condition, change.Entity, change.EntityId, null, ct))
                 await ReevaluateConditionWaitAsync(u, b, ct);
-            // 3. Date triggers follow changes to their date field.
-            await PlanDateTriggersAsync(u, change, ct);
         }
+        // 3. Date triggers follow changes to their date field (and are dropped with the record).
+        await PlanDateTriggersAsync(u, change, ct);
+    }
 
-        // 4. Automations.
-        var settings = u.Settings;
-        foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Entity == change.Entity && t.Type is TriggerTypes.Created or TriggerTypes.FieldChanged or TriggerTypes.Deleted).ToList())
+    /// <summary>The automations a change event matches (spec §5 created/fieldChanged/deleted).</summary>
+    internal async Task<IReadOnlyList<EventStart>> ChangeStartsAsync(Uow u, EntityChange change, CancellationToken ct)
+    {
+        var starts = new List<EventStart>();
+        foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Entity == change.Entity && t.Type is TriggerTypes.Created or TriggerTypes.FieldChanged or TriggerTypes.Deleted))
         {
-            // A change committed before this version was published belongs to the past (spec §5).
+            // A change committed before the workflow was first published belongs to the past (spec §5).
             if (change.At < t.PublishedAt) continue;
             var c = await CompiledAsync(u, t.DefinitionId, t.Version, ct);
             var trig = c.Definition.Trigger!;
@@ -168,9 +214,10 @@ public sealed partial class WorkflowEngine
                 default:
                     continue;
             }
-            await TryStartFromEventAsync(u, c, change.Entity, change.EntityId, change.EventId, info, change.Actor, change.Depth, change.CausationDefinitionId,
-                trig, change.Kind == ChangeKinds.Deleted ? change.Snapshot : null, change.CorrelationId, settings, ct);
+            starts.Add(new EventStart(t.DefinitionId, t.Version, change.Entity, change.EntityId, change.EventId, info, change.Actor, change.Depth,
+                change.CausationDefinitionId, change.Kind == ChangeKinds.Deleted ? change.Snapshot : null, change.CorrelationId));
         }
+        return starts;
     }
 
     private static bool SameValue(object? a, object? b) =>
@@ -183,40 +230,43 @@ public sealed partial class WorkflowEngine
     }
 
     /// <summary>Applies the start rules shared by every event trigger: pause, loop protection, dedupe and the extra condition.</summary>
-    private async Task TryStartFromEventAsync(Uow u, CompiledDefinition c, string entity, string entityId, string eventId, TriggerInfo info, WorkflowActor actor,
-        int depth, string? causationDefinitionId, Trigger trig, Dictionary<string, object?>? snapshot, string? correlationId, Settings.GlobalSettings settings, CancellationToken ct)
+    private async Task<bool> TryStartFromEventAsync(Uow u, CompiledDefinition c, EventStart e, CancellationToken ct)
     {
+        var trig = c.Definition.Trigger!;
         AuditEntry Suppressed(string reason) => new()
         {
             Category = "trigger", Action = reason == "paused" ? "paused" : "suppressed", SubjectType = "definition", SubjectId = c.DefinitionId, DefinitionId = c.DefinitionId,
-            Entity = entity, EntityId = entityId, Data = new Dictionary<string, object?> { ["reason"] = reason, ["eventId"] = eventId, ["depth"] = (double)depth },
+            Entity = e.Entity, EntityId = e.EntityId, Data = new Dictionary<string, object?> { ["reason"] = reason, ["eventId"] = e.EventId, ["depth"] = (double)e.Depth },
         };
-        if (settings.IsPaused(entity))
+        if (e.Entity is not null && u.Settings.IsPaused(e.Entity))
         {
             await u.AuditAsync(Suppressed("paused"), ct);
-            return;
+            return false;
         }
-        if (depth >= settings.MaxChainDepth)
+        if (e.Depth >= u.Settings.MaxChainDepth)
         {
             await u.AuditAsync(Suppressed("maxChainDepth"), ct);
-            return;
+            return false;
         }
-        if (causationDefinitionId == c.DefinitionId && trig.Retrigger != true) return;
-        if (!await u.S.TryClaimTriggerEventAsync(c.DefinitionId, eventId, ct)) return;
+        // A workflow's own writes never start the same workflow again unless it opts in (spec §5).
+        if (e.CausationDefinitionId == c.DefinitionId && trig.Retrigger != true) return false;
+        if (!await u.S.TryClaimTriggerEventAsync(c.DefinitionId, e.EventId, ct)) return false;
         if (trig.When is not null)
         {
             var scope = new ValueScope(u.S.Entities, Registry)
             {
-                Entity = entity, EntityId = entityId, EntityOverride = snapshot, Trigger = info, Now = u.Now, Today = u.Today,
+                Entity = e.Entity, EntityId = e.EntityId, EntityOverride = e.Snapshot, Trigger = e.Info, Now = u.Now, Today = u.Today,
             };
-            if (!await scope.ConditionAsync(trig.When, ct)) return;
+            if (!await scope.ConditionAsync(trig.When, ct)) return false;
         }
-        await StartAutomationAsync(u, c, entity, entityId, info, actor, depth, null, null, null, correlationId, ct, snapshot: snapshot);
+        return await StartAutomationAsync(u, c, e.Entity, e.EntityId, e.Info, e.Actor, e.Depth, null, null, null, e.CorrelationId, ct, snapshot: e.Snapshot) is not null;
     }
 
-    internal async Task ProcessLifecycleEventAsync(Uow u, LifecycleEvent ev, CancellationToken ct)
+    /// <summary>The automations a lifecycle event matches (spec §5 stateEntered/transitionApplied).</summary>
+    internal async Task<IReadOnlyList<EventStart>> LifecycleStartsAsync(Uow u, LifecycleEvent ev, CancellationToken ct)
     {
-        foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Lifecycle == ev.Lifecycle && t.Type is TriggerTypes.StateEntered or TriggerTypes.TransitionApplied).ToList())
+        var starts = new List<EventStart>();
+        foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Lifecycle == ev.Lifecycle && t.Type is TriggerTypes.StateEntered or TriggerTypes.TransitionApplied))
         {
             if (ev.At < t.PublishedAt) continue;
             var c = await CompiledAsync(u, t.DefinitionId, t.Version, ct);
@@ -228,8 +278,9 @@ public sealed partial class WorkflowEngine
                 Type = trig.Type, Field = null, From = ev.FromState, To = ev.ToState, Transition = ev.Transition, ActorType = ev.ActorType, ActorId = ev.ActorId,
                 ActorName = ev.ActorName, At = Values.FormatInstant(ev.At), EventId = ev.EventId,
             };
-            await TryStartFromEventAsync(u, c, ev.Entity, ev.EntityId, ev.EventId, info, ev.Actor, ev.Depth, null, trig, null, ev.CorrelationId, u.Settings, ct);
+            starts.Add(new EventStart(t.DefinitionId, t.Version, ev.Entity, ev.EntityId, ev.EventId, info, ev.Actor, ev.Depth, ev.CausationDefinitionId, null, ev.CorrelationId));
         }
+        return starts;
     }
 
     private async Task ReevaluateConditionWaitAsync(Uow u, BookmarkRecord b, CancellationToken ct)
@@ -251,21 +302,32 @@ public sealed partial class WorkflowEngine
     {
         foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == TriggerTypes.DateReached && t.Entity == change.Entity).ToList())
         {
-            if (change.Kind != ChangeKinds.Created && (t.Field is null || !change.Fields.ContainsKey(t.Field))) continue;
+            if (change.Kind == ChangeKinds.Updated && (t.Field is null || !change.Fields.ContainsKey(t.Field))) continue;
             var c = await CompiledAsync(u, t.DefinitionId, t.Version, ct);
-            await PlanDateTriggerAsync(u, c, change.Entity, change.EntityId, ct);
+            foreach (var old in (await u.S.FindDefinitionBookmarksAsync(c.DefinitionId, BookmarkKinds.DateReached, ct)).Where(b => b.EntityId == change.EntityId))
+                await u.S.RemoveBookmarkAsync(old.Id, ct);
+            if (change.Kind != ChangeKinds.Deleted) await PlanDateTriggerAsync(u, c, change.Entity, change.EntityId, ct);
         }
     }
 
-    internal async Task PlanDateTriggerAsync(Uow u, CompiledDefinition c, string entity, string id, CancellationToken ct)
+    /// <summary>
+    /// Plans a published dateReached trigger for every existing record (spec §5: "fires once per record when
+    /// field + offset arrives"), replacing the bookmarks an earlier version planned.
+    /// </summary>
+    internal async Task PlanDateTriggersForAllAsync(Uow u, CompiledDefinition c, CancellationToken ct)
+    {
+        foreach (var old in await u.S.FindDefinitionBookmarksAsync(c.DefinitionId, BookmarkKinds.DateReached, ct)) await u.S.RemoveBookmarkAsync(old.Id, ct);
+        if (c.Definition.Entity is not { } entity) return;
+        await foreach (var id in AllIdsAsync(u, entity, ct)) await PlanDateTriggerAsync(u, c, entity, id, ct);
+    }
+
+    /// <summary>Adds the bookmark for one record's date (the caller removed any earlier one).</summary>
+    private async Task PlanDateTriggerAsync(Uow u, CompiledDefinition c, string entity, string id, CancellationToken ct)
     {
         var trig = c.Definition.Trigger!;
-        foreach (var old in (await u.S.FindDefinitionBookmarksAsync(c.DefinitionId, BookmarkKinds.DateReached, ct)).Where(b => b.EntityId == id))
-            await u.S.RemoveBookmarkAsync(old.Id, ct);
         var snap = await u.S.Entities.GetAsync(entity, id, ct);
         var value = snap?[trig.Field!];
-        var x = new Exec(u, new InstanceRecord(), c, new RunState());
-        var due = DateWaitDue(x, value, trig.Offset, trig.At);
+        var due = DateWaitDue(u.Calendar, value, trig.Offset, trig.At);
         if (due is null || due <= u.Now) return;
         await u.S.AddBookmarkAsync(new BookmarkRecord
         {
@@ -287,6 +349,8 @@ public sealed partial class WorkflowEngine
         }
         foreach (var b in due.OrderBy(b => b.DueAt))
         {
+            // The claim covers the whole batch; once it lapses another worker may take the rest, so stop.
+            if (b.LockedUntil is { } until && Now >= until) break;
             try
             {
                 await RunAsync(u => FireAsync(u, b.Id, ct), ct);
@@ -376,8 +440,8 @@ public sealed partial class WorkflowEngine
                 else Advance(t);
                 break;
             case "retry":
+                // The step runs again; its step.started entry carries the attempt number.
                 Resume(t);
-                await u.AuditAsync(StepAudit(x, step, "retrying", new Dictionary<string, object?> { ["attempt"] = (double)t.Top.Attempt }), ct);
                 break;
             default:
                 return;
@@ -444,16 +508,22 @@ public sealed partial class WorkflowEngine
         if (trig?.Type != TriggerTypes.DateReached) return;
         var payload = Values.FromJson(b.Payload ?? "{}") as Dictionary<string, object?>;
         var info = new TriggerInfo { Type = TriggerTypes.DateReached, Field = trig.Field, To = payload?.GetValueOrDefault("value"), ActorType = "system", At = Values.FormatInstant(u.Now), EventId = $"date:{b.Id}" };
-        await TryStartFromEventAsync(u, c, b.Entity, b.EntityId, $"date:{b.Id}", info, WorkflowActor.System, 0, null, trig, null, null, u.Settings, ct);
+        await TryStartFromEventAsync(u, c, new EventStart(c.DefinitionId, c.Version, b.Entity, b.EntityId, $"date:{b.Id}", info, WorkflowActor.System, 0, null, null, null), ct);
     }
 
     // ── Signals and manual starts ─────────────────────────────────────────
 
-    /// <summary>The app raises a named event (spec §5 <c>signal</c>, §7 wait for signal), optionally about one record.</summary>
+    /// <summary>
+    /// The app raises a named event (spec §5 <c>signal</c>, §7 wait for signal), about one record or about
+    /// none. A signal about a record resumes only that record's waits and starts automations of its entity;
+    /// a signal about no record resumes only waits that are about no record and starts automations that
+    /// have no entity. Returns how many waits it resumed plus how many instances it started.
+    /// </summary>
     public Task<int> SignalAsync(string signal, string? entity, string? entityId, Dictionary<string, object?>? data, WorkflowActor? actor = null, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
             if (Registry.Signal(signal) is null) throw new WorkflowException("unknownSignal", $"'{signal}' is not a registered signal.");
+            if ((entity is null) != (entityId is null)) throw new WorkflowException("noRecord", "A signal is about a record (entity and id) or about none.");
             var resumed = 0;
             foreach (var b in await u.S.FindBookmarksAsync(BookmarkKinds.Signal, entity, entityId, signal, ct))
             {
@@ -474,15 +544,15 @@ public sealed partial class WorkflowEngine
             foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == TriggerTypes.Signal && t.Signal == signal).ToList())
             {
                 var c = await CompiledAsync(u, t.DefinitionId, t.Version, ct);
-                if (c.Definition.Entity is not null && (entity != c.Definition.Entity || entityId is null)) continue;
+                if (c.Definition.Entity != entity) continue;
                 var info = new TriggerInfo
                 {
                     Type = TriggerTypes.Signal, ActorType = actor?.Type ?? "system", ActorId = actor?.Id, ActorName = actor?.Name, At = Values.FormatInstant(u.Now),
                     EventId = eventId, Data = data,
                 };
-                await TryStartFromEventAsync(u, c, entity ?? "", entityId ?? "", eventId, info, actor ?? WorkflowActor.System, WorkflowWriteScope.Current?.Depth ?? 0,
-                    null, c.Definition.Trigger!, null, null, u.Settings, ct);
-                resumed++;
+                var start = new EventStart(c.DefinitionId, c.Version, entity, entityId, eventId, info, actor ?? WorkflowActor.System, WorkflowWriteScope.Current?.Depth ?? 0,
+                    WorkflowWriteScope.Current?.DefinitionId, null, null);
+                if (await TryStartFromEventAsync(u, c, start, ct)) resumed++;
             }
             return resumed;
         }, ct);

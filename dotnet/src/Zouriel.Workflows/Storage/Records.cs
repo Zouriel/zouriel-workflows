@@ -54,7 +54,7 @@ public sealed class TriggerRecord
     public string? Field { get; set; }
     public string? Lifecycle { get; set; }
     public string? Signal { get; set; }
-    /// <summary>When this version was published; changes committed before it never start it.</summary>
+    /// <summary>When the definition was first published; changes committed before it never start it (spec §5).</summary>
     public DateTimeOffset PublishedAt { get; set; }
     /// <summary>Extra matching data (JSON): lifecycle mode and initial state, schedule cron…</summary>
     public string? Data { get; set; }

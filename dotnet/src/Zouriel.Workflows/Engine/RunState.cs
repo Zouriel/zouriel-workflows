@@ -39,6 +39,9 @@ public sealed class Token
     public string? Waiting { get; set; }
     /// <summary>The step record of the step this token is waiting in (approval, wait, retry…).</summary>
     public string? StepRecord { get; set; }
+    /// <summary>While waiting in an incident: the error, and the step that failed (null when a loop guard stopped it).</summary>
+    public string? IncidentError { get; set; }
+    public string? IncidentStepId { get; set; }
 
     [System.Text.Json.Serialization.JsonIgnore] public Frame Top => Frames[^1];
 

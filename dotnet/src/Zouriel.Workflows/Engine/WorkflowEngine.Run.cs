@@ -73,7 +73,8 @@ public sealed partial class WorkflowEngine
             Data = new Dictionary<string, object?> { ["version"] = (double)c.Version, ["trigger"] = trigger.ToValue(), ["parent"] = parentId },
         }, ct);
         u.Log?.Add("instance", queued ? "queued" : "started", id, def.Title);
-        if (!queued && drive) await DriveAsync(new Exec(u, inst, c, state), ct);
+        var x = Track(new Exec(u, inst, c, state));
+        if (!queued && drive) await DriveAsync(x, ct);
         return inst;
     }
 
@@ -100,15 +101,23 @@ public sealed partial class WorkflowEngine
             Entity = record.Entity, EntityId = record.EntityId, Actor = initiator, CorrelationId = record.CorrelationId, CausationId = record.Id,
             Data = new Dictionary<string, object?> { ["run"] = reason, ["trigger"] = trigger.ToValue() },
         }, ct);
-        await DriveAsync(new Exec(u, inst, c, state), ct);
+        await DriveAsync(Track(new Exec(u, inst, c, state)), ct);
         return inst;
     }
 
+    private static Exec Track(Exec x)
+    {
+        x.U.Execs[x.I.Id] = x;
+        return x;
+    }
+
+    /// <summary>The instance as this unit holds it: loaded once, then shared (see <see cref="Uow.Execs"/>).</summary>
     internal async Task<Exec> LoadExecAsync(Uow u, string instanceId, CancellationToken ct)
     {
+        if (u.Execs.TryGetValue(instanceId, out var held)) return held;
         var inst = await u.S.GetInstanceAsync(instanceId, ct) ?? throw new WorkflowException("notFound", "That instance does not exist.");
         var c = await CompiledAsync(u, inst.DefinitionId, inst.Version, ct);
-        return new Exec(u, inst, c, RunState.FromJson(inst.Data));
+        return Track(new Exec(u, inst, c, RunState.FromJson(inst.Data)));
     }
 
     // ── Driving ───────────────────────────────────────────────────────────
@@ -116,26 +125,35 @@ public sealed partial class WorkflowEngine
     /// <summary>Runs every active token until all of them wait or finish, then saves the instance.</summary>
     internal async Task DriveAsync(Exec x, CancellationToken ct)
     {
-        if (x.I.Status is InstanceStatus.Running or InstanceStatus.Waiting) x.I.Status = InstanceStatus.Running;
-        while (!x.Ended)
+        // Already executing further up the call stack (e.g. a step resumed its own instance): that loop carries on.
+        if (!x.U.Driving.Add(x.I.Id)) return;
+        try
         {
-            var token = x.S.Tokens.FirstOrDefault(t => t.Status == TokenStatus.Active);
-            if (token is null) break;
-            if (--x.U.StepBudget < 0)
+            if (x.I.Status is InstanceStatus.Running or InstanceStatus.Waiting) x.I.Status = InstanceStatus.Running;
+            var budget = Options.MaxStepsPerRun;
+            while (!x.Ended)
             {
-                await RaiseIncidentAsync(x, token, null, "The workflow ran too many steps without waiting (a loop?). It was stopped.", ct);
-                break;
+                var token = x.S.Tokens.FirstOrDefault(t => t.Status == TokenStatus.Active);
+                if (token is null) break;
+                if (--budget < 0)
+                {
+                    await RaiseIncidentAsync(x, token, null, "The workflow ran too many steps without waiting (a loop?). It was stopped.", ct);
+                    break;
+                }
+                await StepTokenAsync(x, token, ct);
             }
-            await StepTokenAsync(x, token, ct);
+            if (!x.Ended)
+            {
+                if (x.S.Tokens.Any(t => t.Waiting == "incident")) x.I.Status = InstanceStatus.Incident;
+                else if (x.S.Tokens.Any(t => t.Status == TokenStatus.Waiting)) x.I.Status = InstanceStatus.Waiting;
+                else if (x.S.Tokens.All(t => t.Status is TokenStatus.Done or TokenStatus.Cancelled)) await FinishAsync(x, InstanceStatus.Completed, null, ct);
+            }
+            await SaveAsync(x, ct);
         }
-        if (!x.Ended)
+        finally
         {
-            var anyWaiting = x.S.Tokens.Any(t => t.Status == TokenStatus.Waiting);
-            if (x.I.Status == InstanceStatus.Incident) { }
-            else if (anyWaiting) x.I.Status = InstanceStatus.Waiting;
-            else if (x.S.Tokens.All(t => t.Status is TokenStatus.Done or TokenStatus.Cancelled)) await FinishAsync(x, InstanceStatus.Completed, null, ct);
+            x.U.Driving.Remove(x.I.Id);
         }
-        await SaveAsync(x, ct);
     }
 
     internal static async Task SaveAsync(Exec x, CancellationToken ct)
@@ -300,7 +318,8 @@ public sealed partial class WorkflowEngine
 
     // ── Finishing ─────────────────────────────────────────────────────────
 
-    internal async Task FinishAsync(Exec x, string status, string? error, CancellationToken ct)
+    /// <summary>Ends an instance: cancels its live tokens, records the outcome and resumes a waiting parent. <paramref name="by"/> is who ended it (default: the workflow itself).</summary>
+    internal async Task FinishAsync(Exec x, string status, string? error, CancellationToken ct, WorkflowActor? by = null)
     {
         foreach (var t in x.S.Tokens.Where(t => t.Status is TokenStatus.Active or TokenStatus.Waiting).ToList()) await CancelTokenAsync(x, t, ct);
         x.Ended = true;
@@ -312,7 +331,7 @@ public sealed partial class WorkflowEngine
         await x.U.AuditAsync(new AuditEntry
         {
             Category = "instance", Action = action, SubjectType = "instance", SubjectId = x.I.Id, InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId,
-            Entity = x.I.Entity, EntityId = x.I.EntityId, Actor = x.Actor, CorrelationId = x.I.CorrelationId,
+            Entity = x.I.Entity, EntityId = x.I.EntityId, Actor = by ?? x.Actor, CorrelationId = x.I.CorrelationId,
             Data = error is null ? null : new Dictionary<string, object?> { ["reason"] = error },
         }, ct);
         x.U.Log?.Add("instance", action, x.I.Id, error);
@@ -340,24 +359,18 @@ public sealed partial class WorkflowEngine
             return;
         }
         var x = await LoadExecAsync(u, inst.Id, ct);
-        await FinishAsync(x, InstanceStatus.Cancelled, reason, ct);
-        // FinishAsync audited as the workflow; record who asked.
-        await u.AuditAsync(new AuditEntry
-        {
-            Category = "instance", Action = "cancelRequested", SubjectType = "instance", SubjectId = inst.Id, InstanceId = inst.Id, DefinitionId = inst.DefinitionId,
-            Entity = inst.Entity, EntityId = inst.EntityId, Actor = actor, CorrelationId = inst.CorrelationId, Data = new Dictionary<string, object?> { ["reason"] = reason },
-        }, ct);
+        await FinishAsync(x, InstanceStatus.Cancelled, reason, ct, actor);
         await SaveAsync(x, ct);
     }
 
     /// <summary>Starts the oldest queued instance for each record whose previous instance just finished.</summary>
     private async Task StartQueuedAfterAsync(Uow u, CancellationToken ct)
     {
-        var handled = new HashSet<string>();
+        // u.Finished grows while this runs: a dequeued instance that finishes at once is looked at too, so the queue drains.
         for (var i = 0; i < u.Finished.Count; i++)
         {
             var done = u.Finished[i];
-            if (done.Kind != InstanceKinds.Automation || done.EntityId is null || !handled.Add($"{done.DefinitionId}:{done.EntityId}")) continue;
+            if (done.Kind != InstanceKinds.Automation || done.EntityId is null) continue;
             var queued = (await u.S.QueryInstancesAsync(new InstanceQuery
             {
                 DefinitionId = done.DefinitionId, Entity = done.Entity, EntityId = done.EntityId, Statuses = [InstanceStatus.Queued], Kinds = [InstanceKinds.Automation], Take = 1000,
@@ -374,7 +387,7 @@ public sealed partial class WorkflowEngine
             await u.AuditAsync(new AuditEntry
             {
                 Category = "instance", Action = "started", SubjectType = "instance", SubjectId = x.I.Id, InstanceId = x.I.Id, DefinitionId = x.I.DefinitionId,
-                Entity = x.I.Entity, EntityId = x.I.EntityId, CorrelationId = x.I.CorrelationId, Data = new Dictionary<string, object?> { ["fromQueue"] = true },
+                Entity = x.I.Entity, EntityId = x.I.EntityId, Actor = WorkflowActor.System, CorrelationId = x.I.CorrelationId, Data = new Dictionary<string, object?> { ["fromQueue"] = true },
             }, ct);
             await DriveAsync(x, ct);
         }
@@ -466,8 +479,8 @@ public sealed partial class WorkflowEngine
         }, ct);
     }
 
-    /// <summary>Renders a template to text: enums as labels, users as names, booleans as Yes/No.</summary>
-    internal async Task<string> RenderAsync(ValueScope scope, Template? t, CancellationToken ct)
+    /// <summary>Renders a template to text: enums as labels, users as names, booleans as Yes/No. <paramref name="encode"/> is applied to values only.</summary>
+    internal async Task<string> RenderAsync(ValueScope scope, Template? t, CancellationToken ct, Func<string, string>? encode = null)
     {
         if (t is null) return "";
         var sb = new System.Text.StringBuilder();
@@ -478,16 +491,22 @@ public sealed partial class WorkflowEngine
                 sb.Append(part);
                 continue;
             }
-            var value = await scope.ResolveAsync(r.Ref, ct);
-            var field = scope.FieldOf(r.Ref);
-            if (field?.Type == FieldTypes.Enum) sb.Append(field.OptionLabel(value));
-            else if ((field?.Type == FieldTypes.User || r.Ref is "trigger.actor" or "instance.initiator") && value is not null)
-                sb.Append((await Options.Identity.GetUserAsync(Values.Text(value), ct))?.Name ?? Values.Text(value));
-            else if (field?.Type == FieldTypes.Relation && value is not null && field.Entity is not null)
-                sb.Append(await RecordTitleAsync(scope, field.Entity, Values.Text(value), ct) ?? Values.Text(value));
-            else sb.Append(Values.Text(value));
+            var text = await RenderValueAsync(scope, r.Ref, ct);
+            sb.Append(encode is null ? text : encode(text));
         }
         return sb.ToString();
+    }
+
+    private async Task<string> RenderValueAsync(ValueScope scope, string path, CancellationToken ct)
+    {
+        var value = await scope.ResolveAsync(path, ct);
+        var field = scope.FieldOf(path);
+        if (field?.Type == FieldTypes.Enum) return field.OptionLabel(value);
+        if ((field?.Type == FieldTypes.User || path is "trigger.actor" or "instance.initiator") && value is not null)
+            return (await Options.Identity.GetUserAsync(Values.Text(value), ct))?.Name ?? Values.Text(value);
+        if (field?.Type == FieldTypes.Relation && value is not null && field.Entity is not null)
+            return await RecordTitleAsync(scope, field.Entity, Values.Text(value), ct) ?? Values.Text(value);
+        return Values.Text(value);
     }
 
     internal async Task<string?> RecordTitleAsync(ValueScope scope, string entity, string id, CancellationToken ct)
@@ -537,22 +556,4 @@ public sealed partial class WorkflowEngine
         }
         return ids.Where(i => i.Length > 0).Distinct().ToList();
     }
-
-    /// <summary>The sensitive keys of an entity (registry flags plus <c>settings.audit.maskedFields</c>).</summary>
-    internal HashSet<string> SensitiveFields(Uow u, string? entity)
-    {
-        var set = new HashSet<string>(StringComparer.Ordinal);
-        if (entity is null) return set;
-        foreach (var f in Registry.Entity(entity)?.Fields ?? []) if (f.IsSensitive) set.Add(f.Key);
-        foreach (var m in u.Settings.Audit?.MaskedFields ?? [])
-        {
-            var parts = m.Split('.');
-            if (parts.Length == 2 && parts[0] == entity) set.Add(parts[1]);
-        }
-        return set;
-    }
-
-    /// <summary>Form answer keys to mask (<c>input.KEY</c> entries in <c>settings.audit.maskedFields</c>).</summary>
-    internal static HashSet<string> SensitiveInputs(Uow u) =>
-        (u.Settings.Audit?.MaskedFields ?? []).Where(m => m.StartsWith("input.", StringComparison.Ordinal)).Select(m => m[6..]).ToHashSet(StringComparer.Ordinal);
 }

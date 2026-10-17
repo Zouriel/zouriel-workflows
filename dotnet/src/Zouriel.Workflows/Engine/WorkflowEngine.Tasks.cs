@@ -102,6 +102,7 @@ public sealed partial class WorkflowEngine
         var needsComment = task.RequireComment == "always" || (task.RequireComment == "reject" && outcome == "rejected");
         if (needsComment && string.IsNullOrWhiteSpace(comment)) throw new WorkflowException("commentRequired", "Add a comment to explain your decision.");
         data ??= [];
+        if (Values.Serialize(data).Length > MaxDecisionDataBytes) throw new WorkflowException("tooLarge", "The answers are too large.");
         if (task.Form is not null)
         {
             var errors = Options.FormValidator.Validate(JsonNode.Parse(task.Form)!.AsObject(), data, u.Today);
@@ -113,7 +114,13 @@ public sealed partial class WorkflowEngine
         await u.AuditAsync(TaskAudit(u, task, "decided", user, new Dictionary<string, object?> { ["outcome"] = outcome, ["comment"] = comment, ["answers"] = data }), ct);
         u.Log?.Add("task", "decided", task.Id, $"{user.Name ?? user.Id}: {outcome}");
 
-        var settled = Settle(task, decisions, assignees.Count);
+        await SaveAndSettleAsync(u, task, decisions, assignees.Count, ct);
+    }
+
+    /// <summary>Saves a task and, when its decisions now settle it (spec §7 rules), completes it and continues the workflow.</summary>
+    private async Task SaveAndSettleAsync(Uow u, TaskRecord task, List<TaskDecision> decisions, int assigneeCount, CancellationToken ct)
+    {
+        var settled = Settle(task, decisions, assigneeCount);
         if (settled is null)
         {
             await u.S.UpdateTaskAsync(task, ct);
@@ -125,6 +132,9 @@ public sealed partial class WorkflowEngine
         await u.S.UpdateTaskAsync(task, ct);
         await ContinueAfterTaskAsync(u, task, settled, decisions, ct);
     }
+
+    /// <summary>The largest decision answers accepted, as JSON (256 KB).</summary>
+    public const int MaxDecisionDataBytes = 256 * 1024;
 
     private static Dictionary<string, object?> DecisionValue(TaskDecision d) => new()
     {
@@ -231,12 +241,16 @@ public sealed partial class WorkflowEngine
             if (!task.AllowDelegation) throw new WorkflowException("notAllowed", "This task cannot be handed to someone else.");
             var list = (Values.FromJson(task.Assignees) as List<object?> ?? []).Select(Values.Text).ToList();
             if (!list.Contains(user.Id!)) throw new WorkflowException("notAllowed", "This task is not assigned to you.");
-            if (ParseDecisions(task).Any(d => d.UserId == user.Id)) throw new WorkflowException("alreadyDecided", "You have already decided this task.");
+            var decisions = ParseDecisions(task);
+            if (decisions.Any(d => d.UserId == user.Id)) throw new WorkflowException("alreadyDecided", "You have already decided this task.");
+            // Handing it to someone already on it (or who already decided) would quietly lower what the rule needs.
+            if (list.Contains(toUserId) || decisions.Any(d => d.UserId == toUserId))
+                throw new WorkflowException("alreadyAssigned", "That person is already on this task.");
             if (await Options.Identity.GetUserAsync(toUserId, ct) is null) throw new WorkflowException("unknownUser", "That person does not exist.");
             list[list.IndexOf(user.Id!)] = toUserId;
-            task.Assignees = Values.Serialize(list.Distinct().ToList());
-            await u.S.UpdateTaskAsync(task, ct);
+            task.Assignees = Values.Serialize(list);
             await u.AuditAsync(TaskAudit(u, task, "delegated", user, new Dictionary<string, object?> { ["from"] = user.Id, ["to"] = toUserId, ["note"] = note }), ct);
+            await SaveAndSettleAsync(u, task, decisions, list.Count, ct);
             await NotifyAssigneesAsync(u, task, [toUserId], $"Handed to you: {task.Title}", note ?? $"{user.Name ?? user.Id} passed “{task.Title}” to you.", $"delegated:{user.Id}", ct);
             return await TaskViewAsync(u, task, user, ct);
         }, ct);
@@ -248,15 +262,17 @@ public sealed partial class WorkflowEngine
             var task = await u.S.GetTaskAsync(taskId, ct) ?? throw new WorkflowException("notFound", "That task does not exist.");
             if (task.Status != TaskStatus.Open) throw new WorkflowException("taskClosed", "This task has already been completed.");
             if (userIds.Count == 0) throw new WorkflowException("noAssignees", "Choose at least one person.");
+            foreach (var id in userIds)
+                if (await Options.Identity.GetUserAsync(id, ct) is null) throw new WorkflowException("unknownUser", $"'{id}' is not a person the app knows.");
             var before = Values.FromJson(task.Assignees);
-            var decided = ParseDecisions(task).Select(d => d.UserId);
-            task.Assignees = Values.Serialize(userIds.Concat(decided).Distinct().ToList());
-            await u.S.UpdateTaskAsync(task, ct);
-            await u.AuditAsync(new AuditEntry
+            var decisions = ParseDecisions(task);
+            var assignees = userIds.Concat(decisions.Select(d => d.UserId)).Distinct().ToList();
+            task.Assignees = Values.Serialize(assignees);
+            await u.AuditAsync(TaskAudit(u, task, "reassigned", admin, new Dictionary<string, object?> { ["reason"] = reason }) with
             {
-                Category = "task", Action = "reassigned", SubjectType = "task", SubjectId = task.Id, InstanceId = task.InstanceId, Entity = task.Entity,
-                EntityId = task.EntityId, Actor = admin, Before = before, After = Values.FromJson(task.Assignees), Data = new Dictionary<string, object?> { ["reason"] = reason },
+                Before = before, After = Values.FromJson(task.Assignees),
             }, ct);
+            await SaveAndSettleAsync(u, task, decisions, assignees.Count, ct);
             await NotifyAssigneesAsync(u, task, userIds, $"Assigned to you: {task.Title}", reason ?? $"“{task.Title}” has been assigned to you.", $"reassigned:{u.Now.ToUnixTimeMilliseconds()}", ct);
             return await TaskViewAsync(u, task, admin, ct);
         }, ct);

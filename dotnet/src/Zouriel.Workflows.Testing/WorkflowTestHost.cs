@@ -92,13 +92,20 @@ public sealed class WorkflowTestHost
     }
 }
 
+/// <summary>People for tests: users with roles, groups and a manager, added by hand.</summary>
 public sealed class FakeIdentity : IWorkflowIdentity
 {
     private readonly ConcurrentDictionary<string, (WorkflowUser User, string? Manager)> _users = new();
 
+    /// <summary>User ids whose lookup throws, to test how the engine copes with a failing identity service.</summary>
+    public ConcurrentDictionary<string, bool> Broken { get; } = new();
+
+    /// <summary>Adds (or replaces) a user.</summary>
     public void Add(WorkflowUser user, string? manager = null) => _users[user.Id] = (user, manager);
 
-    public Task<WorkflowUser?> GetUserAsync(string id, CancellationToken ct = default) => Task.FromResult(_users.TryGetValue(id, out var u) ? u.User : null);
+    /// <inheritdoc />
+    public Task<WorkflowUser?> GetUserAsync(string id, CancellationToken ct = default) =>
+        Broken.ContainsKey(id) ? throw new InvalidOperationException($"The directory failed looking up '{id}'.") : Task.FromResult(_users.TryGetValue(id, out var u) ? u.User : null);
 
     public Task<IReadOnlyList<string>> GetUsersInRoleAsync(string role, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<string>>(_users.Values.Where(u => u.User.Roles?.Contains(role) == true).Select(u => u.User.Id).OrderBy(x => x, StringComparer.Ordinal).ToList());
@@ -155,25 +162,27 @@ public sealed class FakeActions : IWorkflowActionResolver
 
     public IReadOnlyList<WorkflowActionContext> Calls => _calls.ToList();
 
-    public void Set(string key, IReadOnlyDictionary<string, object?>? output = null, int failTimes = 0, string? failMessage = null) =>
-        _behaviours[key] = new Behaviour(output ?? new Dictionary<string, object?>(), failTimes, failMessage ?? "The action failed.");
+    /// <summary>Sets what an action does: its outputs, how many first calls fail, and how long each call takes (honouring cancellation).</summary>
+    public void Set(string key, IReadOnlyDictionary<string, object?>? output = null, int failTimes = 0, string? failMessage = null, TimeSpan? delay = null) =>
+        _behaviours[key] = new Behaviour(output ?? new Dictionary<string, object?>(), failTimes, failMessage ?? "The action failed.", delay);
 
     public IWorkflowAction? Resolve(ActionDescriptor action) => new Handler(this, action.Key);
 
-    private sealed record Behaviour(IReadOnlyDictionary<string, object?> Output, int FailTimes, string FailMessage)
+    private sealed record Behaviour(IReadOnlyDictionary<string, object?> Output, int FailTimes, string FailMessage, TimeSpan? Delay = null)
     {
         public int Calls;
     }
 
     private sealed class Handler(FakeActions owner, string key) : IWorkflowAction
     {
-        public Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
+        public async Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
         {
             owner._calls.Enqueue(context);
             var b = owner._behaviours.GetOrAdd(key, _ => new Behaviour(new Dictionary<string, object?>(), 0, ""));
             b.Calls++;
+            if (b.Delay is { } delay) await Task.Delay(delay, ct);
             if (b.Calls <= b.FailTimes) throw new InvalidOperationException(b.FailMessage);
-            return Task.FromResult(b.Output);
+            return b.Output;
         }
     }
 }

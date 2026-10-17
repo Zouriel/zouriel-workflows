@@ -1,5 +1,5 @@
 {
- "name": "Observe mode: outside writes are accepted; a matching transition is recorded and runs its steps; an unknown value puts the record out of sync",
+ "name": "Observe mode: outside writes are accepted; a matching transition is recorded and runs its steps; a write no transition fits, or an unknown value, puts the record out of sync until the value is valid again",
  "registry": "_registry.json",
  "users": "_users.json",
  "definitions": [
@@ -312,8 +312,8 @@
    "expect": {
     "instances": [
      {
-      "state": "approved",
-      "status": "completed"
+      "state": "submitted",
+      "status": "outOfSync"
      }
     ],
     "audit": [
@@ -321,6 +321,12 @@
       "is": "lifecycle.writeObserved",
       "data": {
        "transition": null
+      }
+     },
+     {
+      "is": "lifecycle.outOfSync",
+      "data": {
+       "value": "approved"
       }
      }
     ]
@@ -338,11 +344,68 @@
     "instances": [
      {
       "status": "outOfSync",
-      "state": "approved"
+      "state": "submitted"
      }
     ],
     "audit": [
-     "lifecycle.outOfSync"
+     {
+      "is": "lifecycle.writeObserved",
+      "data": {
+       "transition": null
+      }
+     },
+     {
+      "is": "lifecycle.outOfSync",
+      "data": {
+       "value": "bogus"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "status": "submitted"
+    }
+   },
+   "expect": {
+    "instances": [
+     {
+      "state": "submitted",
+      "status": "active"
+     }
+    ],
+    "audit": [
+     "lifecycle.writeObserved"
+    ]
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "status": "underReview"
+    }
+   },
+   "expect": {
+    "instances": [
+     {
+      "state": "underReview",
+      "status": "active"
+     }
+    ],
+    "audit": [
+     {
+      "is": "lifecycle.transitioned",
+      "data": {
+       "transition": "startReview",
+       "observed": true
+      }
+     }
     ]
    }
   }
