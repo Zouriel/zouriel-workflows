@@ -365,12 +365,21 @@ public sealed partial class WorkflowEngine
 
     internal WorkflowActor? CurrentActor() => Options.ActorAccessor?.Current;
 
-    private readonly System.Collections.Concurrent.ConcurrentBag<Task> _backgroundWrites = [];
+    /// <summary>Audit writes still running in the background; each removes itself when done, so the set stays small.</summary>
+    private readonly ConcurrentDictionary<Task, byte> _backgroundWrites = new();
+
+    /// <summary>How many background audit writes are still running.</summary>
+    internal int PendingBackgroundWrites => _backgroundWrites.Count;
 
     /// <summary>Waits for audit entries written in the background (refused writes). Tests and shutdown use it.</summary>
     public async Task FlushBackgroundAsync()
     {
-        while (_backgroundWrites.TryTake(out var t)) await t;
+        while (_backgroundWrites.Keys.ToList() is { Count: > 0 } running)
+            foreach (var t in running)
+            {
+                _backgroundWrites.TryRemove(t, out _);
+                await t;
+            }
     }
 
     /// <summary>Audits a refused write to a lifecycle-owned field, in its own unit of work (the refused write rolls back).</summary>
@@ -384,7 +393,12 @@ public sealed partial class WorkflowEngine
             Category = "lifecycle", Action = "writeRefused", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id, DefinitionId = definitionId,
             Actor = actor, Before = new Dictionary<string, object?> { [field] = from }, After = new Dictionary<string, object?> { [field] = to },
         }, CancellationToken.None), CancellationToken.None));
-        _backgroundWrites.Add(pending);
+        _backgroundWrites.TryAdd(pending, 0);
+        pending.ContinueWith(t =>
+        {
+            _backgroundWrites.TryRemove(t, out _);
+            if (t.Exception is { } e) Options.Logger.LogError(e.GetBaseException(), "Could not audit a refused write to {Entity} {Id}.{Field}", entity, id, field);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
     }
 
     // ── Settings ──────────────────────────────────────────────────────────

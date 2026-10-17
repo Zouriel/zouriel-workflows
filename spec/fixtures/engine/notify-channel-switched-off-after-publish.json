@@ -1,0 +1,26 @@
+{
+ "name": "A notification through a channel switched off in settings after the workflow was published is skipped (audited), not sent",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": { "application": [ { "id": "a1", "title": "Q", "stage": "new" } ] },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "wf_n", "key": "tell", "kind": "automation", "title": "Tell", "entity": "application",
+   "trigger": { "type": "fieldChanged", "field": "stage" },
+   "steps": [ { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "ali" } ], "subject": ["Stage"], "body": ["changed"] } ]
+  }
+ ],
+ "steps": [
+  { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } }, "expect": { "notificationCount": 1 } },
+  { "settings": { "version": 1, "channels": { "email": { "enabled": false } } } },
+  {
+   "change": { "entity": "application", "id": "a1", "values": { "stage": "done" } },
+   "expect": {
+    "notificationCount": 1,
+    "instances": [ { "definition": "tell", "status": "completed" }, { "definition": "tell", "status": "completed" } ],
+    "outputs": { "tell": { "n": { "sent": 0 } } },
+    "audit": [ { "is": "settings.updated" }, { "is": "step.skipped", "data": { "reason": "channelDisabled", "channel": "email" } } ]
+   }
+  }
+ ]
+}

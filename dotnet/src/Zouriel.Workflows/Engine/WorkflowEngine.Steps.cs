@@ -466,6 +466,15 @@ public sealed partial class WorkflowEngine
 
     private async Task NotifyAsync(Exec x, Token t, NotifyStep n, CancellationToken ct)
     {
+        // A channel switched off in settings after the workflow was published sends nothing (lint only warned at publish).
+        if (x.U.Settings.Channels?.GetValueOrDefault(n.Channel)?.Enabled == false)
+        {
+            x.S.SetOutput(n.Id, "sent", 0);
+            await x.U.AuditAsync(StepAudit(x, n, "skipped", new Dictionary<string, object?> { ["reason"] = "channelDisabled", ["channel"] = n.Channel }), ct);
+            x.U.Log?.Add("step", "skipped", n.Id, $"The {n.Channel} channel is switched off.");
+            Advance(t);
+            return;
+        }
         var scope = x.Scope(t);
         var recipients = await RecipientsAsync(x, scope, n.To, ct);
         var subject = n.Subject is null ? null : await RenderAsync(scope, n.Subject, ct);
@@ -579,7 +588,9 @@ public sealed partial class WorkflowEngine
     private async Task WebhookAsync(Exec x, Token t, WebhookStep wh, CancellationToken ct)
     {
         var (url, headers, body) = await BuildWebhookAsync(x, t, wh, ct);
-        var key = $"{x.I.Id}:{wh.Id}:{t.Id}:{t.CurrentItem().Index}:{t.Top.Attempt}";
+        // The same for every attempt of this run of the step (retries resend it; the receiver drops repeats), new when a
+        // forEach item or a goTo repeat runs the step again.
+        var key = $"{x.I.Id}:{wh.Id}:{t.Id}:{t.CurrentItem().Index}:{x.S.GoTo.Values.Sum()}";
         var rec = await BeginStepAsync(x, t, wh, new Dictionary<string, object?> { ["method"] = wh.Method, ["url"] = url }, ct);
         WebhookResponse res;
         if (x.U.Simulation)
@@ -685,7 +696,7 @@ public sealed partial class WorkflowEngine
                 outputs = await handler.ExecuteAsync(new WorkflowActionContext
                 {
                     ActionKey = a.Action, Input = input, Entity = x.I.Entity, EntityId = x.I.EntityId, InstanceId = x.I.Id,
-                    IdempotencyKey = $"{x.I.Id}:{a.Id}:{t.Id}:{t.CurrentItem().Index}:{t.Top.Attempt}", Attempt = t.Top.Attempt,
+                    IdempotencyKey = $"{x.I.Id}:{a.Id}:{t.Id}:{t.CurrentItem().Index}:{x.S.GoTo.Values.Sum()}", Attempt = t.Top.Attempt,
                     Initiator = x.I.InitiatorId is null ? null : WorkflowActor.User(x.I.InitiatorId, x.I.InitiatorName),
                 }, cts.Token);
                 // Changes the handler made but did not save are saved here, inside the scope, so they stay the
@@ -857,7 +868,7 @@ public sealed partial class WorkflowEngine
             var scope = x.Scope(t);
             var people = await RecipientsAsync(x, scope, owners.Owners, ct);
             var channel = Options.TaskNotificationChannel ?? Registry.Channels.FirstOrDefault(c => c.Key is "inApp" or "email")?.Key;
-            if (channel is not null && people.Count > 0)
+            if (channel is not null && people.Count > 0 && x.U.Settings.Channels?.GetValueOrDefault(channel)?.Enabled != false)
             {
                 await QueueNotificationAsync(x.U, new WorkflowNotification(channel, people, $"Workflow needs attention: {x.C.Definition.Title}",
                     $"“{x.C.Definition.Title}” stopped at “{step?.Title ?? step?.Type}”: {message}", RecordLink(x.I.Entity, x.I.EntityId), x.I.Id, x.I.Entity, x.I.EntityId,

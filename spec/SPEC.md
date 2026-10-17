@@ -345,8 +345,13 @@ never as anonymous writes when the unit commits.
 
 `notify` steps queue the message in the transactional outbox and complete; delivery happens after
 commit and is retried by the outbox (backing off up to an hour, parked for an admin after 10
-attempts). A step's `retry` and `onError` never apply to delivery, so lint warns about them on a
-`notify` step (`notifyDelivery`). Webhook `path` templates URL-encode the values they insert, so a
+attempts). A step's `retry` and `onError` cover only what the step itself does (working out the
+recipients and rendering the message), never delivery, so lint warns about them on a `notify` step
+(`notifyDelivery`). A `notify` through a channel switched off in settings (`channels.<key>.enabled:
+false`, also after the workflow was published) sends nothing: the step is audited as `step.skipped`
+(data: `reason: "channelDisabled"`, `channel`) with `sent: 0`. The idempotency key a webhook
+(`Idempotency-Key`) or an action handler gets is the same for every attempt (retry) of one run of the
+step, so a receiver can drop repeats; it differs for each forEach item and each goTo repeat. Webhook `path` templates URL-encode the values they insert, so a
 value cannot add path segments, a query or another host; a path with a `.` or `..` segment (also
 percent-encoded) is refused (`webhookOriginNotAllowed`), and with a connection the final address must
 stay under the connection's base path. Header names must be HTTP tokens and rendered values may not

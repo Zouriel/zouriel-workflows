@@ -700,6 +700,55 @@ public sealed class FormAnswerAuditTests
     }
 }
 
+/// <summary>Business-logic gaps from the final audit.</summary>
+public sealed class BusinessLogicAuditTests
+{
+    [Fact]
+    public async Task Idempotency_keys_stay_the_same_across_retries_of_one_step()
+    {
+        var h = await AuditFixTests.HostAsync();
+        await h.Engine.SaveSettingsAsync(new GlobalSettings { Webhooks = new WebhookSettings { AllowedOrigins = ["https://hooks.example.com"] } }, 0, AuditFixTests.Admin);
+        h.Actions.Set("crm.ping", new Dictionary<string, object?> { ["ok"] = true }, failTimes: 1);
+        h.Webhooks.Responses["https://hooks.example.com/"] = new Queue<WebhookResponse>([new WebhookResponse(500, null), new WebhookResponse(200, "{}")]);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_i", "key": "idem", "kind": "automation", "title": "Idem", "entity": "application", "trigger": { "type": "manual", "label": "Go" },
+          "steps": [ { "id": "a", "type": "action", "action": "crm.ping", "input": {}, "retry": { "max": 2, "backoff": "fixed", "initial": "PT1M" } },
+                     { "id": "w", "type": "webhook", "url": "https://hooks.example.com/x", "method": "POST", "retry": { "max": 2, "backoff": "fixed", "initial": "PT1M" } } ] }
+        """);
+        await h.Engine.StartManualAsync("idem", "application", "a1", null, WorkflowActor.User("ali", "Ali"));
+        await h.AdvanceAsync(TimeSpan.FromMinutes(5));
+        var calls = h.Actions.Calls;
+        Assert.Equal(2, calls.Count);
+        Assert.Equal([1, 2], calls.Select(c => c.Attempt));
+        Assert.Equal(calls[0].IdempotencyKey, calls[1].IdempotencyKey);
+        var hooks = h.Webhooks.Calls;
+        Assert.Equal(2, hooks.Count);
+        Assert.Equal(hooks[0].IdempotencyKey, hooks[1].IdempotencyKey);
+        Assert.NotEqual(calls[0].IdempotencyKey, hooks[0].IdempotencyKey);
+    }
+
+    [Fact]
+    public async Task Background_audits_of_refused_writes_do_not_pile_up()
+    {
+        var h = await AuditFixTests.HostAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "lc_b", "key": "lcb", "kind": "lifecycle", "title": "LC", "entity": "application",
+          "lifecycle": { "field": "status", "mode": "enforce",
+            "states": [ { "id": "d", "key": "draft", "label": "Draft", "category": "initial" }, { "id": "o", "key": "approved", "label": "OK", "category": "terminal" } ],
+            "transitions": [ { "id": "t", "key": "approve", "label": "OK", "from": ["d"], "to": "o", "who": [ { "role": "reviewer" } ] } ] } }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        for (var i = 0; i < 20; i++)
+            await Assert.ThrowsAsync<WorkflowFieldOwnedException>(() => h.Store.ChangeRecordAsync("application", "a1", new() { ["status"] = "approved" }));
+        for (var i = 0; i < 100 && h.Engine.PendingBackgroundWrites > 0; i++) await Task.Delay(20);
+        Assert.Equal(0, h.Engine.PendingBackgroundWrites);
+        Assert.Equal(20, h.Store.All<AuditRecord>("audit").Count(a => a.Action == "writeRefused"));
+    }
+}
+
 /// <summary>Webhook client hardening from the final audit.</summary>
 public sealed class WebhookClientAuditTests
 {

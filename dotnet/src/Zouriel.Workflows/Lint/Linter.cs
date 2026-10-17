@@ -336,7 +336,7 @@ public static class Linter
                 var here = env with { Upstream = upstream, EnclosingLists = lists };
                 LintStep(s, here, listId, i);
                 if (s is NotifyStep && (s.Retry is not null || s.OnError is not null))
-                    Warn("notifyDelivery", s.Id, "Notifications are delivered after the step through the outbox, which retries on its own; retry and on-error settings here have no effect.");
+                    Warn("notifyDelivery", s.Id, "Retry and on-error here only cover working out the recipients and the message; delivery happens after the step through the outbox, which retries on its own.");
                 if (s.Retry is { } r)
                 {
                     if (r.Max is < 0 or > 10) Error("badRetry", s.Id, "Retries can be 0 to 10.");
