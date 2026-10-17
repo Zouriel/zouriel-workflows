@@ -244,6 +244,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
 
         public Task AddBookmarkAsync(BookmarkRecord b, CancellationToken ct = default) { Put("bookmarks", b.Id, b); return Task.CompletedTask; }
         public Task RemoveBookmarkAsync(string id, CancellationToken ct = default) { Remove("bookmarks", id); return Task.CompletedTask; }
+        public Task UpdateBookmarkAsync(BookmarkRecord b, CancellationToken ct = default) { Put("bookmarks", b.Id, b); return Task.CompletedTask; }
         public Task<BookmarkRecord?> GetBookmarkAsync(string id, CancellationToken ct = default) => Task.FromResult(Get<BookmarkRecord>("bookmarks", id));
         public Task<IReadOnlyList<BookmarkRecord>> ListBookmarksAsync(string instanceId, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<BookmarkRecord>>(All<BookmarkRecord>("bookmarks").Where(b => b.InstanceId == instanceId).ToList());

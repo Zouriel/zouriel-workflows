@@ -544,6 +544,7 @@ public sealed partial class WorkflowEngine
                 var errors = (await LintAsync(u, (await u.S.GetVersionAsync(id, rec.Version, ct))!.Json, ct)).Where(p => p.Severity == "error").ToList();
                 if (errors.Count > 0) throw new WorkflowException("lintErrors", $"Fix {errors.Count} problem(s) before restoring.", errors);
             }
+            var wasArchived = rec.Status == DefinitionStatus.Archived;
             rec.Status = status ?? (rec.Version > 0 ? DefinitionStatus.Published : DefinitionStatus.Draft);
             rec.UpdatedAt = u.Now;
             rec.UpdatedBy = actor.Id;
@@ -554,11 +555,14 @@ public sealed partial class WorkflowEngine
                 await u.S.ReplaceTriggersAsync(id, [], ct);
                 foreach (var b in await u.S.FindDefinitionBookmarksAsync(id, BookmarkKinds.Schedule, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
                 foreach (var b in await u.S.FindDefinitionBookmarksAsync(id, BookmarkKinds.DateReached, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                // An archived lifecycle moves nothing: its records' automatic transitions and SLAs stop too.
+                if (rec.Kind == WorkflowKinds.Lifecycle) await ArchiveRecordTimersAsync(u, id, restore: false, ct);
             }
             else if (rec.Version > 0)
             {
                 var v = await u.S.GetVersionAsync(id, rec.Version, ct);
                 await IndexTriggersAsync(u, rec, Definitions.Parse(v!.Json), rec.Version, ct);
+                if (wasArchived && rec.Kind == WorkflowKinds.Lifecycle) await ArchiveRecordTimersAsync(u, id, restore: true, ct);
             }
             await u.AuditAsync(new AuditEntry { Category = "definition", Action = action, SubjectType = "definition", SubjectId = id, DefinitionId = id, Actor = actor }, ct);
             InvalidateOwnership();

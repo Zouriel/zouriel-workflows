@@ -288,6 +288,80 @@ public sealed class AuditFixTests2(ITestOutputHelper output)
         Assert.Equal("submitted", view.State);
         Assert.Contains(h.Store.All<AuditRecord>("audit"), a => a.Action == "permissionsChanged" && a.Data!.Contains("\"recordsKept\":1"));
     }
+
+    // ── 6. Timers that keep failing back off and are parked; archiving stops a lifecycle's timers ──
+
+    [Fact]
+    public async Task Archiving_a_lifecycle_drops_its_record_timers_and_restoring_plans_them_again()
+    {
+        var h = await HostAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "lc_a", "key": "lca", "kind": "lifecycle", "title": "LC", "entity": "application",
+          "lifecycle": { "field": "status", "mode": "enforce",
+            "states": [ { "id": "d", "key": "draft", "label": "Draft", "category": "initial", "sla": { "within": "PT12H", "steps": [] } },
+                        { "id": "x", "key": "rejected", "label": "Expired", "category": "terminal" } ],
+            "transitions": [ { "id": "t1", "key": "expire", "label": "Expire", "from": ["d"], "to": "x", "auto": { "after": "P1D" } } ] } }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        await h.AdvanceAsync(TimeSpan.FromHours(13));
+        Assert.Single(h.Store.All<AuditRecord>("audit"), a => a.Action == "slaBreached");
+        await h.Engine.ArchiveAsync("lc_a", Admin);
+        Assert.Empty(h.Store.All<BookmarkRecord>("bookmarks"));
+        await h.AdvanceAsync(TimeSpan.FromDays(2));
+        Assert.DoesNotContain(h.Store.All<AuditRecord>("audit"), a => a.Action == "timerFailed");
+        Assert.Equal("draft", h.Store.PeekRecord("application", "a1")!["status"]);
+
+        await h.Engine.RestoreAsync("lc_a", Admin);
+        // Counted from when the record entered the state, so it is already due; the SLA that ran is not planned again.
+        Assert.Equal(["auto:t1"], h.Store.All<BookmarkRecord>("bookmarks").Select(b => b.Purpose));
+        await h.SettleAsync();
+        Assert.Equal("rejected", h.Store.PeekRecord("application", "a1")!["status"]);
+        Assert.Single(h.Store.All<AuditRecord>("audit"), a => a.Action == "slaBreached");
+    }
+
+    [Fact]
+    public async Task A_timer_that_keeps_failing_backs_off_and_is_parked_with_an_incident()
+    {
+        var h = await HostAsync();
+        h.Engine.MaxTimerAttempts = 3;
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_r", "key": "remind", "kind": "automation", "title": "Remind", "entity": "application",
+          "trigger": { "type": "manual", "label": "Go" },
+          "steps": [ { "id": "ap", "type": "approval", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P5D", "reminders": ["P1D"],
+                       "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] }
+        """);
+        var view = await h.Engine.StartManualAsync("remind", "application", "a1", null, WorkflowActor.User("ali", "Ali"));
+        await h.SettleAsync();
+        h.Identity.Broken["rev1"] = true;
+        h.Clock.Advance(TimeSpan.FromDays(1));
+        var lockedUntil = new List<DateTimeOffset?>();
+        var t0 = h.Clock.GetUtcNow();
+        for (var i = 0; i < 10; i++)
+        {
+            await h.Engine.ProcessTimersAsync();
+            var b = h.Store.All<BookmarkRecord>("bookmarks").Single(x => x.Purpose == BookmarkPurposes.Reminder);
+            lockedUntil.Add(b.LockedUntil);
+            h.Clock.Advance(TimeSpan.FromMinutes(5));
+        }
+        // Backs off 1 minute after the first failure, 2 after the second (the 5-minute steps skip none of them).
+        Assert.Equal(t0 + TimeSpan.FromMinutes(1), lockedUntil[0]);
+        Assert.Equal(t0 + TimeSpan.FromMinutes(5) + TimeSpan.FromMinutes(2), lockedUntil[1]);
+        var failed = h.Store.All<AuditRecord>("audit").Where(a => a.Action == "timerFailed").ToList();
+        Assert.Equal(3, failed.Count);
+        var reminder = h.Store.All<BookmarkRecord>("bookmarks").Single(x => x.Purpose == BookmarkPurposes.Reminder);
+        Assert.Equal(3, reminder.Attempts);
+        Assert.Equal(DateTimeOffset.MaxValue, reminder.LockedUntil);
+        Assert.Contains("rev1", reminder.Error);
+        h.Identity.Broken.TryRemove("rev1", out _);
+        var inst = await h.Engine.GetInstanceAsync(view.Id);
+        Assert.Contains("failed 3 times", inst.Error);
+        Assert.Contains(h.Store.All<AuditRecord>("audit"), a => a.Action == "incident" && a.InstanceId == view.Id);
+        // The task itself stays open.
+        Assert.Equal(Storage.TaskStatus.Open, h.Store.All<TaskRecord>("tasks").Single().Status);
+    }
 }
 
 /// <summary>Collects log messages for assertions.</summary>

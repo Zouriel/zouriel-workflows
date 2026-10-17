@@ -430,7 +430,11 @@ Categories and actions:
 - `instance`: `started` (data: trigger), `queued`, `completed`, `failed`, `cancelled` (actor: who
   cancelled it, data: reason), `migrated` (before/after `version`; data: `stateMap`, or `reason:
   "permissions"` when a permissions change moved it), `retried`, `skipped`, `incident`, `timerFailed` (a timer
-  could not be processed; data: purpose, error).
+  could not be processed; data: purpose, error, attempt, parked). A failing timer is retried with backoff (1,
+  2, 4… minutes, up to an hour); after 10 attempts it is parked for an admin and the instance shows it: an
+  automation or run token stops in `incident` (retry, skip or cancel as usual); a lifecycle record
+  instance's automatic-transition or SLA timer, or a task's reminder or escalation (the task stays open),
+  sets the instance's `error` and writes `instance.incident`.
 - `step`: `started`, `completed` (data: outputs, masked), `failed` (data: error, attempt),
   `retryScheduled`, `skipped`, `branchTaken` (data: path), `waiting`.
 - `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked, `comment`
@@ -485,7 +489,9 @@ engine from working or the settings from being fixed.
 - `status`: `draft` | `published` | `archived`. Publishing validates (all lint errors block; warnings
   don't), increments `version`, stores an immutable copy, re-indexes triggers, and records a diff.
   Archiving removes the definition's triggers (it starts nothing new; running instances finish on their
-  version). Restoring lints the published version against the other published workflows first, like a
+  version). Archiving a lifecycle also drops its records' automatic-transition and SLA timers; restoring
+  plans them again counted from when each record entered its state (an SLA that already ran in that
+  state is not planned again; timers already due fire at once). Restoring lints the published version against the other published workflows first, like a
   publish (`lintErrors`, e.g. a second fallback lifecycle published meanwhile: `lifecycleConflict`), then
   re-indexes its triggers with its original first-publish time.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines

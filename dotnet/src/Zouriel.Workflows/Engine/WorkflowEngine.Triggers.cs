@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Zouriel.Workflows.Audit;
 using Zouriel.Workflows.Changes;
 using Zouriel.Workflows.Expressions;
@@ -14,6 +15,9 @@ public sealed partial class WorkflowEngine
 {
     /// <summary>How long a claimed outbox row or timer stays locked to one worker.</summary>
     public TimeSpan ClaimLock { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>How many times a timer may fail before it is parked for an admin (default 10, like outbox rows).</summary>
+    public int MaxTimerAttempts { get; set; } = 10;
 
     /// <summary>
     /// Processes committed change events and lifecycle events, and sends queued notifications. Returns how
@@ -377,18 +381,65 @@ public sealed partial class WorkflowEngine
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
-                // Leave it locked for a while and record why; the next claim after the lock retries it.
-                await RunAsync(async u =>
-                {
-                    await u.AuditAsync(new AuditEntry
-                    {
-                        Category = "instance", Action = "timerFailed", SubjectType = "bookmark", SubjectId = b.Id, InstanceId = b.InstanceId, DefinitionId = b.DefinitionId,
-                        Entity = b.Entity, EntityId = b.EntityId, Data = new Dictionary<string, object?> { ["purpose"] = b.Purpose, ["error"] = e.Message },
-                    }, ct);
-                }, ct);
+                await RunAsync(u => TimerFailedAsync(u, b.Id, e is WorkflowException ? e.Message : $"{e.GetType().Name}: {e.Message}", ct), ct);
             }
         }
         return due.Count;
+    }
+
+    /// <summary>
+    /// A timer could not be processed (its unit rolled back, so the bookmark is still there): count the attempt and
+    /// back off 1, 2, 4… minutes up to an hour. After <see cref="MaxTimerAttempts"/> it is parked for an admin and the
+    /// instance shows it: an automation or run token stops in an incident (retry, skip or cancel it as usual); a
+    /// lifecycle record instance (automatic transition or SLA timer), or a task's reminder or escalation (the task stays
+    /// open), gets the error on the instance and an <c>instance.incident</c> entry.
+    /// </summary>
+    private async Task TimerFailedAsync(Uow u, string bookmarkId, string error, CancellationToken ct)
+    {
+        var b = await u.S.GetBookmarkAsync(bookmarkId, ct);
+        if (b is null) return;
+        b.Attempts++;
+        b.Error = error;
+        var parked = b.Attempts >= MaxTimerAttempts;
+        b.LockedUntil = parked ? DateTimeOffset.MaxValue : u.Now + TimeSpan.FromMinutes(Math.Min(60, Math.Pow(2, b.Attempts - 1)));
+        await u.S.UpdateBookmarkAsync(b, ct);
+        await u.AuditAsync(new AuditEntry
+        {
+            Category = "instance", Action = "timerFailed", SubjectType = "bookmark", SubjectId = b.Id, InstanceId = b.InstanceId, DefinitionId = b.DefinitionId,
+            Entity = b.Entity, EntityId = b.EntityId,
+            Data = new Dictionary<string, object?> { ["purpose"] = b.Purpose, ["error"] = error, ["attempt"] = (double)b.Attempts, ["parked"] = parked },
+        }, ct);
+        if (!parked) return;
+        Options.Logger.LogError("Timer {Bookmark} ({Purpose}) failed {Attempts} times and was parked: {Error}", b.Id, b.Purpose, b.Attempts, error);
+        if (b.InstanceId is null) return;
+        var message = $"A timer ({b.Purpose}) failed {b.Attempts} times and was stopped: {error}";
+        var inst = await u.S.GetInstanceAsync(b.InstanceId, ct);
+        if (inst is null || InstanceStatus.IsFinished(inst.Status)) return;
+        if (inst.Kind == InstanceKinds.Record || b.Purpose is BookmarkPurposes.Reminder or BookmarkPurposes.Escalation)
+        {
+            var record = inst.Kind == InstanceKinds.Record
+                ? u.Records.TryGetValue(inst.Id, out var held) ? held : u.Records[inst.Id] = inst
+                : u.Execs.TryGetValue(inst.Id, out var exec) ? exec.I : inst;
+            record.Error = message;
+            record.UpdatedAt = u.Now;
+            await u.S.UpdateInstanceAsync(record, ct);
+            await u.AuditAsync(new AuditEntry
+            {
+                Category = "instance", Action = "incident", SubjectType = "instance", SubjectId = record.Id, InstanceId = record.Id, DefinitionId = record.DefinitionId,
+                Entity = record.Entity, EntityId = record.EntityId, CorrelationId = record.CorrelationId,
+                Data = new Dictionary<string, object?> { ["bookmark"] = b.Id, ["purpose"] = b.Purpose, ["error"] = message },
+            }, ct);
+            return;
+        }
+        var x = await LoadExecAsync(u, inst.Id, ct);
+        var t = b.TokenId is null ? null : x.S.Token(b.TokenId);
+        var step = b.NodeId is null ? null : x.C.Step(b.NodeId);
+        if (t is null || t.Status != TokenStatus.Waiting) return;
+        // The token stops in an incident instead; its timers go (a retry runs the step again and plans new ones).
+        await ClearWaitsAsync(x, t, ct);
+        await u.S.RemoveBookmarkAsync(b.Id, ct);
+        await RaiseIncidentAsync(x, t, step, message, ct);
+        await SaveAsync(x, ct);
     }
 
     /// <summary>Fires one due bookmark (it is removed first; reminders and escalations leave the task open).</summary>
@@ -408,6 +459,8 @@ public sealed partial class WorkflowEngine
         if (b.InstanceId is null) return;
         var x = await LoadExecAsync(u, b.InstanceId, ct);
         if (InstanceStatus.IsFinished(x.I.Status)) return;
+        // A lifecycle archived while the timer waited does nothing to its records (restoring plans the timers again).
+        if (x.I.Kind == InstanceKinds.Record && (await u.S.GetDefinitionAsync(x.I.DefinitionId, ct))?.Status == DefinitionStatus.Archived) return;
         if (b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal)) await FireAutoTransitionAsync(u, x, b.Purpose[BookmarkPurposes.AutoPrefix.Length..], ct);
         else if (b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)) await FireSlaAsync(u, x, b.Purpose[BookmarkPurposes.SlaPrefix.Length..], ct);
         else await FireTokenTimerAsync(x, b, ct);

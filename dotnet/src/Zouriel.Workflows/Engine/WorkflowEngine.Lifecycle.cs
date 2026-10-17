@@ -354,8 +354,13 @@ public sealed partial class WorkflowEngine
         await CheckAutoWhenAsync(u, c, record, depth, chain, ct);
     }
 
-    private async Task PlanStateTimersAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct)
+    /// <summary>
+    /// Plans a state's automatic-transition and SLA timers, counted from <paramref name="from"/> (default now; restoring
+    /// an archived lifecycle counts from when the record entered the state). <paramref name="withSla"/> false leaves the SLA out.
+    /// </summary>
+    private async Task PlanStateTimersAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct, DateTimeOffset? from = null, bool withSla = true)
     {
+        var start = from ?? u.Now;
         var lc = c.Lifecycle;
         foreach (var t in lc.Transitions)
         {
@@ -363,18 +368,50 @@ public sealed partial class WorkflowEngine
             var working = (t.Auto.Calendar ?? c.Definition.Settings?.Calendar) == "working";
             await u.S.AddBookmarkAsync(new BookmarkRecord
             {
-                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.AutoPrefix + t.Id, DueAt = u.Calendar.Add(u.Now, d, working),
+                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.AutoPrefix + t.Id, DueAt = u.Calendar.Add(start, d, working),
                 Entity = record.Entity, EntityId = record.EntityId, DefinitionId = record.DefinitionId, CreatedAt = u.Now,
             }, ct);
         }
-        if (state.Sla is { } sla && IsoDuration.TryParse(sla.Within, out var within))
+        if (withSla && state.Sla is { } sla && IsoDuration.TryParse(sla.Within, out var within))
         {
             var working = (sla.Calendar ?? c.Definition.Settings?.Calendar) == "working";
             await u.S.AddBookmarkAsync(new BookmarkRecord
             {
-                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.SlaPrefix + state.Id, DueAt = u.Calendar.Add(u.Now, within, working),
+                Id = NewId(), InstanceId = record.Id, Kind = BookmarkKinds.Timer, Purpose = BookmarkPurposes.SlaPrefix + state.Id, DueAt = u.Calendar.Add(start, within, working),
                 Entity = record.Entity, EntityId = record.EntityId, DefinitionId = record.DefinitionId, CreatedAt = u.Now,
             }, ct);
+        }
+    }
+
+    /// <summary>
+    /// Archiving a lifecycle drops its records' automatic-transition and SLA timers (an archived lifecycle moves nothing);
+    /// restoring plans them again, counted from when each record entered its state (an SLA that already ran is not
+    /// planned again). Timers already due fire on the next round.
+    /// </summary>
+    internal async Task ArchiveRecordTimersAsync(Uow u, string definitionId, bool restore, CancellationToken ct)
+    {
+        for (var skip = 0; ; skip += 500)
+        {
+            var page = await u.S.QueryInstancesAsync(new InstanceQuery
+            {
+                DefinitionId = definitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active], Skip = skip, Take = 500,
+            }, ct);
+            foreach (var found in page)
+            {
+                var record = u.Records.TryGetValue(found.Id, out var held) ? held : u.Records[found.Id] = found;
+                var timers = (await u.S.ListBookmarksAsync(record.Id, ct))
+                    .Where(b => b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal) || b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)).ToList();
+                foreach (var b in timers) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                if (!restore) continue;
+                var c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
+                if (c.StateById(record.State) is not { IsTerminal: false } state) continue;
+                var entered = record.StateEnteredAt ?? u.Now;
+                var slaRan = (await u.S.QueryInstancesAsync(new InstanceQuery { ParentId = record.Id, Kinds = [InstanceKinds.Run], Take = 1000 }, ct))
+                    .Any(r => r.Reason == BookmarkPurposes.SlaPrefix + state.Id && r.StartedAt >= entered)
+                    || (await u.S.QueryAuditAsync(new AuditQuery { InstanceId = record.Id, Category = "lifecycle", Action = "slaBreached", From = entered, Take = 1 }, ct)).Count > 0;
+                await PlanStateTimersAsync(u, c, record, state, ct, entered, withSla: !slaRan);
+            }
+            if (page.Count < 500) return;
         }
     }
 

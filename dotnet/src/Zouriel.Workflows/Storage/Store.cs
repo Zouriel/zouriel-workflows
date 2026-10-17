@@ -184,6 +184,11 @@ public interface IWorkflowSession : IAsyncDisposable
     Task AddBookmarkAsync(BookmarkRecord b, CancellationToken ct = default);
     /// <summary>Removes a bookmark (no error when it is already gone).</summary>
     Task RemoveBookmarkAsync(string id, CancellationToken ct = default);
+    /// <summary>
+    /// Saves changes to a bookmark read in this unit (failed attempts, backoff, parking). Stores that save the rows they
+    /// track need not implement it; the default does nothing.
+    /// </summary>
+    Task UpdateBookmarkAsync(BookmarkRecord b, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>A bookmark by id, or null once removed.</summary>
     Task<BookmarkRecord?> GetBookmarkAsync(string id, CancellationToken ct = default);
     /// <summary>An instance's bookmarks.</summary>

@@ -319,8 +319,15 @@ public sealed class BookmarkRecord
     public string? Payload { get; set; }
     /// <summary>When it was created.</summary>
     public DateTimeOffset CreatedAt { get; set; }
-    /// <summary>Set while a worker processes it, so two workers never fire the same bookmark.</summary>
+    /// <summary>
+    /// Set while a worker processes it, so two workers never fire the same bookmark. After a failed firing it holds
+    /// the backoff; <see cref="DateTimeOffset.MaxValue"/> means parked for an admin (too many failures).
+    /// </summary>
     public DateTimeOffset? LockedUntil { get; set; }
+    /// <summary>How many times firing it failed (0 while it never did).</summary>
+    public int Attempts { get; set; }
+    /// <summary>Why the last firing failed, if it did.</summary>
+    public string? Error { get; set; }
 }
 
 /// <summary>Statuses of a person's task.</summary>
