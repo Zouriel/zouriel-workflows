@@ -329,7 +329,7 @@ public static class ConformanceRunner
             var preview = await e.GetResetPreviewAsync(rp["entity"]!.GetValue<string>(), rp["id"]!.GetValue<string>(), Actor(host, rp["user"]), null, ct);
             var actual = preview.Items.Select(i => (object?)new Dictionary<string, object?>
             {
-                ["id"] = i.Id, ["kind"] = i.Kind, ["selected"] = i.Selected, ["undoable"] = i.Undoable, ["title"] = i.Title,
+                ["id"] = i.Id, ["kind"] = i.Kind, ["selected"] = i.Selected, ["undoable"] = i.Undoable, ["title"] = i.Title, ["detail"] = i.Detail,
             }).ToList();
             var wantItems = rp["items"]!.AsArray();
             if (wantItems.Count != actual.Count)

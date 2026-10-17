@@ -44,7 +44,7 @@
    "expect": {
     "resetPreview": { "entity": "application", "id": "a1", "user": "admin", "items": [
      { "kind": "created", "selected": true, "undoable": true },
-     { "id": "field:application:a1:reviewer", "kind": "field", "selected": true, "undoable": true, "title": "Reviewer of Application “Bursary”: back to nothing" },
+     { "id": "field:application:a1:reviewer", "kind": "field", "selected": true, "undoable": true, "title": "Reviewer of Application “Bursary”: back to nothing", "detail": "Now Rana Reviewer" },
      { "id": "field:application:a1:priority", "kind": "field", "selected": false, "undoable": true },
      { "id": "field:programme:p1:budget", "kind": "field", "selected": true, "undoable": true, "title": "Budget of Programme “Engineering”: back to 50000" },
      { "kind": "message", "selected": false, "undoable": false }

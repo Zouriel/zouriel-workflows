@@ -74,8 +74,16 @@ public sealed partial class WorkflowEngine
             var title = desc?.TitleField is { } tf && snap is not null ? Values.Text(snap[tf]) : null;
             return $"{desc?.Label ?? e} “{(string.IsNullOrEmpty(title) ? rid : title)}”";
         }
-        string Show(string e, string field, object? v) =>
-            Registry.Field(e, field)?.Sensitive == true ? "(hidden)" : Values.IsEmpty(v) ? "nothing" : OptionText(e, field, v);
+        // Values as people read them: option labels, people's names, related records' titles.
+        async Task<string> ShowAsync(string e, string field, object? v)
+        {
+            var f = Registry.Field(e, field);
+            if (f?.Sensitive == true) return "(hidden)";
+            if (Values.IsEmpty(v)) return "nothing";
+            if (f?.Type == FieldTypes.User) return (await Options.Identity.GetUserAsync(Values.Text(v), ct))?.Name ?? Values.Text(v);
+            if (f?.Type == FieldTypes.Relation && f.Entity is not null) return await RecordNameAsync(f.Entity, Values.Text(v));
+            return OptionText(e, field, v);
+        }
 
         var plan = new List<PlannedUndo>();
         var created = done.Where(d => d.Undo.GetValueOrDefault("kind") as string == "created")
@@ -112,9 +120,9 @@ public sealed partial class WorkflowEngine
             var (wf, step) = await NamesAsync(last.d.Run, last.d.Step);
             var label = Registry.Field(e, field)?.Label ?? field;
             plan.Add(new PlannedUndo(
-                new ResetItem($"field:{e}:{rid}:{field}", "field", $"{label} of {await RecordNameAsync(e, rid)}: back to {Show(e, field, before)}",
-                    $"Now {Show(e, field, now)}", wf, step, true, !changedSince,
-                    changedSince ? $"Changed again since the workflow set it to {Show(e, field, after)}; ticking it overwrites that." : null),
+                new ResetItem($"field:{e}:{rid}:{field}", "field", $"{label} of {await RecordNameAsync(e, rid)}: back to {await ShowAsync(e, field, before)}",
+                    $"Now {await ShowAsync(e, field, now)}", wf, step, true, !changedSince,
+                    changedSince ? $"Changed again since the workflow set it to {await ShowAsync(e, field, after)}; ticking it overwrites that." : null),
                 e, rid, field, before, null, null, null, null));
         }
 
