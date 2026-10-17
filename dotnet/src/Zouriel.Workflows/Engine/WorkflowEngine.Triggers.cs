@@ -102,7 +102,7 @@ public sealed partial class WorkflowEngine
                 {
                     Category = "trigger", Action = "failed", SubjectType = "definition", SubjectId = start.DefinitionId, DefinitionId = start.DefinitionId,
                     Entity = start.Entity, EntityId = start.EntityId,
-                    Data = new Dictionary<string, object?> { ["eventId"] = start.EventId, ["error"] = e is WorkflowException ? e.Message : $"{e.GetType().Name}: {e.Message}" },
+                    Data = new Dictionary<string, object?> { ["eventId"] = start.EventId, ["error"] = DescribeError(e) },
                 }, ct), ct);
             }
         }
@@ -404,7 +404,7 @@ public sealed partial class WorkflowEngine
             }
             catch (Exception e) when (e is not OperationCanceledException)
             {
-                await RunAsync(u => TimerFailedAsync(u, b.Id, e is WorkflowException ? e.Message : $"{e.GetType().Name}: {e.Message}", ct), ct);
+                await RunAsync(u => TimerFailedAsync(u, b.Id, DescribeError(e), ct), ct);
             }
         }
         return due.Count;
@@ -437,7 +437,7 @@ public sealed partial class WorkflowEngine
         if (!parked) return;
         Options.Logger.LogError("Timer {Bookmark} ({Purpose}) failed {Attempts} times and was parked: {Error}", b.Id, b.Purpose, b.Attempts, error);
         if (b.InstanceId is null) return;
-        var message = $"A timer ({b.Purpose}) failed {b.Attempts} times and was stopped: {error}";
+        var message = ParkedText(b.Purpose, b.Attempts, error);
         var inst = await u.S.GetInstanceAsync(b.InstanceId, ct);
         if (inst is null || InstanceStatus.IsFinished(inst.Status)) return;
         if (inst.Kind == InstanceKinds.Record || b.Purpose is BookmarkPurposes.Reminder or BookmarkPurposes.Escalation)
@@ -478,7 +478,23 @@ public sealed partial class WorkflowEngine
         (await u.S.ListBookmarksAsync(instanceId, ct)).Where(IsParked).OrderBy(b => b.CreatedAt).ToList();
 
     /// <summary>The instance error a parked timer shows.</summary>
-    internal static string ParkedMessage(BookmarkRecord b) => $"A timer ({b.Purpose}) failed {b.Attempts} times and was stopped: {b.Error}";
+    internal static string ParkedMessage(BookmarkRecord b) => ParkedText(b.Purpose, b.Attempts, b.Error);
+
+    private static string ParkedText(string? purpose, int attempts, string? error) =>
+        $"A timer ({purpose}) failed {attempts} {(attempts == 1 ? "time" : "times")} and was stopped: {error}";
+
+    /// <summary>
+    /// An exception as an incident reads it: a workflow refusal's own message; otherwise the innermost cause with its
+    /// type, because wrappers such as a database update exception only say "see the inner exception".
+    /// </summary>
+    internal static string DescribeError(Exception e)
+    {
+        if (e is WorkflowException) return e.Message;
+        var inner = e;
+        while (inner.InnerException is { } next && next is not WorkflowException) inner = next;
+        if (inner.InnerException is WorkflowException we) return we.Message;
+        return $"{inner.GetType().Name}: {inner.Message}";
+    }
 
     /// <summary>Fires one due bookmark (it is removed first; reminders and escalations leave the task open).</summary>
     internal async Task FireAsync(Uow u, string bookmarkId, CancellationToken ct)

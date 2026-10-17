@@ -79,7 +79,7 @@ public sealed class IncidentApiTests : IClassFixture<ApiTests.App>
         Assert.Contains("auto:tr_auto", record["error"]!.GetValue<string>());
         var view = await Json(await As("sara").GetAsync($"/api/workflows/records/application/{stuck}"));
         Assert.Equal("incident", view["status"]!.GetValue<string>());
-        Assert.Contains("failed 1 times", view["error"]!.GetValue<string>());
+        Assert.Contains("failed 1 time and was stopped", view["error"]!.GetValue<string>());
         Assert.Contains(view["transitions"]!.AsArray(), t => t!["key"]!.GetValue<string>() == "submit"); // not frozen
 
         // 2. A lifecycle child run whose step failed is listed too (kind run), without asking for runs.

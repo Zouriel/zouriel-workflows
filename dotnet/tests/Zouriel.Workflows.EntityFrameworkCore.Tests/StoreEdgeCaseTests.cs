@@ -84,7 +84,9 @@ public abstract class StoreEdgeCaseTests : IAsyncLifetime
         // Before the fix the refused values stayed tracked, the commit wrote them again and the whole start failed (no instance at all).
         var instance = await App.WithDbAsync(db => db.Set<InstanceRecord>().AsNoTracking().SingleAsync());
         Assert.Equal(InstanceStatus.Incident, instance.Status);
-        Assert.Contains("DbUpdateException", instance.Error, StringComparison.Ordinal);
+        // The database's own reason, not EF's "see the inner exception" wrapper.
+        Assert.DoesNotContain("DbUpdateException", instance.Error, StringComparison.Ordinal);
+        Assert.Contains("notes", instance.Error, StringComparison.OrdinalIgnoreCase);
         Assert.False(await App.WithDbAsync(db => db.Set<AuditRecord>().AnyAsync(a => a.Category == "trigger" && a.Action == "failed")));
         Assert.Null(await App.WithDbAsync(db => db.Applications.Where(a => a.Id == id).Select(a => a.Notes).FirstAsync()));
     }

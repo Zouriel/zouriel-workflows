@@ -798,7 +798,7 @@ public sealed partial class WorkflowEngine
 
     internal async Task HandleStepErrorAsync(Exec x, Token t, Step step, Exception error, StepRecord? rec, CancellationToken ct)
     {
-        var message = error is WorkflowException we ? we.Message : $"{error.GetType().Name}: {error.Message}";
+        var message = DescribeError(error);
         var attempt = t.Top.Attempt;
         rec ??= x.Current is { } cur && cur.NodeId == step.Id ? cur : null;
         rec ??= t.StepRecord is null ? null : (await x.U.S.ListStepsAsync(x.I.Id, ct)).FirstOrDefault(s => s.Id == t.StepRecord);
