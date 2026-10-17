@@ -9,6 +9,8 @@ services:
     environment:
       # Caddy reaches this container over the docker "proxy" network.
       ForwardedHeaders__KnownNetworks__0: 172.16.0.0/12
+      # The app's own database (unused in playground mode, but opened at start) and every sandbox live in tmpfs.
+      Database: /tmp/playground/root.db
       Playground__MaxSandboxes: "150"
       Playground__IdleMinutes: "120"
     tmpfs:
