@@ -352,7 +352,8 @@ public sealed partial class WorkflowEngine
         var snap = await u.S.Entities.GetAsync(entity, id, ct);
         var value = snap?[trig.Field!];
         var due = DateWaitDue(u.Calendar, value, trig.Offset, trig.At);
-        if (due is null || due <= u.Now) return;
+        // No date, a time already past, or one beyond the calendar's range (never): nothing to plan.
+        if (due is null || due <= u.Now || due == DateTimeOffset.MaxValue) return;
         await u.S.AddBookmarkAsync(new BookmarkRecord
         {
             Id = NewId(), Kind = BookmarkKinds.DateReached, Purpose = BookmarkPurposes.DateReached, DefinitionId = c.DefinitionId, Entity = entity, EntityId = id, DueAt = due,

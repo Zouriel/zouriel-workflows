@@ -489,7 +489,12 @@ public sealed partial class WorkflowEngine
                 At = Values.FormatInstant(u.Now),
             };
             if (from is not null && !skipSteps) await ExitStateAsync(u, c, record, from, admin, trigger, 0, ct);
-            else foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+            else
+            {
+                foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                // Skipping steps skips onExit/onEnter, but the record still leaves the state: its onEnter and SLA runs stop.
+                if (from is not null && from.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, from, ct);
+            }
             await WriteStateAsync(u, c, entity, id, to, admin, 0, record.Id, ct);
             record.State = to.Id;
             record.StateEnteredAt = u.Now;

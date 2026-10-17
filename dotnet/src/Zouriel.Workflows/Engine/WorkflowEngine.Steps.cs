@@ -188,7 +188,9 @@ public sealed partial class WorkflowEngine
 
     private async Task GoToAsync(Exec x, Token t, GoToStep g, CancellationToken ct)
     {
-        var count = x.S.GoTo.GetValueOrDefault($"{t.Id}:{g.Id}");
+        // Counted per item of every enclosing sequential forEach (each item gets its own maxTimes, spec §7).
+        var counter = $"{t.Id}:{g.Id}" + string.Concat(t.Frames.Where(fr => fr.ItemIndex is not null).Select(fr => $":{fr.List}#{fr.ItemIndex}"));
+        var count = x.S.GoTo.GetValueOrDefault(counter);
         if (count >= g.MaxTimes)
         {
             await x.U.AuditAsync(StepAudit(x, g, "skipped", new Dictionary<string, object?> { ["reason"] = "maxTimes", ["count"] = (double)count }), ct);
@@ -198,7 +200,7 @@ public sealed partial class WorkflowEngine
         var loc = x.C.Steps.GetValueOrDefault(g.Target) ?? throw new WorkflowException("goToInvalidTarget", "The step to go back to no longer exists.");
         var depth = t.Frames.FindLastIndex(fr => fr.List == loc.ListId);
         if (depth < 0) throw new WorkflowException("goToInvalidTarget", "Go back can only return to an earlier step on the same path.");
-        x.S.GoTo[$"{t.Id}:{g.Id}"] = count + 1;
+        x.S.GoTo[counter] = count + 1;
         x.S.SetOutput(g.Id, "count", count + 1);
         await x.U.AuditAsync(StepAudit(x, g, "completed", new Dictionary<string, object?> { ["target"] = g.Target, ["count"] = (double)(count + 1) }), ct);
         // Leaving nested lists drops their loop state.
@@ -245,7 +247,8 @@ public sealed partial class WorkflowEngine
                     Advance(t);
                     return;
                 }
-                await AddTimerAsync(x, t, w, BookmarkPurposes.Wait, due.Value, null, ct);
+                // A date beyond the calendar (year 9999) never arrives: the step waits without a timer.
+                if (due != DateTimeOffset.MaxValue) await AddTimerAsync(x, t, w, BookmarkPurposes.Wait, due.Value, null, ct);
                 Wait(t, "timer", rec);
                 break;
             }
@@ -285,8 +288,24 @@ public sealed partial class WorkflowEngine
         await x.U.AuditAsync(StepAudit(x, w, "waiting", new Dictionary<string, object?> { ["until"] = u.Type }), ct);
     }
 
-    /// <summary>When a date or date-time value plus an offset arrives (date values land at <paramref name="at"/>, default 09:00, in the settings time zone).</summary>
+    /// <summary>
+    /// When a date or date-time value plus an offset arrives (date values land at <paramref name="at"/>, default 09:00, in
+    /// the settings time zone). Null when there is no date; <see cref="DateTimeOffset.MaxValue"/> when it lies beyond the
+    /// calendar's range (it never arrives), never an exception.
+    /// </summary>
     internal static DateTimeOffset? DateWaitDue(WorkCalendar calendar, object? value, string? offset, string? at)
+    {
+        try
+        {
+            return DateWaitDueUnchecked(calendar, value, offset, at);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return value is string s && s.Length >= 4 && s[0] is >= '5' and <= '9' ? DateTimeOffset.MaxValue : DateTimeOffset.MinValue;
+        }
+    }
+
+    private static DateTimeOffset? DateWaitDueUnchecked(WorkCalendar calendar, object? value, string? offset, string? at)
     {
         if (value is not string s || s.Length < 10) return null;
         DateTimeOffset baseTime;

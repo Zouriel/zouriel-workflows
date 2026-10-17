@@ -243,7 +243,8 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   forced. Both are audited.
 - **Force state.** Admins with `workflows.intervene` may move a record to any state with a reason
   (`POST /records/{entity}/{id}/force-state`). No guards or inputs are checked; `onExit`/`onEnter`
-  run unless `skipSteps: true`. Audited as `lifecycle.forced`.
+  run unless `skipSteps: true`. Either way the record leaves its state: the old state's timers are
+  dropped and its `onEnter`/`sla` runs are cancelled (unless `keepRunsOnExit`). Audited as `lifecycle.forced`.
 - **Reset.** `reset?: { label?, to?, who, confirm?, input?: { form }, comment?, states?, runExitEnter?,
   cancelAutomations?, steps? }` lets people start a record's workflow over (`POST /records/{entity}/{id}/reset` with
   `{ input?, comment?, undo? }`). Without `reset` a lifecycle cannot be reset. `comment` is the
@@ -355,7 +356,7 @@ value cannot add path segments, a query or another host; webhooks do not follow 
 | `webhook` | `connection?` (named in settings) or `url` (must match an allowed origin), `method`, `path?: template`, `headers?: {name: template}`, `body?: json-with-operands`, `expect?: [status…]` | `status`, `body` |
 | `action` | `action: <registry key>`, `input: { <key>: operand }`. A handler that can also undo (`undo(input, output)`) makes the action undoable by a reset. | the action's declared outputs |
 | `subWorkflow` | `workflow: <automation key>`, `target?`, `wait: bool`, `input?` | `instanceId`, `status`, `outputs` (the child's `vars`) |
-| `goTo` | `target: <step id>`, `maxTimes` (1–50). Jumps back to an earlier step in the same list or an enclosing list on the current path (never into or out of a `parallel` path or `forEach`). When the count is reached the step is skipped. | `count` |
+| `goTo` | `target: <step id>`, `maxTimes` (1–50). Jumps back to an earlier step in the same list or an enclosing list on the current path (never into or out of a `parallel` path or `forEach`). When the count is reached the step is skipped. Inside a `forEach` the count is kept per item. | `count` |
 | `end` | `result: "completed"|"failed"`, `reason?: template` | — |
 
 **Remarks on decisions.** `requireComment` on an `approval` or a `task`: `never` (default; a comment
@@ -402,7 +403,9 @@ With `calendar: "working"` the duration counts only working time from settings (
 `calendar.hours` `["09:00","17:00"]`, `calendar.holidays` `["2026-12-25", …]`, `timeZone`): days count
 working days (landing at the same time of day, moved forward into working hours), hours count
 working hours. With no calendar in settings, `working` behaves as `calendar`. A duration longer than
-50 years is invalid (`badDuration`).
+50 years is invalid (`badDuration`). A time beyond the calendar's range (after year 9999, e.g. a date
+`9999-12-31` plus an offset) never arrives: a `dateReached` trigger plans nothing for it, a `wait` for
+it waits without a timer; it is never an error.
 
 ## 10. Instances, runs and statuses
 

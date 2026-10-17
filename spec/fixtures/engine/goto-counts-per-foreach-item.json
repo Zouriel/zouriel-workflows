@@ -1,0 +1,30 @@
+{
+ "name": "Go back counts its maxTimes per item of the forEach it is in, so every item repeats as often",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "document": [ { "id": "d1", "name": "A" }, { "id": "d2", "name": "B" } ],
+  "application": [ { "id": "a1", "title": "Q", "documents": ["d1", "d2"] } ]
+ },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "wf_g", "key": "loop", "kind": "automation", "title": "Loop", "entity": "application",
+   "trigger": { "type": "manual", "label": "Go" },
+   "variables": [ { "id": "v1", "key": "n", "type": "number", "default": 0 } ],
+   "steps": [
+    { "id": "fe", "type": "forEach", "collection": "entity.documents", "mode": "sequential", "max": 10, "steps": [
+     { "id": "inc", "type": "setVariables", "values": [ { "variable": "v1", "value": { "calc": { "op": "sum", "args": [ { "ref": "vars.n" }, { "const": 1 } ] } } } ] },
+     { "id": "g", "type": "goTo", "target": "inc", "maxTimes": 2 } ] }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "manual": { "workflow": "loop", "entity": "application", "id": "a1", "actor": "ali" },
+   "expect": {
+    "instances": [ { "definition": "loop", "status": "completed" } ],
+    "vars": { "loop": { "n": 6 } }
+   }
+  }
+ ]
+}
