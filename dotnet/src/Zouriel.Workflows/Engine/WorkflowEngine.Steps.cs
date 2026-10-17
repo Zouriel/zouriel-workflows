@@ -323,10 +323,14 @@ public sealed partial class WorkflowEngine
             await x.U.S.Entities.SetFieldsAsync(entity, id, values, ct);
         }
         x.U.ForgetMasker(entity, id);
-        rec.Undo = Values.Serialize(new Dictionary<string, object?>
+        // What the gateway holds after the write (it may store a value differently from the operand: dates, decimals,
+        // numbers in text fields), so the reset list does not mistake its own formatting for a later change.
+        var written = await x.U.S.Entities.GetAsync(entity, id, ct);
+        rec.Undo = Journal(new Dictionary<string, object?>
         {
             ["kind"] = "fields", ["entity"] = entity, ["id"] = id,
-            ["before"] = values.Keys.ToDictionary(k => k, k => before?[k]), ["after"] = values.ToDictionary(kv => kv.Key, kv => Values.Normalize(kv.Value)),
+            ["before"] = values.Keys.ToDictionary(k => k, k => before?[k]),
+            ["after"] = values.ToDictionary(kv => kv.Key, kv => written is null ? Values.Normalize(kv.Value) : Values.Normalize(written[kv.Key])),
         });
         await CompleteStepAsync(x, rec, sf, null, ct);
         Advance(t);
@@ -357,13 +361,23 @@ public sealed partial class WorkflowEngine
             if (field is null || !field.IsSettable) throw new WorkflowException("fieldNotSettable", $"Workflows cannot set '{v.Field}' of {desc.Label}.");
             values[v.Field] = await scope.OperandAsync(v.Value, ct);
         }
+        // Lint only knows the lifecycles published when the workflow was; a new record starts in its lifecycle's first state.
+        var lifecycleFields = (await x.U.S.ListTriggersAsync(ct)).Where(tr => tr.Type == "lifecycle" && tr.Entity == cr.Entity).Select(tr => tr.Field).ToHashSet();
+        if (values.Keys.FirstOrDefault(lifecycleFields.Contains) is { } owned)
+            throw new WorkflowException("ownedField", $"{desc.Field(owned)?.Label ?? owned} is controlled by a lifecycle; a new record starts in its first state.");
         var rec = await BeginStepAsync(x, t, cr, new Dictionary<string, object?> { ["entity"] = cr.Entity, ["values"] = (await x.U.MaskerAsync(cr.Entity, null, ct)).MaskMap(values) }, ct);
         string id;
         using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
         {
             id = await x.U.S.Entities.CreateAsync(cr.Entity, values, ct);
         }
-        rec.Undo = Values.Serialize(new Dictionary<string, object?> { ["kind"] = "created", ["entity"] = cr.Entity, ["id"] = id });
+        // The values it was created with (as the gateway holds them), so a reset can tell when people changed it since.
+        var made = await x.U.S.Entities.GetAsync(cr.Entity, id, ct);
+        rec.Undo = Journal(new Dictionary<string, object?>
+        {
+            ["kind"] = "created", ["entity"] = cr.Entity, ["id"] = id,
+            ["values"] = made?.Values.Where(kv => desc.Field(kv.Key)?.Type != FieldTypes.Collection).ToDictionary(kv => kv.Key, kv => Values.Normalize(kv.Value)),
+        });
         x.S.SetOutput(cr.Id, "id", id);
         await CompleteStepAsync(x, rec, cr, x.S.Outputs[cr.Id], ct);
         scope.Invalidate();
@@ -405,6 +419,9 @@ public sealed partial class WorkflowEngine
             applied = false;
         }
         x.S.SetOutput(at.Id, "applied", applied);
+        // Listed by a reset (never taken back): moving another record's lifecycle has consequences of its own.
+        if (applied)
+            rec.Undo = Journal(new Dictionary<string, object?> { ["kind"] = "move", ["entity"] = entity, ["id"] = id, ["lifecycle"] = at.Lifecycle, ["transition"] = at.Transition });
         await CompleteStepAsync(x, rec, at, x.S.Outputs[at.Id], ct);
         scope.Invalidate();
         Advance(t);
@@ -427,10 +444,12 @@ public sealed partial class WorkflowEngine
         var key = $"{x.I.Id}:{n.Id}:{t.Id}:{t.CurrentItem().Index}:{x.S.GoTo.Values.Sum()}";
         if (recipients.Count > 0) await QueueNotificationAsync(x.U, new WorkflowNotification(n.Channel, recipients, subject, body, link, x.I.Id, x.I.Entity, x.I.EntityId, key), ct);
         x.S.SetOutput(n.Id, "sent", recipients.Count);
-        rec.Undo = Values.Serialize(new Dictionary<string, object?>
-        {
-            ["kind"] = "message", ["channel"] = n.Channel, ["to"] = recipients.Select(r => (object?)(r.Name ?? r.Email ?? r.UserId)).ToList(), ["subject"] = subject,
-        });
+        // Only a message that went to someone is listed by a reset.
+        if (recipients.Count > 0)
+            rec.Undo = Journal(new Dictionary<string, object?>
+            {
+                ["kind"] = "message", ["channel"] = n.Channel, ["to"] = recipients.Select(r => (object?)(r.Name ?? r.Email ?? r.UserId)).ToList(), ["subject"] = subject,
+            });
         await CompleteStepAsync(x, rec, n, x.S.Outputs[n.Id], ct);
         Advance(t);
     }
@@ -547,7 +566,7 @@ public sealed partial class WorkflowEngine
             await HandleStepErrorAsync(x, t, wh, new WorkflowException("webhookFailed", $"The webhook answered {res.Status}."), rec, ct);
             return;
         }
-        rec.Undo = Values.Serialize(new Dictionary<string, object?> { ["kind"] = "webhook", ["method"] = wh.Method, ["url"] = url });
+        rec.Undo = Journal(new Dictionary<string, object?> { ["kind"] = "webhook", ["method"] = wh.Method, ["url"] = url });
         await CompleteStepAsync(x, rec, wh, x.S.Outputs[wh.Id], ct);
         Advance(t);
     }
@@ -590,7 +609,7 @@ public sealed partial class WorkflowEngine
             outputs = await RunActionAsync(x, t, a, handler, input, ct);
         }
         foreach (var (k, v) in outputs) x.S.SetOutput(a.Id, k, v);
-        rec.Undo = Values.Serialize(new Dictionary<string, object?>
+        rec.Undo = Journal(new Dictionary<string, object?>
         {
             ["kind"] = "action", ["action"] = a.Action, ["input"] = input, ["output"] = outputs.ToDictionary(kv => kv.Key, kv => Values.Normalize(kv.Value)),
         });

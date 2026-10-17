@@ -383,8 +383,9 @@ public sealed partial class WorkflowEngine
     /// steps run (they can change this record and related ones). Everything happens in one unit of work.
     /// </summary>
     /// <param name="undo">The ids of the reset list's items to take back (see <see cref="GetResetPreviewAsync"/>); null or empty = none.</param>
+    /// <param name="token">The reset list's <see cref="ResetPreview.Token"/>; when given and the list has changed since, the reset fails with <c>resetChanged</c>.</param>
     public Task<RecordView> ResetAsync(string entity, string id, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default,
-        IReadOnlyCollection<string>? undo = null)
+        IReadOnlyCollection<string>? undo = null, string? token = null)
     {
         if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can reset a workflow.");
         return RunAsync(async u =>
@@ -413,7 +414,7 @@ public sealed partial class WorkflowEngine
             foreach (var run in await RunningAboutAsync(u, record, reset, ct))
                 await CancelInstanceAsync(u, run, user, $"The workflow was reset by {user.Name ?? user.Id}.", ct);
             // What the person chose to take back of the workflow's work (spec §6 reset list).
-            var undone = await UndoChosenAsync(u, c, record, undo ?? [], user, ct);
+            var undone = await UndoChosenAsync(u, c, record, undo ?? [], token, user, ct);
             var runExitEnter = reset.RunExitEnter == true;
             if (from is not null && runExitEnter) await ExitStateAsync(u, c, record, from, user, trigger, ct);
             else foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);

@@ -75,6 +75,7 @@ public sealed class ChangeInspector
             ActorName = scope?.Actor.Name ?? _engine.CurrentActor()?.Name,
             Depth = scope?.Depth ?? 0, CausationInstanceId = scope?.InstanceId, CausationDefinitionId = scope?.DefinitionId,
             EngineFields = engineFields.Count > 0 ? engineFields : null, CorrelationId = scope?.CorrelationId, At = _engine.Options.Time.GetUtcNow(),
+            SuppressTriggers = scope?.SuppressTriggers == true,
         };
         return new InspectResult { Change = change, InitialValues = initial };
     }

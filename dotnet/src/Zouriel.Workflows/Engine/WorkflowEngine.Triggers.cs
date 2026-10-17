@@ -192,6 +192,8 @@ public sealed partial class WorkflowEngine
     internal async Task<IReadOnlyList<EventStart>> ChangeStartsAsync(Uow u, EntityChange change, CancellationToken ct)
     {
         var starts = new List<EventStart>();
+        // A reset taking back what a workflow did starts nothing, so an automation cannot redo it (spec §6).
+        if (change.SuppressTriggers) return starts;
         foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Entity == change.Entity && t.Type is TriggerTypes.Created or TriggerTypes.FieldChanged or TriggerTypes.Deleted))
         {
             // A change committed before the workflow was first published belongs to the past (spec §5).

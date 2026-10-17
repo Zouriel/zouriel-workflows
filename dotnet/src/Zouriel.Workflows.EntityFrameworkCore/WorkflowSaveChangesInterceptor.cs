@@ -219,7 +219,7 @@ public sealed class WorkflowSaveChangesInterceptor(WorkflowEngine engine) : Save
                         Fields = after.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => new FieldChange { To = kv.Value }),
                         ActorType = actor?.Type ?? "system", ActorId = actor?.Id, ActorName = actor?.Name,
                         Depth = scope?.Depth ?? 0, CausationInstanceId = scope?.InstanceId, CausationDefinitionId = scope?.DefinitionId,
-                        CorrelationId = scope?.CorrelationId, At = engine.Options.Time.GetUtcNow(),
+                        CorrelationId = scope?.CorrelationId, At = engine.Options.Time.GetUtcNow(), SuppressTriggers = scope?.SuppressTriggers == true,
                     };
                     db.Set<OutboxRecord>().Add(engine.Changes.ToOutbox(change));
                 }

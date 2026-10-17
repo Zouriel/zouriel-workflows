@@ -46,6 +46,11 @@ public sealed class EntityChange
     public string? CorrelationId { get; set; }
     /// <summary>When the change was made (compared with a trigger's first publish).</summary>
     public DateTimeOffset At { get; set; }
+    /// <summary>
+    /// True when the write must not start automations (a reset taking back what a workflow did, spec §6), so
+    /// undoing a field cannot set off a workflow that redoes it. Lifecycle bookkeeping still follows the change.
+    /// </summary>
+    public bool SuppressTriggers { get; set; }
 
     /// <summary>The actor, rebuilt from the stored fields.</summary>
     public WorkflowActor Actor => ActorType switch
@@ -143,9 +148,12 @@ public sealed class WorkflowWriteScope : IDisposable
     public string? CorrelationId { get; }
     /// <summary>"entity:id:field" entries the engine may write even when a lifecycle owns them.</summary>
     public HashSet<string> OwnedWrites { get; } = [];
+    /// <summary>Writes in this scope start no automations (a reset's undo, spec §6); carried on <see cref="EntityChange.SuppressTriggers"/>.</summary>
+    public bool SuppressTriggers { get; }
 
-    private WorkflowWriteScope(WorkflowActor actor, int depth, string? instanceId, string? definitionId, string? correlationId)
+    private WorkflowWriteScope(WorkflowActor actor, int depth, string? instanceId, string? definitionId, string? correlationId, bool suppressTriggers)
     {
+        SuppressTriggers = suppressTriggers;
         Actor = actor;
         Depth = depth;
         InstanceId = instanceId;
@@ -156,8 +164,10 @@ public sealed class WorkflowWriteScope : IDisposable
     }
 
     /// <summary>Starts a scope for the current async flow; dispose it to restore the previous one.</summary>
-    public static WorkflowWriteScope Begin(WorkflowActor actor, int depth, string? instanceId = null, string? definitionId = null, string? correlationId = null) =>
-        new(actor, depth, instanceId, definitionId, correlationId);
+    /// <param name="suppressTriggers">True when the writes must not start automations (a reset's undo). Nested scopes inherit it.</param>
+    public static WorkflowWriteScope Begin(WorkflowActor actor, int depth, string? instanceId = null, string? definitionId = null, string? correlationId = null,
+        bool suppressTriggers = false) =>
+        new(actor, depth, instanceId, definitionId, correlationId, suppressTriggers || CurrentScope.Value?.SuppressTriggers == true);
 
     /// <summary>The <see cref="OwnedWrites"/> key for a record field.</summary>
     public static string OwnedKey(string entity, string id, string field) => $"{entity}:{id}:{field}";

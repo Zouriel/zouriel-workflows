@@ -78,7 +78,8 @@ public sealed record PublishBody(string? Note);
 /// <param name="Input">The reset form's answers, if it has a form.</param>
 /// <param name="Lifecycle">Which lifecycle, when the record has more than one.</param>
 /// <param name="Undo">The reset list's item ids to take back (from <c>GET …/reset</c>); empty = none.</param>
-public sealed record ResetBody(Dictionary<string, JsonNode?>? Input, string? Lifecycle, List<string>? Undo);
+/// <param name="Token">The reset list's token (from <c>GET …/reset</c>); when the list has changed since, the reset fails with <c>resetChanged</c>.</param>
+public sealed record ResetBody(Dictionary<string, JsonNode?>? Input, string? Lifecycle, List<string>? Undo, string? Token = null);
 
 /// <summary>One permission change: who may do a node of a workflow.</summary>
 /// <param name="Node">A transition id, <c>reset</c>, <c>trigger</c> (a manual start) or an approval/task step id.</param>
@@ -391,7 +392,7 @@ public static class WorkflowApi
             IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
             await RequireRecordAsync(entity, id, access, http, ct);
-            return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Undo));
+            return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Undo, body?.Token));
         }), o.ViewPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/force-state", async (string entity, string id, ForceStateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.ForceStateAsync(entity, id, body.State, body.Reason, body.SkipSteps, Actor(http), body.Lifecycle, ct))), o.InterventionPolicy);

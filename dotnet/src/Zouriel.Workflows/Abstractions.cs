@@ -162,7 +162,11 @@ public interface IWorkflowAction
 /// </summary>
 public interface IUndoableWorkflowAction : IWorkflowAction
 {
-    /// <summary>Undoes one earlier run of the action, inside the reset's unit of work. Throwing stops the reset.</summary>
+    /// <summary>
+    /// Undoes one earlier run of the action, inside the reset's unit of work. Throwing stops the reset. It may be
+    /// called again for the same run when the unit is retried; <see cref="WorkflowActionUndoContext.IdempotencyKey"/>
+    /// tells the calls apart. Record writes it makes start no automations.
+    /// </summary>
     Task UndoAsync(WorkflowActionUndoContext context, CancellationToken ct);
 }
 
@@ -181,6 +185,11 @@ public sealed class WorkflowActionUndoContext
     public string? EntityId { get; init; }
     /// <summary>The person resetting the workflow.</summary>
     public required WorkflowActor Actor { get; init; }
+    /// <summary>
+    /// Stable for this undo (the id of the step that ran the action). The reset's unit of work may be retried
+    /// (a concurrent writer), so an undo can be asked for more than once: use the key to do it only once.
+    /// </summary>
+    public required string IdempotencyKey { get; init; }
 }
 
 /// <summary>Resolves action handlers (from DI in ASP.NET apps).</summary>
