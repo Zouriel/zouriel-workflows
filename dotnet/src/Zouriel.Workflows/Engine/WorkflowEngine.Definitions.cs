@@ -335,6 +335,12 @@ public sealed partial class WorkflowEngine
             var v = await u.S.GetVersionAsync(id, version, ct) ?? throw new WorkflowException("notFound", "That version does not exist.");
             rec.DraftJson = v.Json;
             rec.HasDraftChanges = true;
+            // The list shows the version's own name again, not the name the newer draft had.
+            var old = Definitions.Parse(v.Json);
+            rec.Title = old.Title;
+            rec.Entity = old.Entity;
+            rec.UpdatedAt = u.Now;
+            rec.UpdatedBy = actor.Id;
             await u.S.UpdateDefinitionAsync(rec, ct);
             await u.AuditAsync(new AuditEntry
             {

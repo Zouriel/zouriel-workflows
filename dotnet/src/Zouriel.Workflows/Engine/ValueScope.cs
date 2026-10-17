@@ -30,6 +30,8 @@ internal sealed class ValueScope : IValueContext
     public InstanceRecord? Instance { get; init; }
     public required DateTimeOffset Now { get; init; }
     public required string Today { get; init; }
+    /// <summary>The settings time zone: date-times in message text are shown in it.</summary>
+    public TimeZoneInfo? Zone { get; init; }
 
     public ValueScope(IEntityGateway gateway, WorkflowRegistry registry)
     {

@@ -76,6 +76,7 @@ public sealed partial class WorkflowEngine
                 Entity = entity ?? i?.Entity,
                 EntityId = entityId ?? i?.EntityId,
                 EntityOverride = state?.Snapshot,
+                Zone = Settings.Zone(),
                 Trigger = trigger ?? (i is null ? null : TriggerInfo.FromJson(i.TriggerJson)),
                 State = state,
                 Item = item,

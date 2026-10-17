@@ -77,8 +77,10 @@ An **operand** is `{ "const": any }`, `{ "ref": "<token path>" }`, `{ "today": <
 
 A **template** is an array of parts: strings, or `{ "ref": "<token path>" }`. Rendering joins them;
 a ref renders the value as text (`enum` as its option label, `user` as the user's name, `boolean` as
-`Yes`/`No`, `currency`/`number` with the number unformatted, `null` as empty, arrays joined with
-`, `). A plain string is accepted wherever a template is and means `[string]`.
+`Yes`/`No`, `currency`/`number` with the number unformatted, `date` (and `today`) as `20 Oct 2026`,
+`dateTime` (and `now`, `trigger.at`, `instance.startedAt`) as `19 Oct 2026, 14:30 UTC` in the settings
+time zone (named after it), `null` as empty, arrays joined with `, `). Message text is for people;
+machine fields elsewhere stay ISO 8601. A plain string is accepted wherever a template is and means `[string]`.
 
 Reading a path that the registry does not allow is a lint error (`unknownToken`); at run time it
 yields `null`. `steps.<id>.…` is only valid when that step is **upstream**: it comes before the

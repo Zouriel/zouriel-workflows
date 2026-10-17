@@ -54,7 +54,8 @@ public static class DefinitionDiff
                 if (x != y) lines.Add($"Changed who can do or what happens on “{t.Label}”.");
             }
         }
-        if (lines.Count == 0) lines.Add("Only layout or wording changes.");
+        // Something differs that no sentence above names (positions, descriptions…); identical versions say nothing.
+        if (lines.Count == 0 && Definitions.Serialize(before) != Definitions.Serialize(after)) lines.Add("Only layout or wording changes.");
         return lines;
     }
 

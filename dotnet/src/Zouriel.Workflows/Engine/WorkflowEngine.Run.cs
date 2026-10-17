@@ -1,3 +1,4 @@
+using System.Globalization;
 using Zouriel.Workflows.Audit;
 using Zouriel.Workflows.Json;
 using Zouriel.Workflows.Model;
@@ -506,6 +507,13 @@ public sealed partial class WorkflowEngine
             return (await Options.Identity.GetUserAsync(Values.Text(value), ct))?.Name ?? Values.Text(value);
         if (field?.Type == FieldTypes.Relation && value is not null && field.Entity is not null)
             return await RecordTitleAsync(scope, field.Entity, Values.Text(value), ct) ?? Values.Text(value);
+        // Dates read the way people write them (spec §3): "20 Oct 2026"; date-times also get a time and zone.
+        if (value is string s && (field?.Type == FieldTypes.Date || path == "today")
+            && DateOnly.TryParseExact(s, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var day))
+            return day.ToString("d MMM yyyy", CultureInfo.InvariantCulture);
+        if (value is string t && (field?.Type == FieldTypes.DateTime || path is "now" or "trigger.at" or "instance.startedAt")
+            && DateTimeOffset.TryParse(t, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var at))
+            return Values.FormatForPeople(at, scope.Zone);
         return Values.Text(value);
     }
 

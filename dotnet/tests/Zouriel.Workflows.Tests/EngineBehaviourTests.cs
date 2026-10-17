@@ -152,6 +152,31 @@ public sealed class EngineBehaviourTests
     // ── Definitions ───────────────────────────────────────────────────────
 
     [Fact]
+    public async Task A_rollback_brings_back_the_old_name()
+    {
+        var h = await WithRecordAsync();
+        const string v1 = """
+        { "specVersion": 1, "id": "wf_n", "key": "named", "kind": "automation", "title": "First name", "entity": "application",
+          "trigger": { "type": "manual", "label": "Go" }, "steps": [] }
+        """;
+        await h.PublishAsync(v1);
+        await h.PublishAsync(v1.Replace("First name", "Second name"));
+        await h.Engine.RollbackAsync("wf_n", 1, Admin);
+        var summary = (await h.Engine.ListDefinitionsAsync()).Single(d => d.Id == "wf_n");
+        Assert.Equal("First name", summary.Title);
+        Assert.Equal(3, summary.Version);
+    }
+
+    [Fact]
+    public void Identical_versions_have_no_differences()
+    {
+        var d = Zouriel.Workflows.Model.Definitions.Parse("""
+        { "specVersion": 1, "id": "wf_s", "key": "same", "kind": "automation", "title": "Same", "trigger": { "type": "manual" }, "steps": [] }
+        """);
+        Assert.Empty(Zouriel.Workflows.Lint.DefinitionDiff.Describe(d, d));
+    }
+
+    [Fact]
     public async Task A_rollback_that_fails_lint_changes_nothing()
     {
         var h = await WithRecordAsync();
@@ -252,6 +277,21 @@ public sealed class EngineBehaviourTests
       "steps": [ { "id": "t", "type": "approval", "title": "Check it", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P3D",
                    "reminders": ["P1D"], "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] }
     """;
+
+    [Fact]
+    public async Task Templates_show_dates_the_way_people_write_them()
+    {
+        var h = await WithRecordAsync(new() { ["title"] = "Q", ["stage"] = "new", ["deadline"] = "2026-10-20", ["decidedAt"] = "2026-10-19T14:30:00.000Z" });
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_d", "key": "dates", "kind": "automation", "title": "Dates", "entity": "application",
+          "trigger": { "type": "fieldChanged", "field": "stage" },
+          "steps": [ { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "ali" } ], "subject": "Dates",
+                       "body": ["Due ", { "ref": "entity.deadline" }, "; decided ", { "ref": "entity.decidedAt" }, "."] } ] }
+        """);
+        await h.Store.ChangeRecordAsync("application", "a1", new() { ["stage"] = "checked" });
+        await h.SettleAsync();
+        Assert.Equal("Due 20 Oct 2026; decided 19 Oct 2026, 14:30 UTC.", h.Notifications.Sent.Single(n => n.Subject == "Dates").Body);
+    }
 
     [Theory]
     [InlineData(null, "22 Oct 2026, 09:00 UTC")]
