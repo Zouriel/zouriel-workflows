@@ -199,8 +199,28 @@ public static class Linter
             var field = entity?.Field(lc.Field);
             if (entity is not null && field is null) Error("unknownField", null, $"'{lc.Field}' is not a field of {entity.Label}.");
             else if (field is not null && !field.IsLifecycle) Error("notLifecycleField", null, $"{field.Label} cannot be controlled by a lifecycle; the app has not allowed it.");
-            var other = ctx.OtherPublished.FirstOrDefault(d => d.IsLifecycle && d.Id != def.Id && d.Entity == def.Entity && d.Lifecycle?.Field == lc.Field);
-            if (other is not null) Error("lifecycleConflict", null, $"'{other.Title}' already controls this field. A field can have one lifecycle.");
+            // Several lifecycles may share a field when "applies to" tells them apart (spec §6): at most one
+            // without a condition (the fallback for every other record).
+            foreach (var other in ctx.OtherPublished.Where(d => d.IsLifecycle && d.Id != def.Id && d.Entity == def.Entity && d.Lifecycle?.Field == lc.Field))
+            {
+                var theirs = other.Lifecycle!.AppliesWhen;
+                if (lc.AppliesWhen is null && theirs is null)
+                    Error("lifecycleConflict", null, $"'{other.Title}' already controls this field for every record. Give one of them an “Applies to” condition.");
+                else if (lc.AppliesWhen is not null && theirs is not null && !ClearlyApart(lc.AppliesWhen, theirs))
+                    Warn("lifecyclesMayOverlap", null, $"'{other.Title}' may apply to the same records; a record gets the lifecycle published first.");
+            }
+            if (lc.AppliesWhen is { } applies)
+            {
+                CheckCondition(applies, null, new Env(entity?.Key, null, [], false, null));
+                foreach (var r in Conditions.Refs(applies))
+                {
+                    var parts = r.Split('.');
+                    if (parts.Length != 2 || parts[0] != "entity")
+                        Error("appliesWhenField", null, "“Applies to” can only read this record's own fields (not related records, the trigger or steps).");
+                    else if (parts[1] == lc.Field)
+                        Error("appliesWhenField", null, "“Applies to” cannot read the field the lifecycle controls.");
+                }
+            }
 
             if (lc.States.Count == 0) Error("noStates", null, "Add at least one state.");
             var initials = lc.States.Count(s => s.IsInitial);
@@ -644,6 +664,26 @@ public static class Linter
                 if (a.ManagerOf is not null and not "initiator" and not "assignees" && env is not null) CheckToken(a.ManagerOf, node, env, expectUser: true);
                 if (a.Email is not null) CheckTemplate(a.Email, node, env ?? new Env(def.Entity, null, [], true, def.Trigger));
             }
+        }
+
+        /// <summary>
+        /// Whether two "applies to" conditions can never hold for the same record: both require the same field
+        /// to equal different constants (the common "Type is Passport" / "Type is Visa" case).
+        /// </summary>
+        private static bool ClearlyApart(Condition a, Condition b)
+        {
+            static Dictionary<string, object?> Required(Condition c)
+            {
+                var rules = c switch
+                {
+                    ConditionRule r => [r],
+                    ConditionGroup { Match: "all" } g => g.Conditions.OfType<ConditionRule>().ToList(),
+                    _ => new List<ConditionRule>(),
+                };
+                return rules.Where(r => r.Op == "eq" && r.Value is { HasConst: true }).GroupBy(r => r.Ref).ToDictionary(g => g.Key, g => g.First().Value!.Const);
+            }
+            var ra = Required(a);
+            return Required(b).Any(kv => ra.TryGetValue(kv.Key, out var v) && !Json.Values.DeepEquals(Json.Values.Normalize(v), Json.Values.Normalize(kv.Value)));
         }
 
         private void CheckCondition(Condition c, string? node, Env env)

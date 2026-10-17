@@ -191,14 +191,22 @@ public sealed partial class WorkflowEngine
 
     // ── Lifecycle ownership (for the change hook) ─────────────────────────
 
-    internal sealed record OwnedField(string DefinitionId, string DefinitionKey, string Entity, string Field, bool Enforce, string? InitialState);
+    internal sealed record OwnedField(string DefinitionId, string DefinitionKey, string Entity, string Field, bool Enforce, string? InitialState, Condition? AppliesWhen);
 
     internal sealed class OwnershipMap(IReadOnlyList<OwnedField> fields, DateTimeOffset loadedAt)
     {
         public IReadOnlyList<OwnedField> Fields { get; } = fields;
         public DateTimeOffset LoadedAt { get; } = loadedAt;
-        public OwnedField? Find(string entity, string field) => Fields.FirstOrDefault(f => f.Entity == entity && f.Field == field);
         public IEnumerable<OwnedField> ForEntity(string entity) => Fields.Where(f => f.Entity == entity);
+
+        /// <summary>
+        /// The lifecycle that controls <paramref name="field"/> of a record with these values (spec §6 applies to):
+        /// lifecycles with a condition are tried first, in publish order, then the one without.
+        /// </summary>
+        public OwnedField? For(string entity, string field, IReadOnlyDictionary<string, object?>? values, string today) =>
+            Fields.Where(f => f.Entity == entity && f.Field == field)
+                .OrderBy(f => f.AppliesWhen is null ? 1 : 0)
+                .FirstOrDefault(f => LifecycleSelection.Applies(f.AppliesWhen, values, today));
     }
 
 
@@ -234,8 +242,11 @@ public sealed partial class WorkflowEngine
         var list = triggers.Where(t => t.Type == "lifecycle" && t.Entity is not null && t.Field is not null).Select(t =>
         {
             var data = Values.FromJson(t.Data ?? "{}") as Dictionary<string, object?> ?? [];
+            var applies = data.GetValueOrDefault("appliesWhen") is { } cond
+                ? System.Text.Json.JsonSerializer.Deserialize<Condition>(Values.Serialize(cond), Definitions.JsonOptions)
+                : null;
             return new OwnedField(t.DefinitionId, t.DefinitionKey, t.Entity!, t.Field!, data.GetValueOrDefault("mode") as string != "observe",
-                data.GetValueOrDefault("initial") as string);
+                data.GetValueOrDefault("initial") as string, applies);
         }).ToList();
         return new OwnershipMap(list, Now);
     }

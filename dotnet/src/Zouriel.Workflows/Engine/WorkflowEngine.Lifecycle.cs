@@ -23,6 +23,30 @@ public sealed partial class WorkflowEngine
         return null;
     }
 
+    /// <summary>
+    /// The lifecycle a record is on for <paramref name="field"/> (any field when null), spec §6 applies to:
+    /// the one it already has an instance of; else, for a record that has none yet, the first whose
+    /// <c>appliesWhen</c> its values meet (conditional lifecycles before the one without a condition).
+    /// </summary>
+    internal async Task<CompiledDefinition?> LifecycleForRecordAsync(Uow u, string entity, string id, string? field, CancellationToken ct,
+        IReadOnlyDictionary<string, object?>? values = null)
+    {
+        var triggers = (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == "lifecycle" && t.Entity == entity && (field is null || t.Field == field)).ToList();
+        if (triggers.Count == 0) return null;
+        foreach (var t in triggers)
+            if (await FindRecordInstanceAsync(u, t.DefinitionId, entity, id, ct) is not null) return await CompiledAsync(u, t.DefinitionId, t.Version, ct);
+        values ??= (await u.S.Entities.GetAsync(entity, id, ct))?.Values;
+        foreach (var t in triggers.Select(t => (Trigger: t, When: AppliesWhenOf(t))).OrderBy(x => x.When is null ? 1 : 0))
+            if (LifecycleSelection.Applies(t.When, values, u.Today)) return await CompiledAsync(u, t.Trigger.DefinitionId, t.Trigger.Version, ct);
+        return null;
+    }
+
+    /// <summary>The <c>appliesWhen</c> a lifecycle's trigger index row carries, or null.</summary>
+    internal static Condition? AppliesWhenOf(TriggerRecord t) =>
+        Values.FromJson(t.Data ?? "{}") is Dictionary<string, object?> data && data.GetValueOrDefault("appliesWhen") is { } cond
+            ? System.Text.Json.JsonSerializer.Deserialize<Condition>(Values.Serialize(cond), Definitions.JsonOptions)
+            : null;
+
     internal async Task<CompiledDefinition> RequireLifecycleAsync(Uow u, string key, string entity, CancellationToken ct)
     {
         var c = await LifecycleForAsync(u, entity, null, key, ct);
@@ -114,7 +138,7 @@ public sealed partial class WorkflowEngine
         if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can apply a transition.");
         return RunAsync(async u =>
         {
-            var c = await LifecycleOfAsync(u, entity, lifecycle, ct);
+            var c = await LifecycleOfAsync(u, entity, id, lifecycle, ct);
             await ApplyTransitionCoreAsync(u, c.Definition.Key, entity, id, transition, input ?? [], user, isPerson: true, auto: false, 0, ct);
             return await RecordViewAsync(u, entity, id, user, ct);
         }, ct);
@@ -128,14 +152,14 @@ public sealed partial class WorkflowEngine
         string? lifecycle = null, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
-            var c = await LifecycleOfAsync(u, entity, lifecycle, ct);
+            var c = await LifecycleOfAsync(u, entity, id, lifecycle, ct);
             await ApplyTransitionCoreAsync(u, c.Definition.Key, entity, id, transition, input ?? [], actor ?? WorkflowActor.System, isPerson: false, auto: false,
                 WorkflowWriteScope.Current?.Depth ?? 0, ct);
         }, ct);
 
-    private async Task<CompiledDefinition> LifecycleOfAsync(Uow u, string entity, string? lifecycle, CancellationToken ct) =>
-        (lifecycle is null ? await LifecycleForAsync(u, entity, null, null, ct) : await RequireLifecycleAsync(u, lifecycle, entity, ct))
-        ?? throw new WorkflowException("unknownLifecycle", $"{entity} has no published lifecycle.");
+    private async Task<CompiledDefinition> LifecycleOfAsync(Uow u, string entity, string id, string? lifecycle, CancellationToken ct) =>
+        (lifecycle is null ? await LifecycleForRecordAsync(u, entity, id, null, ct) : await RequireLifecycleAsync(u, lifecycle, entity, ct))
+        ?? throw new WorkflowException("unknownLifecycle", $"No published lifecycle applies to this {entity}.");
 
     internal async Task ApplyTransitionCoreAsync(Uow u, string lifecycleKey, string entity, string id, string transitionKey, Dictionary<string, object?> input,
         WorkflowActor actor, bool isPerson, bool auto, int depth, CancellationToken ct, int chain = 0)
@@ -318,8 +342,7 @@ public sealed partial class WorkflowEngine
         RunAsync(async u =>
         {
             if (string.IsNullOrWhiteSpace(reason)) throw new WorkflowException("reasonRequired", "Say why the state is being changed.");
-            var c = lifecycle is null ? await LifecycleForAsync(u, entity, null, null, ct) : await RequireLifecycleAsync(u, lifecycle, entity, ct);
-            if (c is null) throw new WorkflowException("unknownLifecycle", $"{entity} has no published lifecycle.");
+            var c = await LifecycleOfAsync(u, entity, id, lifecycle, ct);
             var record = await EnsureRecordInstanceAsync(u, c, entity, id, ct, admin);
             if (record.Version != c.Version) c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
             var to = c.StateByKey(stateKey) ?? throw new WorkflowException("unknownState", $"'{stateKey}' is not a state of {c.Definition.Title}.");
@@ -364,7 +387,7 @@ public sealed partial class WorkflowEngine
         if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can reset a workflow.");
         return RunAsync(async u =>
         {
-            var c = await LifecycleOfAsync(u, entity, lifecycle, ct);
+            var c = await LifecycleOfAsync(u, entity, id, lifecycle, ct);
             var record = await EnsureRecordInstanceAsync(u, c, entity, id, ct, user);
             if (record.Version != c.Version) c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
             var reset = c.Lifecycle.Reset ?? throw new WorkflowException("resetDisabled", $"{c.Definition.Title} cannot be reset.");

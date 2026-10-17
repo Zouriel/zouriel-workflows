@@ -5,6 +5,7 @@
       "key": "application", "label": "Application", "pluralLabel": "Applications", "titleField": "title",
       "fields": [
         { "key": "title", "label": "Title", "type": "text", "watchable": true },
+        { "key": "track", "label": "Track", "type": "enum", "watchable": true, "options": [ { "value": "passport", "label": "Passport" }, { "value": "visa", "label": "Visa" } ] },
         { "key": "status", "label": "Status", "type": "enum", "watchable": true, "lifecycle": true,
           "options": [
             { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" },

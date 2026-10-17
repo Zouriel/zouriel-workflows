@@ -160,6 +160,11 @@ public sealed class Lifecycle
     public Dictionary<string, double[]>? Layout { get; set; }
     /// <summary>Lets people start a record's workflow over (spec §6 reset); absent = no reset.</summary>
     public LifecycleReset? Reset { get; set; }
+    /// <summary>
+    /// Which records the lifecycle is for (spec §6 applies to), read from the record's own fields when it
+    /// gets its lifecycle; absent = every record (the fallback when several lifecycles share the field).
+    /// </summary>
+    public Condition? AppliesWhen { get; set; }
 
     /// <summary>True unless <see cref="Mode"/> is <c>observe</c>.</summary>
     [JsonIgnore] public bool Enforce => Mode != "observe";

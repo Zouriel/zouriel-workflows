@@ -137,9 +137,20 @@ queueing; `skipIfRunning` — the new start is dropped (audited as `trigger.skip
 
 ## 6. Lifecycles
 
-A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum field of its entity. At
-most one lifecycle per (entity, field) may be published; publishing a second is refused
-(`lifecycleConflict`).
+A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum field of its entity.
+
+- **Applies to.** `appliesWhen?: condition` says which records the lifecycle is for, read from the
+  record's own fields only (`entity.<field>`, never the controlled field itself; `appliesWhenField`).
+  Several lifecycles may share an (entity, field) when it tells them apart: at most one without
+  `appliesWhen` (the fallback for every other record); a second one without it is refused
+  (`lifecycleConflict`), and two conditions that are not clearly apart are a `lifecyclesMayOverlap`
+  warning. A record gets its lifecycle when it is created (or, for records that existed before
+  publishing, the first time it is used): the lifecycles with a condition it meets are tried first, in
+  publish order, then the fallback; a record that meets none has no lifecycle on that field (the field
+  is then not owned for it). The record keeps that lifecycle afterwards, even if the fields the
+  condition reads change: pick fields that are fixed when the record is created (a type, a kind).
+  Field ownership for a write is decided from the record's values before the write (for a new
+  record, its first values).
 
 - **States** map 1:1 to field values by `key` (the enum value). Each has a `category`: exactly one
   `initial`; any number of `active` and `terminal`. A state may have `onEnter` steps, `onExit` steps

@@ -386,7 +386,7 @@ public sealed partial class WorkflowEngine
         if (Registry.Entity(entity) is null) throw new WorkflowException("unknownEntity", $"'{entity}' is not a workflow record type.");
         var snap = await u.S.Entities.GetAsync(entity, id, ct) ?? throw new WorkflowException("noRecord", "That record does not exist.");
         var title = Registry.Entity(entity)?.TitleField is { } tf ? Values.Text(snap[tf]) : null;
-        var c = await LifecycleForAsync(u, entity, null, null, ct);
+        var c = await LifecycleForRecordAsync(u, entity, id, null, ct, snap.Values);
         InstanceRecord? record = null;
         var options = new List<TransitionOption>();
         var states = new List<object?>();

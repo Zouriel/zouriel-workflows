@@ -1,0 +1,69 @@
+{
+ "name": "Lifecycle applies to: two lifecycles share the status field; a new record gets the one whose condition it meets (else the fallback), keeps it when the condition's field changes, and each enforces its own transitions",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": { "application": [] },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "lc_pass", "key": "passportApplication", "kind": "lifecycle", "title": "Passport application", "entity": "application",
+   "lifecycle": {
+    "field": "status", "mode": "enforce",
+    "appliesWhen": { "match": "all", "conditions": [ { "ref": "entity.track", "op": "eq", "value": { "const": "passport" } } ] },
+    "states": [
+     { "id": "p_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "p_rev", "key": "underReview", "label": "Checking the passport", "category": "active" },
+     { "id": "p_ok", "key": "approved", "label": "Issued", "category": "terminal" }
+    ],
+    "transitions": [
+     { "id": "p_t1", "key": "checkPassport", "label": "Check passport", "from": ["p_draft"], "to": "p_rev", "who": [ { "field": "entity.applicant" } ] },
+     { "id": "p_t2", "key": "issue", "label": "Issue", "from": ["p_rev"], "to": "p_ok", "who": [ { "role": "admin" } ] }
+    ]
+   }
+  },
+  {
+   "specVersion": 1, "id": "lc_any", "key": "generalApplication", "kind": "lifecycle", "title": "General application", "entity": "application",
+   "lifecycle": {
+    "field": "status", "mode": "enforce",
+    "states": [
+     { "id": "g_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "g_sub", "key": "submitted", "label": "Submitted", "category": "active" },
+     { "id": "g_done", "key": "approved", "label": "Approved", "category": "terminal" }
+    ],
+    "transitions": [
+     { "id": "g_t1", "key": "submit", "label": "Submit", "from": ["g_draft"], "to": "g_sub", "who": [ { "field": "entity.applicant" } ] }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "create": { "entity": "application", "id": "a1", "values": { "title": "My passport", "track": "passport", "applicant": "ali" } },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "draft" } },
+    "instances": [ { "definition": "passportApplication", "kind": "record", "state": "draft", "record": "a1" } ],
+    "available": { "entity": "application", "id": "a1", "user": "ali", "transitions": ["checkPassport"], "state": "draft" }
+   }
+  },
+  {
+   "create": { "entity": "application", "id": "a2", "values": { "title": "My visa", "track": "visa", "applicant": "ali" } },
+   "expect": {
+    "instances": [
+     { "definition": "passportApplication", "kind": "record", "record": "a1" },
+     { "definition": "generalApplication", "kind": "record", "state": "draft", "record": "a2" }
+    ],
+    "available": { "entity": "application", "id": "a2", "user": "ali", "transitions": ["submit"], "state": "draft" }
+   }
+  },
+  { "transition": { "entity": "application", "id": "a2", "transition": "checkPassport", "actor": "ali" }, "expectError": "unknownTransition" },
+  { "change": { "entity": "application", "id": "a2", "values": { "status": "submitted" } }, "expectError": "fieldOwned" },
+  {
+   "transition": { "entity": "application", "id": "a1", "transition": "checkPassport", "actor": "ali" },
+   "expect": { "record": { "entity": "application", "id": "a1", "values": { "status": "underReview" } } }
+  },
+  {
+   "change": { "entity": "application", "id": "a1", "values": { "track": "visa" } },
+   "expect": { "available": { "entity": "application", "id": "a1", "user": "admin", "transitions": ["issue"], "state": "underReview" } }
+  },
+  { "change": { "entity": "application", "id": "a1", "values": { "status": "approved" } }, "expectError": "fieldOwned" }
+ ]
+}

@@ -32,7 +32,11 @@ public sealed class ChangeInspector
         var desc = _engine.Registry.Entity(entity);
         if (desc is null) return new InspectResult();
         var scope = WorkflowWriteScope.Current;
-        var owned = _engine.Ownership.ForEntity(entity).ToList();
+        var ownership = _engine.Ownership;
+        // Which lifecycle controls a field depends on the record (spec §6 applies to): a new record's own
+        // values decide; an existing record's values before this write do.
+        var recordValues = kind == ChangeKinds.Created ? after : before;
+        var today = _engine.Options.Time.GetUtcNow().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
         var initial = new Dictionary<string, object?>();
         var fields = new Dictionary<string, FieldChange>(StringComparer.Ordinal);
         var engineFields = new List<string>();
@@ -42,7 +46,7 @@ public sealed class ChangeInspector
             if (!FieldTypes.IsScalar(f.Type) && f.Type != FieldTypes.Relation) continue;
             var from = before is null ? null : Values.Normalize(before.GetValueOrDefault(f.Key));
             var to = after is null ? null : Values.Normalize(after.GetValueOrDefault(f.Key));
-            var lc = owned.FirstOrDefault(o => o.Field == f.Key);
+            var lc = ownership.For(entity, f.Key, recordValues, today);
             if (kind == ChangeKinds.Created && lc is not null && Values.IsEmpty(to) && lc.InitialState is not null)
             {
                 initial[f.Key] = lc.InitialState;

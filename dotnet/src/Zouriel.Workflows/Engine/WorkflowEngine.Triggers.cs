@@ -134,21 +134,26 @@ public sealed partial class WorkflowEngine
 
     internal async Task ProcessChangeAsync(Uow u, EntityChange change, CancellationToken ct)
     {
-        // 1. Lifecycles of this entity.
-        foreach (var t in (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == "lifecycle" && t.Entity == change.Entity).ToList())
+        // 1. Lifecycles of this entity: per field, the one that applies to this record (spec §6 applies to).
+        var lifecycleTriggers = (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == "lifecycle" && t.Entity == change.Entity).ToList();
+        if (change.Kind == ChangeKinds.Deleted)
         {
-            var c = await CompiledAsync(u, t.DefinitionId, t.Version, ct);
+            foreach (var t in lifecycleTriggers)
+                if (await FindRecordInstanceAsync(u, t.DefinitionId, change.Entity, change.EntityId, ct) is { } gone)
+                    await CancelInstanceAsync(u, gone, change.Actor, "The record was deleted.", ct);
+        }
+        foreach (var ownedField in change.Kind == ChangeKinds.Deleted ? [] : lifecycleTriggers.Select(t => t.Field).Distinct().ToList())
+        {
+            // A new record's own values decide; an existing one keeps the lifecycle it has.
+            var values = change.Kind == ChangeKinds.Created ? change.Fields.ToDictionary(kv => kv.Key, kv => kv.Value.To) : null;
+            var c = await LifecycleForRecordAsync(u, change.Entity, change.EntityId, ownedField, ct, values);
+            if (c is null) continue;
             if (change.Kind == ChangeKinds.Created)
             {
                 await EnsureRecordInstanceAsync(u, c, change.Entity, change.EntityId, ct, change.Actor);
                 continue;
             }
             var record = await FindRecordInstanceAsync(u, c.DefinitionId, change.Entity, change.EntityId, ct);
-            if (change.Kind == ChangeKinds.Deleted)
-            {
-                if (record is not null) await CancelInstanceAsync(u, record, change.Actor, "The record was deleted.", ct);
-                continue;
-            }
             var field = c.Lifecycle.Field;
             if (change.Fields.TryGetValue(field, out var fc) && change.EngineFields?.Contains(field) != true)
             {

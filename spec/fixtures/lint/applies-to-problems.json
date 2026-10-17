@@ -1,0 +1,179 @@
+{
+ "name": "applies to problems: two lifecycles for every record conflict, conditions that may overlap warn, and the condition reads only the record's own fields",
+ "registry": "../engine/_registry.json",
+ "others": [
+  {
+   "specVersion": 1,
+   "id": "lc_f",
+   "key": "fallback",
+   "kind": "lifecycle",
+   "title": "Fallback",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "a",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "b",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "a"
+      ],
+      "to": "b",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "specVersion": 1,
+   "id": "lc_h",
+   "key": "highPriority",
+   "kind": "lifecycle",
+   "title": "Highpriority",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "a",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "b",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "a"
+      ],
+      "to": "b",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ],
+    "appliesWhen": {
+     "match": "all",
+     "conditions": [
+      {
+       "ref": "entity.priority",
+       "op": "eq",
+       "value": {
+        "const": "high"
+       }
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_x",
+  "key": "other",
+  "kind": "lifecycle",
+  "title": "Other",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "b",
+     "key": "approved",
+     "label": "Done",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t",
+     "key": "finish",
+     "label": "Finish",
+     "from": [
+      "a"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    }
+   ],
+   "appliesWhen": {
+    "match": "all",
+    "conditions": [
+     {
+      "ref": "entity.track",
+      "op": "eq",
+      "value": {
+       "const": "passport"
+      }
+     },
+     {
+      "ref": "entity.programme.name",
+      "op": "eq",
+      "value": {
+       "const": "Eng"
+      }
+     },
+     {
+      "ref": "entity.status",
+      "op": "eq",
+      "value": {
+       "const": "draft"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "expected": [
+  {
+   "code": "lifecyclesMayOverlap",
+   "severity": "warning"
+  },
+  {
+   "code": "appliesWhenField"
+  },
+  {
+   "code": "appliesWhenField"
+  }
+ ]
+}

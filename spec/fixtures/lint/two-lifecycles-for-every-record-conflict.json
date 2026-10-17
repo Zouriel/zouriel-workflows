@@ -1,0 +1,93 @@
+{
+ "name": "two lifecycles for every record on the same field conflict",
+ "registry": "../engine/_registry.json",
+ "others": [
+  {
+   "specVersion": 1,
+   "id": "lc_f",
+   "key": "fallback",
+   "kind": "lifecycle",
+   "title": "Fallback",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "a",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "b",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "a"
+      ],
+      "to": "b",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_g",
+  "key": "general",
+  "kind": "lifecycle",
+  "title": "General",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "b",
+     "key": "approved",
+     "label": "Done",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t",
+     "key": "finish",
+     "label": "Finish",
+     "from": [
+      "a"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "expected": [
+  {
+   "code": "lifecycleConflict"
+  }
+ ]
+}

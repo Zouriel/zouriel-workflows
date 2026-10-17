@@ -224,6 +224,7 @@
           "type": "object",
           "additionalProperties": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 }
         },
+        "appliesWhen": { "$ref": "#/$defs/condition", "description": "Which records the lifecycle is for (spec §6 applies to)." },
         "reset": {
           "description": "Lets people start a record's workflow over (spec §6 reset).",
           "type": "object",

@@ -349,7 +349,11 @@ public sealed partial class WorkflowEngine
                 {
                     Id = NewId(), DefinitionId = definitionId, DefinitionKey = definitionKey, Version = version, Type = "lifecycle", Entity = def.Entity, Field = lc.Field,
                     PublishedAt = publishedAt,
-                    Data = Values.Serialize(new Dictionary<string, object?> { ["mode"] = lc.Mode ?? "enforce", ["initial"] = lc.States.FirstOrDefault(s => s.IsInitial)?.Key }),
+                    Data = Values.Serialize(new Dictionary<string, object?>
+                    {
+                        ["mode"] = lc.Mode ?? "enforce", ["initial"] = lc.States.FirstOrDefault(s => s.IsInitial)?.Key,
+                        ["appliesWhen"] = lc.AppliesWhen is null ? null : Values.FromJson(JsonSerializer.Serialize(lc.AppliesWhen, Definitions.JsonOptions)),
+                    }),
                 },
             ];
         }
