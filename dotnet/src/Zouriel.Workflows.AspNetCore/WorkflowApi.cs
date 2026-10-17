@@ -547,7 +547,7 @@ public static class WorkflowApi
         {
             "notAllowed" => 403,
             "notFound" or "noRecord" or "definitionNotFound" => 404,
-            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" or "resetChanged" => 409,
+            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" or "resetChanged" or "wrongLifecycle" => 409,
             "tooLarge" => 413,
             _ => 400,
         };

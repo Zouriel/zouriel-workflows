@@ -146,11 +146,29 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   (`lifecycleConflict`), and two conditions that are not clearly apart are a `lifecyclesMayOverlap`
   warning. A record gets its lifecycle when it is created (or, for records that existed before
   publishing, the first time it is used): the lifecycles with a condition it meets are tried first, in
-  publish order, then the fallback; a record that meets none has no lifecycle on that field (the field
-  is then not owned for it). The record keeps that lifecycle afterwards, even if the fields the
-  condition reads change: pick fields that are fixed when the record is created (a type, a kind).
-  Field ownership for a write is decided from the record's values before the write (for a new
-  record, its first values).
+  publish order (first publish time, then definition id), then the fallback; a record that meets none
+  has no lifecycle on that field (the field is then not owned for it). A create that leaves out the
+  condition's field is decided on the values it has, so it usually gets the fallback. The record is
+  then **pinned** to that lifecycle (its record instance): it keeps it even if the fields the condition
+  reads change, so pick fields that are fixed when the record is created (a type, a kind). The pin
+  decides everything about the field for that record: field ownership and enforce/observe, the
+  transitions offered, observed writes. The record's values decide only while it has no lifecycle on
+  the field yet: a new record by its first values, an existing record by its values before the write.
+  Cancelling the record instance (an admin cancel, or deleting the record) unpins the record; it is
+  selected again on next use. A record whose lifecycle is archived stays pinned to it: while archived,
+  the field has no lifecycle for that record (not owned, no transitions offered, nothing selected
+  instead), and restoring the lifecycle resumes the same instance. A record never gets a second
+  lifecycle for a field it already has a live instance on. Naming a lifecycle explicitly (the `lifecycle`
+  of a transition, reset or forced state, or an `applyTransition` step) must name the record's own
+  lifecycle for that field (its pinned one, or the one selection would pick when it has none yet);
+  anything else is refused with `wrongLifecycle` (409) and never starts a second instance
+  (`applyTransition` with `ifNotAllowed: "skip"` skips instead).
+  The change hook decides ownership while the app saves and never reads the store, so engines keep the
+  pins of fields where selection depends on the record (fields shared by several lifecycles, archived
+  ones included, or with a condition) in their ownership cache: loaded with it, and updated in-process
+  when the engine creates or cancels a record instance. Another node's pins reach a node at its next
+  ownership refresh (`OwnershipRefreshInterval`), so for that long a record pinned elsewhere may be
+  judged by its values. "Today" in a condition is the settings' time zone's date, in the change hook too.
 
 - **States** map 1:1 to field values by `key` (the enum value). Each has a `category`: exactly one
   `initial`; any number of `active` and `terminal`. A state may have `onEnter` steps, `onExit` steps
@@ -179,7 +197,7 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   those steps already moved the record on) → commit. Steps
   run until they first wait; the rest continues in the background. If any check fails nothing
   changes and the API returns the error code (`notInFromState`, `notAllowed`, `guardFailed`,
-  `invalidInput`, `staleState`).
+  `invalidInput`, `staleState`, `wrongLifecycle`).
 - **Record instance.** A lifecycle has one long-lived instance per record (`status: active` until
   the record reaches a terminal state, then `completed`). It is created when the record is created
   (state = the record's value, or the initial state when empty, which also writes the field) or,

@@ -142,7 +142,7 @@ public static class ConformanceRunner
         else if (s["forceState"] is JsonObject fs)
         {
             await e.ForceStateAsync(fs["entity"]!.GetValue<string>(), fs["id"]!.GetValue<string>(), fs["state"]!.GetValue<string>(), fs["reason"]?.GetValue<string>() ?? "",
-                fs["skipSteps"]?.GetValue<bool>() ?? false, Actor(host, fs["actor"]), null, ct);
+                fs["skipSteps"]?.GetValue<bool>() ?? false, Actor(host, fs["actor"]), fs["lifecycle"]?.GetValue<string>(), ct);
         }
         else if (s["decide"] is JsonObject d)
         {
@@ -197,6 +197,18 @@ public static class ConformanceRunner
         {
             var def = (await e.ListDefinitionsAsync(ct)).First(d => d.Key == ar.GetValue<string>());
             await e.ArchiveAsync(def.Id, Actor(host, JsonValue.Create("admin")), ct);
+        }
+        else if (s["restore"] is JsonValue rsv)
+        {
+            var def = (await e.ListDefinitionsAsync(ct)).First(d => d.Key == rsv.GetValue<string>());
+            await e.RestoreAsync(def.Id, Actor(host, JsonValue.Create("admin")), ct);
+        }
+        else if (s["permissions"] is JsonObject pm)
+        {
+            // { "workflow": key, "changes": [ { "node", "who" } ], "note"? }
+            var def = (await e.ListDefinitionsAsync(ct)).First(d => d.Key == pm["workflow"]!.GetValue<string>());
+            var changes = pm["changes"]!.AsArray().Select(c => (c!["node"]!.GetValue<string>(), c["who"]!.AsArray())).ToList();
+            await e.UpdatePermissionsAsync(def.Id, changes, pm["note"]?.GetValue<string>(), Actor(host, JsonValue.Create("admin")), ct);
         }
         else if (s["expect"] is null)
         {

@@ -353,7 +353,7 @@ public sealed class ApplyTransitionStep : Step
     public string Transition { get; set; } = "";
     /// <summary>Answers for the transition's input form, by key.</summary>
     public Dictionary<string, Operand>? Input { get; set; }
-    /// <c>fail</c> (default) or <c>skip</c> (output <c>applied</c> false) when the record is not in a from state or the guard fails.
+    /// <c>fail</c> (default) or <c>skip</c> (output <c>applied</c> false) when the record is not in a from state, the guard fails or the lifecycle is not the record's own.
     public string? IfNotAllowed { get; set; }
 }
 

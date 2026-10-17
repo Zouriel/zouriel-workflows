@@ -10,35 +10,67 @@ namespace Zouriel.Workflows.Engine;
 
 public sealed partial class WorkflowEngine
 {
-    /// <summary>The published lifecycle that owns a field of an entity (or any lifecycle of the entity when <paramref name="field"/> is null).</summary>
-    internal async Task<CompiledDefinition?> LifecycleForAsync(Uow u, string entity, string? field, string? key, CancellationToken ct)
+    /// <summary>The published lifecycle of an entity with this key.</summary>
+    internal async Task<CompiledDefinition?> LifecycleForAsync(Uow u, string entity, string key, CancellationToken ct)
     {
         foreach (var t in await u.S.ListTriggersAsync(ct))
-        {
-            if (t.Type != "lifecycle" || t.Entity != entity) continue;
-            if (field is not null && t.Field != field) continue;
-            if (key is not null && t.DefinitionKey != key) continue;
-            return await CompiledAsync(u, t.DefinitionId, t.Version, ct);
-        }
+            if (t.Type == "lifecycle" && t.Entity == entity && t.DefinitionKey == key) return await CompiledAsync(u, t.DefinitionId, t.Version, ct);
         return null;
     }
 
     /// <summary>
     /// The lifecycle a record is on for <paramref name="field"/> (any field when null), spec §6 applies to:
-    /// the one it already has an instance of; else, for a record that has none yet, the first whose
-    /// <c>appliesWhen</c> its values meet (conditional lifecycles before the one without a condition).
+    /// the one it has a live (not cancelled) record instance of; while that lifecycle is archived the field
+    /// has none for this record. A record with no instance on the field gets the first lifecycle whose
+    /// <c>appliesWhen</c> its values meet (conditional lifecycles in publish order, then the fallback).
     /// </summary>
     internal async Task<CompiledDefinition?> LifecycleForRecordAsync(Uow u, string entity, string id, string? field, CancellationToken ct,
         IReadOnlyDictionary<string, object?>? values = null)
     {
         var triggers = (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == "lifecycle" && t.Entity == entity && (field is null || t.Field == field)).ToList();
-        if (triggers.Count == 0) return null;
-        foreach (var t in triggers)
-            if (await FindRecordInstanceAsync(u, t.DefinitionId, entity, id, ct) is not null) return await CompiledAsync(u, t.DefinitionId, t.Version, ct);
+        var live = await LiveRecordInstancesAsync(u, entity, id, ct);
+        var pinnedFields = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var i in live)
+        {
+            var f = (await CompiledAsync(u, i.DefinitionId, i.Version, ct)).Lifecycle.Field;
+            if (field is not null && f != field) continue;
+            if (triggers.FirstOrDefault(t => t.DefinitionId == i.DefinitionId) is { } own) return await CompiledAsync(u, own.DefinitionId, own.Version, ct);
+            pinnedFields.Add(f);
+        }
+        var candidates = triggers.Where(t => !pinnedFields.Contains(t.Field ?? "")).ToList();
+        if (candidates.Count == 0) return null;
         values ??= (await u.S.Entities.GetAsync(entity, id, ct))?.Values;
-        foreach (var t in triggers.Select(t => (Trigger: t, When: AppliesWhenOf(t))).OrderBy(x => x.When is null ? 1 : 0))
+        foreach (var t in InSelectionOrder(candidates.Select(t => (Trigger: t, When: AppliesWhenOf(t))), x => x.When is not null, x => x.Trigger.PublishedAt, x => x.Trigger.DefinitionId))
             if (LifecycleSelection.Applies(t.When, values, u.Today)) return await CompiledAsync(u, t.Trigger.DefinitionId, t.Trigger.Version, ct);
         return null;
+    }
+
+    /// <summary>The record's lifecycle instances that are not cancelled (of any lifecycle, archived ones included), as this unit holds them.</summary>
+    internal static async Task<List<InstanceRecord>> LiveRecordInstancesAsync(Uow u, string entity, string id, CancellationToken ct)
+    {
+        var found = await u.S.QueryInstancesAsync(new InstanceQuery { Entity = entity, EntityId = id, Kinds = [InstanceKinds.Record], Take = 100 }, ct);
+        var list = new List<InstanceRecord>();
+        foreach (var f in found.OrderByDescending(i => i.StartedAt))
+        {
+            var i = u.Records.TryGetValue(f.Id, out var held) ? held : (u.Records[f.Id] = f);
+            if (i.Status != InstanceStatus.Cancelled) list.Add(i);
+        }
+        foreach (var held in u.Records.Values)
+            if (held.Entity == entity && held.EntityId == id && held.Status != InstanceStatus.Cancelled && list.All(i => i.Id != held.Id)) list.Add(held);
+        return list;
+    }
+
+    /// <summary>
+    /// Refuses (<c>wrongLifecycle</c>) a lifecycle named explicitly when it is not the record's own for its
+    /// field: the one it is pinned to, or for a record with no instance the one selection picks (spec §6).
+    /// </summary>
+    internal async Task EnsureOwnLifecycleAsync(Uow u, CompiledDefinition c, string entity, string id, CancellationToken ct)
+    {
+        var own = await LifecycleForRecordAsync(u, entity, id, c.Lifecycle.Field, ct);
+        if (own?.DefinitionId != c.DefinitionId)
+            throw new WorkflowException("wrongLifecycle", own is null
+                ? $"{c.Definition.Title} does not apply to this {entity}."
+                : $"{c.Definition.Title} does not apply to this {entity}; it follows {own.Definition.Title}.");
     }
 
     /// <summary>The <c>appliesWhen</c> a lifecycle's trigger index row carries, or null.</summary>
@@ -49,7 +81,7 @@ public sealed partial class WorkflowEngine
 
     internal async Task<CompiledDefinition> RequireLifecycleAsync(Uow u, string key, string entity, CancellationToken ct)
     {
-        var c = await LifecycleForAsync(u, entity, null, key, ct);
+        var c = await LifecycleForAsync(u, entity, key, ct);
         return c ?? throw new WorkflowException("unknownLifecycle", $"There is no published lifecycle '{key}' for {entity}.");
     }
 
@@ -79,6 +111,7 @@ public sealed partial class WorkflowEngine
         };
         await u.S.AddInstanceAsync(inst, ct);
         u.Records[inst.Id] = inst;
+        u.Pins.Add((entity, lc.Field, id, c.DefinitionId));
         await u.AuditAsync(new AuditEntry
         {
             Category = "lifecycle", Action = state is null ? "outOfSync" : "created", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id,
@@ -157,9 +190,15 @@ public sealed partial class WorkflowEngine
                 WorkflowWriteScope.Current?.Depth ?? 0, ct);
         }, ct);
 
-    private async Task<CompiledDefinition> LifecycleOfAsync(Uow u, string entity, string id, string? lifecycle, CancellationToken ct) =>
-        (lifecycle is null ? await LifecycleForRecordAsync(u, entity, id, null, ct) : await RequireLifecycleAsync(u, lifecycle, entity, ct))
-        ?? throw new WorkflowException("unknownLifecycle", $"No published lifecycle applies to this {entity}.");
+    private async Task<CompiledDefinition> LifecycleOfAsync(Uow u, string entity, string id, string? lifecycle, CancellationToken ct)
+    {
+        if (lifecycle is null)
+            return await LifecycleForRecordAsync(u, entity, id, null, ct) ?? throw new WorkflowException("unknownLifecycle", $"No published lifecycle applies to this {entity}.");
+        // A named lifecycle must be the record's own: naming another never starts a second instance (spec §6 applies to).
+        var c = await RequireLifecycleAsync(u, lifecycle, entity, ct);
+        await EnsureOwnLifecycleAsync(u, c, entity, id, ct);
+        return c;
+    }
 
     internal async Task ApplyTransitionCoreAsync(Uow u, string lifecycleKey, string entity, string id, string transitionKey, Dictionary<string, object?> input,
         WorkflowActor actor, bool isPerson, bool auto, int depth, CancellationToken ct, int chain = 0)

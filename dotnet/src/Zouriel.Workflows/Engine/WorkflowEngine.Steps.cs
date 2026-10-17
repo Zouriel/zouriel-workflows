@@ -396,11 +396,13 @@ public sealed partial class WorkflowEngine
         bool applied;
         try
         {
+            // The named lifecycle must be the record's own (spec §6 applies to); it never starts a second one.
+            await EnsureOwnLifecycleAsync(x.U, await RequireLifecycleAsync(x.U, at.Lifecycle, entity, ct), entity, id, ct);
             using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
                 await ApplyTransitionCoreAsync(x.U, at.Lifecycle, entity, id, at.Transition, input, x.Actor, isPerson: false, auto: false, x.I.Depth + 1, ct);
             applied = true;
         }
-        catch (WorkflowException e) when (at.IfNotAllowed == "skip" && e.Code is "notInFromState" or "guardFailed" or "notAllowed")
+        catch (WorkflowException e) when (at.IfNotAllowed == "skip" && e.Code is "notInFromState" or "guardFailed" or "notAllowed" or "wrongLifecycle")
         {
             applied = false;
         }
