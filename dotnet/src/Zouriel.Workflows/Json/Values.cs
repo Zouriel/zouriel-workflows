@@ -49,6 +49,18 @@ public static class Values
     /// <summary>An instant as ISO 8601 UTC with milliseconds.</summary>
     public static string FormatInstant(DateTimeOffset t) => FormatInstant(t.UtcDateTime);
 
+    /// <summary>
+    /// An instant for people to read in message text, e.g. <c>2 Nov 2026, 09:00 UTC</c>, shown in
+    /// <paramref name="zone"/> (UTC when null) and named after it. Machine fields stay ISO 8601.
+    /// </summary>
+    public static string FormatForPeople(DateTimeOffset t, TimeZoneInfo? zone = null)
+    {
+        zone ??= TimeZoneInfo.Utc;
+        var local = TimeZoneInfo.ConvertTime(t, zone);
+        var isUtc = zone.Equals(TimeZoneInfo.Utc) || zone.Id is "UTC" or "Etc/UTC" or "Etc/Universal" or "Coordinated Universal Time";
+        return local.ToString("d MMM yyyy, HH:mm", CultureInfo.InvariantCulture) + " " + (isUtc ? "UTC" : zone.Id);
+    }
+
     /// <summary>A JSON node as a workflow value: dictionaries, lists, strings, doubles, booleans or null.</summary>
     public static object? FromJson(JsonNode? node)
     {

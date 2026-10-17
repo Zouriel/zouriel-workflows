@@ -219,7 +219,7 @@ public sealed partial class WorkflowEngine
         var waitingOn = (Values.FromJson(task.Assignees) as List<object?> ?? []).Select(Values.Text).Where(id => !decided.Contains(id)).ToList();
         await u.AuditAsync(TaskAudit(u, task, "reminded", WorkflowActor.System, new Dictionary<string, object?> { ["to"] = waitingOn }), ct);
         u.Log?.Add("task", "reminded", task.Id, task.Title);
-        await NotifyAssigneesAsync(u, task, waitingOn, $"Reminder: {task.Title}", $"“{task.Title}” is still waiting for you. It is due {Values.FormatInstant(task.DueAt)}.", $"reminder{b.Payload}", ct);
+        await NotifyAssigneesAsync(u, task, waitingOn, $"Reminder: {task.Title}", $"“{task.Title}” is still waiting for you. It is due {Values.FormatForPeople(task.DueAt, u.Settings.Zone())}.", $"reminder{b.Payload}", ct);
     }
 
     private async Task TaskEscalationAsync(Uow u, BookmarkRecord b, CancellationToken ct)

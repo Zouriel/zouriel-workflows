@@ -246,6 +246,30 @@ public sealed class EngineBehaviourTests
         Assert.Equal("unknownUser", e.Code);
     }
 
+    private const string RemindedApproval = """
+    { "specVersion": 1, "id": "wf_r", "key": "rem", "kind": "automation", "title": "Rem", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage" },
+      "steps": [ { "id": "t", "type": "approval", "title": "Check it", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P3D",
+                   "reminders": ["P1D"], "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] }
+    """;
+
+    [Theory]
+    [InlineData(null, "22 Oct 2026, 09:00 UTC")]
+    [InlineData("Asia/Riyadh", "22 Oct 2026, 12:00 Asia/Riyadh")]
+    public async Task A_reminder_shows_the_due_time_readably_in_the_settings_time_zone(string? zone, string expected)
+    {
+        var h = await WithRecordAsync();
+        if (zone is not null) await SettingsAsync(h, $$"""{ "version": 1, "timeZone": "{{zone}}" }""");
+        await h.PublishAsync(RemindedApproval);
+        await h.Store.ChangeRecordAsync("application", "a1", new() { ["stage"] = "checked" });
+        await h.SettleAsync();
+        await h.AdvanceAsync(TimeSpan.FromDays(2.5));
+        var reminder = h.Notifications.Sent.Single(n => n.Subject?.StartsWith("Reminder: Check it", StringComparison.Ordinal) == true);
+        Assert.Equal($"“Check it” is still waiting for you. It is due {expected}.", reminder.Body);
+        // Machine fields stay ISO 8601.
+        Assert.Equal("2026-10-22T09:00:00.000Z", Values.FormatInstant(h.Store.All<TaskRecord>("tasks").Single().DueAt));
+    }
+
     [Fact]
     public async Task Decision_answers_have_a_size_limit()
     {
