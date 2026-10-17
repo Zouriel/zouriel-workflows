@@ -6,6 +6,12 @@ using Zouriel.Workflows.Time;
 
 namespace Zouriel.Workflows.Sample;
 
+/// <summary>Body of <c>POST /api/demo/applications</c>.</summary>
+/// <param name="Title">The application's title.</param>
+/// <param name="Amount">The amount asked for.</param>
+/// <param name="ProgrammeId">The programme applied to.</param>
+/// <param name="Priority">How urgent it is.</param>
+/// <param name="Deadline">When a decision is needed.</param>
 public sealed record NewApplication(string Title, decimal Amount, int? ProgrammeId, Priority? Priority, DateOnly? Deadline);
 
 /// <summary>
@@ -14,11 +20,18 @@ public sealed record NewApplication(string Title, decimal Amount, int? Programme
 /// </summary>
 public static class DemoEndpoints
 {
+    /// <summary>Where a playground visitor gets a session id (it needs no session itself).</summary>
+    public const string SessionPath = "/api/playground/session";
+
+    /// <summary>The rate-limit policy for new playground sessions.</summary>
+    public const string SessionRateLimit = "playground-session";
+
+    /// <summary>Maps the demo app's CRUD endpoints. Everything except the list of demo users needs a signed-in user.</summary>
     public static void MapDemoEndpoints(this IEndpointRouteBuilder app)
     {
-        var g = app.MapGroup("/api/demo").WithTags("Demo app");
+        app.MapGet("/api/demo/users", () => DemoUsers.All.Select(u => new { u.User.Id, u.User.Name, u.User.Email, u.Title, roles = u.User.Roles ?? [] })).WithTags("Demo app");
+        var g = app.MapGroup("/api/demo").WithTags("Demo app").RequireAuthorization();
 
-        g.MapGet("/users", () => DemoUsers.All.Select(u => new { u.User.Id, u.User.Name, u.User.Email, u.Title, roles = u.User.Roles ?? [] }));
         g.MapGet("/programmes", async (SampleDb db) => await db.Programmes.OrderBy(p => p.Name).ToListAsync());
 
         g.MapGet("/applications", async (SampleDb db) => (await db.Applications.Include(a => a.Programme).Include(a => a.Documents).OrderByDescending(a => a.Id).ToListAsync()).Select(View));
@@ -112,9 +125,11 @@ public static class DemoEndpoints
         documents = a.Documents.Select(d => new { d.Id, d.Name, d.Verified }),
     };
 
-    /// <summary>Playground-only endpoints: move the sandbox clock and start over.</summary>
+    /// <summary>Playground-only endpoints: get a session, move the sandbox clock and start over.</summary>
     public static void MapPlaygroundEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost(SessionPath, (SandboxManager boxes) => Results.Ok(new { session = boxes.IssueSessionId() }))
+            .WithTags("Playground").RequireRateLimiting(SessionRateLimit);
         var g = app.MapGroup("/api/playground").WithTags("Playground");
         g.MapPost("/advance", async (AdvanceBody body, HttpContext http, SandboxManager boxes) =>
         {
@@ -137,5 +152,7 @@ public static class DemoEndpoints
         });
     }
 
+    /// <summary>Body of <c>POST /api/playground/advance</c>.</summary>
+    /// <param name="Duration">How far to move the clock (ISO 8601, up to 60 days).</param>
     public sealed record AdvanceBody(string Duration);
 }

@@ -11,7 +11,7 @@ public sealed class WorkflowEngineOptions
     public required IWorkflowStore Store { get; init; }
     public IWorkflowIdentity Identity { get; init; } = new NoIdentity();
     public INotificationSender Notifications { get; init; } = new NoNotifications();
-    public IWebhookClient Webhooks { get; init; } = new HttpWebhookClient(new HttpClient());
+    public IWebhookClient Webhooks { get; init; } = new HttpWebhookClient();
     public IWorkflowSecretResolver Secrets { get; init; } = new NoSecrets();
     public IWorkflowActionResolver Actions { get; init; } = new ActivatorActionResolver();
     public TimeProvider Time { get; init; } = TimeProvider.System;

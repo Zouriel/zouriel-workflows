@@ -9,6 +9,7 @@ namespace Zouriel.Workflows.Sample;
 /// <summary>The people of the demo office. A real app reads these from its user store.</summary>
 public static class DemoUsers
 {
+    /// <summary>Every demo person, their manager and job title.</summary>
     public static readonly IReadOnlyList<(WorkflowUser User, string? Manager, string Title)> All =
     [
         (new WorkflowUser("ali", "Ali Hassan", "ali@example.com", []), null, "Applicant"),
@@ -19,9 +20,11 @@ public static class DemoUsers
         (new WorkflowUser("hana", "Hana Yusuf", "hana@example.com", ["head", "admin"]), null, "Head of office"),
     ];
 
+    /// <summary>The demo person with this id, if any.</summary>
     public static WorkflowUser? Find(string? id) => All.FirstOrDefault(u => u.User.Id == id).User;
 }
 
+/// <summary>The demo people as the workflow engine's identity source.</summary>
 public sealed class DemoIdentity : IWorkflowIdentity
 {
     public Task<WorkflowUser?> GetUserAsync(string id, CancellationToken ct = default) => Task.FromResult(DemoUsers.Find(id));
@@ -78,6 +81,7 @@ public sealed class OffsetTimeProvider : TimeProvider
 public sealed class DemoAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
+    /// <summary>The authentication scheme name.</summary>
     public const string SchemeName = "Demo";
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()

@@ -28,6 +28,8 @@ public sealed class WorkflowEngineSettings
     public TimeSpan OwnershipRefreshInterval { get; set; } = TimeSpan.FromSeconds(30);
     /// <summary>Processed outbox rows older than this are deleted by the worker. Default 7 days.</summary>
     public TimeSpan KeepProcessedOutbox { get; set; } = TimeSpan.FromDays(7);
+    /// <summary>How the default webhook client guards the network (private addresses are blocked unless allowed).</summary>
+    public HttpWebhookClientOptions Webhooks { get; set; } = new();
     /// <summary>Trigger claims (start dedupe rows) older than this are deleted by the worker. Default 30 days.</summary>
     public TimeSpan KeepTriggerClaims { get; set; } = TimeSpan.FromDays(30);
     /// <summary>How often the worker checks the outbox and due timers.</summary>
@@ -158,7 +160,7 @@ public static class WorkflowServiceCollectionExtensions
         services.TryAddSingleton<IWorkflowIdentity, NoIdentityService>();
         services.TryAddSingleton<INotificationSender, NoNotificationService>();
         services.TryAddSingleton<IWorkflowSecretResolver, NoSecretService>();
-        services.AddHttpClientIfMissing();
+        services.TryAddSingleton<IWebhookClient>(sp => new HttpWebhookClient(sp.GetRequiredService<WorkflowEngineSettings>().Webhooks));
         services.TryAddSingleton<IFormValidator, FormValidator>();
         services.TryAddSingleton<IWorkflowActionResolver, ServiceProviderActionResolver>();
         services.AddSingleton(sp =>
@@ -180,9 +182,6 @@ public static class WorkflowServiceCollectionExtensions
         });
         return builder;
     }
-
-    private static void AddHttpClientIfMissing(this IServiceCollection services) =>
-        services.TryAddSingleton<IWebhookClient>(_ => new HttpWebhookClient(new HttpClient()));
 
     /// <summary>Defers creating the store until first use (the store needs the engine for change inspection).</summary>
     private sealed class LazyStore(Func<IWorkflowStore> create) : IWorkflowStore

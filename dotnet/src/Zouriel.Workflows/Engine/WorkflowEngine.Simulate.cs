@@ -52,6 +52,9 @@ public sealed partial class WorkflowEngine
     public async Task<SimulationResult> SimulateAsync(string definitionJson, SimulationRequest req, WorkflowActor actor, CancellationToken ct = default)
     {
         if (req.Events is { Count: > MaxSimulationEvents }) throw new WorkflowException("tooManyEvents", $"A test run can have at most {MaxSimulationEvents} events.");
+        // Bad input is refused up front (not reported as a run that failed half way).
+        foreach (var ev in req.Events ?? [])
+            if (ev.Type == "advance") IsoDuration.Parse(ev.Duration ?? "PT1H");
         Normalize(req);
         var problems = await ValidateAsync(definitionJson, ct);
         if (problems.Any(p => p.Severity == "error")) return new SimulationResult(problems, [], [], [], null, "Fix the problems before testing.");

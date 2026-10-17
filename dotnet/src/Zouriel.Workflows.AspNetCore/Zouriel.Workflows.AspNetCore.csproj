@@ -10,6 +10,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Zouriel.Workflows.Sample.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Zouriel.Workflows\Zouriel.Workflows.csproj" />
   </ItemGroup>
 

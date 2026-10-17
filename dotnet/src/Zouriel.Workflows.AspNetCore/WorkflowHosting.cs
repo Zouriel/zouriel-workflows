@@ -15,13 +15,16 @@ public sealed class WorkflowUserOptions
 {
     /// <summary>Claim holding the user id. Default: <c>sub</c>, then <see cref="ClaimTypes.NameIdentifier"/>.</summary>
     public Func<ClaimsPrincipal, string?> Id { get; set; } = p => p.FindFirstValue("sub") ?? p.FindFirstValue(ClaimTypes.NameIdentifier);
+    /// <summary>The user's display name. Default: <c>name</c>, then the identity's name.</summary>
     public Func<ClaimsPrincipal, string?> Name { get; set; } = p => p.FindFirstValue("name") ?? p.Identity?.Name;
+    /// <summary>The user's roles (they count for <c>who: [{ role }]</c>). Default: role claims.</summary>
     public Func<ClaimsPrincipal, IReadOnlyList<string>> Roles { get; set; } = p => p.FindAll(ClaimTypes.Role).Concat(p.FindAll("role")).Select(c => c.Value).Distinct().ToList();
 }
 
 /// <summary>Reads the current request's user, so record writes outside workflows are attributed to them.</summary>
 public sealed class HttpContextActorAccessor(IHttpContextAccessor http, WorkflowUserOptions options) : IWorkflowActorAccessor
 {
+    /// <summary>The signed-in user of the current request, or null (not signed in, or no id claim).</summary>
     public WorkflowActor? Current
     {
         get
@@ -34,6 +37,7 @@ public sealed class HttpContextActorAccessor(IHttpContextAccessor http, Workflow
     }
 }
 
+/// <summary>Registers workflows in an ASP.NET Core app.</summary>
 public static class WorkflowHostingExtensions
 {
     /// <summary>
@@ -55,19 +59,27 @@ public static class WorkflowHostingExtensions
         services.AddHttpContextAccessor();
         services.TryAddSingleton(userOptions);
         services.TryAddSingleton<IWorkflowActorAccessor, HttpContextActorAccessor>();
+        services.TryAddSingleton<IWorkflowAccessPolicy, AllowAllWorkflowAccessPolicy>();
         var builder = services.AddWorkflowsCore(configure);
         services.AddHostedService<WorkflowWorker>();
         return builder;
     }
 }
 
-/// <summary>Processes the outbox (change events, notifications) and due timers in the background.</summary>
+/// <summary>
+/// Processes the outbox (change events, notifications) and due timers in the background, and about once
+/// an hour deletes housekeeping rows nobody needs any more (processed outbox rows, old trigger claims).
+/// </summary>
 public sealed class WorkflowWorker(WorkflowEngine engine, WorkflowEngineSettings settings, ILogger<WorkflowWorker> log) : BackgroundService
 {
+    private static readonly TimeSpan CleanupEvery = TimeSpan.FromHours(1);
+
+    /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!settings.RunWorker) return;
         await Task.Yield();
+        var nextCleanup = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             var busy = false;
@@ -75,6 +87,11 @@ public sealed class WorkflowWorker(WorkflowEngine engine, WorkflowEngineSettings
             {
                 await engine.RefreshOwnershipAsync(stoppingToken);
                 busy = await engine.ProcessOutboxAsync(100, stoppingToken) + await engine.ProcessTimersAsync(100, stoppingToken) > 0;
+                if (settings.Time.GetUtcNow() >= nextCleanup)
+                {
+                    nextCleanup = settings.Time.GetUtcNow() + CleanupEvery;
+                    await engine.CleanupAsync(settings.KeepProcessedOutbox, settings.KeepTriggerClaims, stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

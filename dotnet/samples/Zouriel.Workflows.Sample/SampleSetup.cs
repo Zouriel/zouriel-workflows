@@ -9,6 +9,7 @@ using Zouriel.Workflows.EntityFrameworkCore;
 namespace Zouriel.Workflows.Sample;
 
 /// <summary>An app action: workflows call it with "Run action → Create invoice".</summary>
+/// <param name="db">The app's database (the same unit of work as the workflow).</param>
 public sealed class CreateInvoice(SampleDb db) : IWorkflowAction
 {
     public async Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
@@ -24,12 +25,35 @@ public sealed class CreateInvoice(SampleDb db) : IWorkflowAction
     }
 }
 
+/// <summary>Registers and seeds the sample app.</summary>
 public static class SampleSetup
 {
-    /// <summary>Everything the sample needs, for one database. The playground calls this once per visitor sandbox.</summary>
-    public static void AddSampleApp(this IServiceCollection services, string connectionString, TimeProvider time, bool runWorker)
+    /// <summary>
+    /// Demo sign-in and the sample's authorization policies. The root app and every playground sandbox
+    /// register the same, because sandbox requests resolve these services from the sandbox.
+    /// </summary>
+    public static void AddSampleSecurity(this IServiceCollection services)
+    {
+        services.AddAuthentication(DemoAuthHandler.SchemeName)
+            .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, DemoAuthHandler>(DemoAuthHandler.SchemeName, null);
+        services.AddAuthorization(o =>
+        {
+            o.AddPolicy("workflows.edit", p => p.RequireRole("admin", "head"));
+            o.AddPolicy("workflows.intervene", p => p.RequireRole("admin", "head"));
+            o.AddPolicy("workflows.audit", p => p.RequireRole("admin", "head"));
+            o.AddPolicy("workflows.settings", p => p.RequireRole("admin"));
+        });
+    }
+
+    /// <summary>
+    /// Everything the sample needs, for one database. The playground calls this once per visitor sandbox,
+    /// with <paramref name="webhooks"/> set to a client that never calls out.
+    /// </summary>
+    public static void AddSampleApp(this IServiceCollection services, string connectionString, TimeProvider time, bool runWorker, IWebhookClient? webhooks = null)
     {
         services.AddSingleton(time);
+        services.AddSampleSecurity();
+        if (webhooks is not null) services.AddSingleton(webhooks);
         services.AddDbContext<SampleDb>((sp, o) => o.UseSqlite(connectionString).AddWorkflowInterceptor(sp));
         services.AddWorkflows(wf => wf
             .UseEntityFrameworkCore<SampleDb>()
@@ -125,6 +149,7 @@ public static class SampleSetup
         for (var i = 0; i < 10 && await engine.ProcessOutboxAsync(100, ct) + await engine.ProcessTimersAsync(100, ct) > 0; i++) { }
     }
 
+    /// <summary>An embedded seed file (workflow definitions, settings).</summary>
     public static string ReadSeed(string name)
     {
         var asm = Assembly.GetExecutingAssembly();
