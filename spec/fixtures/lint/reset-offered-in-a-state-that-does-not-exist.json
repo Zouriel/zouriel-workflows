@@ -1,0 +1,81 @@
+{
+ "name": "a reset offered in a state that does not exist",
+ "registry": "../engine/_registry.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_r",
+  "key": "review",
+  "kind": "lifecycle",
+  "title": "Review",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "m",
+     "key": "submitted",
+     "label": "Submitted",
+     "category": "active"
+    },
+    {
+     "id": "b",
+     "key": "approved",
+     "label": "Approved",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t1",
+     "key": "submit",
+     "label": "Submit",
+     "from": [
+      "a"
+     ],
+     "to": "m",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    },
+    {
+     "id": "t",
+     "key": "approve",
+     "label": "Approve",
+     "from": [
+      "m"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    }
+   ],
+   "reset": {
+    "who": [
+     {
+      "role": "admin"
+     }
+    ],
+    "states": [
+     "m",
+     "nope"
+    ]
+   }
+  }
+ },
+ "expected": [
+  {
+   "code": "unknownState"
+  }
+ ]
+}

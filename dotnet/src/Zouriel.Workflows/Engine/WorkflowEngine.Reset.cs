@@ -95,13 +95,17 @@ public sealed partial class WorkflowEngine
             return new ResetPreview(option, plan.Items.Select(p => p.Item).ToList(), plan.Token);
         }, ct);
 
-    /// <summary>The reset a lifecycle offers the viewer for a record: null when they are not among its <c>who</c> or it would change nothing.</summary>
-    private async Task<ResetOption?> OfferedResetAsync(Uow u, CompiledDefinition rc, InstanceRecord record, WorkflowActor viewer, CancellationToken ct)
+    /// <summary>
+    /// The reset a lifecycle offers the viewer for a record (the record view and the reset list share it): null when
+    /// the record's state is not among its <c>states</c>, the viewer is not among its <c>who</c>, or it would change nothing.
+    /// </summary>
+    internal async Task<ResetOption?> OfferedResetAsync(Uow u, CompiledDefinition rc, InstanceRecord record, WorkflowActor viewer, CancellationToken ct)
     {
-        if (rc.Lifecycle.Reset is not { } r || !await MayResetAsync(u, rc, record, viewer, ct)) return null;
+        if (rc.Lifecycle.Reset is not { } r || !ResetOfferedIn(r, record) || !await MayResetAsync(u, rc, record, viewer, ct)) return null;
         var back = ResetTarget(rc);
+        // Not offered when it would change nothing (already back, nothing running).
         var changes = record.State != back.Id || record.Status == InstanceStatus.OutOfSync || (await RunningAboutAsync(u, record, r, ct)).Count > 0;
-        return changes ? new ResetOption(r.Label ?? "Reset workflow", back.Key, back.Label, r.Confirm, r.Input?.Form.DeepClone()) : null;
+        return changes ? new ResetOption(r.Label ?? "Reset workflow", back.Key, back.Label, r.Confirm, r.Input?.Form.DeepClone(), r.ResolvedComment) : null;
     }
 
     /// <summary>

@@ -406,12 +406,13 @@ public sealed partial class WorkflowEngine
         if (entity is null || id is null) throw new WorkflowException("noRecord", "There is no record to move.");
         var input = new Dictionary<string, object?>();
         foreach (var (k, o) in at.Input ?? []) input[k] = await scope.OperandAsync(o, ct);
+        var comment = at.Comment is null ? null : await RenderAsync(scope, at.Comment, ct);
         var rec = await BeginStepAsync(x, t, at, new Dictionary<string, object?> { ["entity"] = entity, ["id"] = id, ["transition"] = at.Transition }, ct);
         bool applied;
         try
         {
             using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
-                await ApplyTransitionCoreAsync(x.U, at.Lifecycle, entity, id, at.Transition, input, x.Actor, isPerson: false, auto: false, x.I.Depth + 1, ct);
+                await ApplyTransitionCoreAsync(x.U, at.Lifecycle, entity, id, at.Transition, input, x.Actor, isPerson: false, auto: false, x.I.Depth + 1, ct, comment: comment);
             applied = true;
         }
         catch (WorkflowException e) when (at.IfNotAllowed == "skip" && e.Code is "notInFromState" or "guardFailed" or "notAllowed")

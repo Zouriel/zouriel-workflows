@@ -106,8 +106,7 @@ public sealed partial class WorkflowEngine
         if (decisions.Any(d => d.UserId == user.Id)) throw new WorkflowException("alreadyDecided", "You have already decided this task.");
         var outcomes = (Values.FromJson(task.Outcomes) as List<object?> ?? []).OfType<Dictionary<string, object?>>().Select(o => o["key"] as string).ToList();
         if (!outcomes.Contains(outcome)) throw new WorkflowException("invalidOutcome", $"'{outcome}' is not one of this task's choices.");
-        var needsComment = task.RequireComment == "always" || (task.RequireComment == "reject" && outcome == "rejected");
-        if (needsComment && string.IsNullOrWhiteSpace(comment)) throw new WorkflowException("commentRequired", "Add a comment to explain your decision.");
+        if (CommentRequired(task, outcome) && string.IsNullOrWhiteSpace(comment)) throw new WorkflowException("commentRequired", "Add a comment to explain your decision.");
         data ??= [];
         if (Values.Serialize(data).Length > MaxDecisionDataBytes) throw new WorkflowException("tooLarge", "The answers are too large.");
         if (task.Form is not null)
@@ -122,6 +121,20 @@ public sealed partial class WorkflowEngine
         u.Log?.Add("task", "decided", task.Id, $"{user.Name ?? user.Id}: {outcome}");
 
         await SaveAndSettleAsync(u, task, decisions, assignees.Count, ct);
+    }
+
+    /// <summary>
+    /// Whether choosing <paramref name="outcome"/> needs a comment (spec §7 <c>requireComment</c>): always, or for
+    /// <c>reject</c> an approval's <c>rejected</c> outcome or a task outcome whose tone is <c>danger</c> (a key
+    /// <c>rejected</c> counts too).
+    /// </summary>
+    internal static bool CommentRequired(TaskRecord task, string outcome)
+    {
+        if (task.RequireComment == "always") return true;
+        if (task.RequireComment != "reject") return false;
+        if (outcome == "rejected") return true;
+        return task.Kind != "approval" && (Values.FromJson(task.Outcomes) as List<object?> ?? []).OfType<Dictionary<string, object?>>()
+            .Any(o => o.GetValueOrDefault("key") as string == outcome && o.GetValueOrDefault("tone") as string == "danger");
     }
 
     /// <summary>Saves a task and, when its decisions now settle it (spec §7 rules), completes it and continues the workflow.</summary>

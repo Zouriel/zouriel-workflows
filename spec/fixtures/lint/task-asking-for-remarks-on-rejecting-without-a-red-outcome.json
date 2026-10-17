@@ -1,0 +1,55 @@
+{
+ "name": "a task that asks for a comment on rejecting but has no red (danger) outcome never asks",
+ "registry": "../engine/_registry.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf_t",
+  "key": "screen",
+  "kind": "automation",
+  "title": "Screen",
+  "entity": "application",
+  "trigger": {
+   "type": "created"
+  },
+  "steps": [
+   {
+    "id": "tk",
+    "type": "task",
+    "title": "Screen",
+    "assignees": [
+     {
+      "role": "reviewer"
+     }
+    ],
+    "due": "P1D",
+    "requireComment": "reject",
+    "outcomes": [
+     {
+      "id": "o1",
+      "key": "accept",
+      "label": "Accept",
+      "tone": "success",
+      "steps": []
+     },
+     {
+      "id": "o2",
+      "key": "later",
+      "label": "Later",
+      "steps": []
+     }
+    ],
+    "onTimeout": {
+     "id": "to",
+     "steps": []
+    }
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "noNegativeOutcome",
+   "node": "tk",
+   "severity": "warning"
+  }
+ ]
+}

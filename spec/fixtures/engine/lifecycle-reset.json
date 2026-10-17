@@ -71,7 +71,7 @@
    "expect": {
     "record": { "entity": "application", "id": "a1", "values": { "status": "underReview", "reviewer": "rev1" } },
     "tasks": [{ "step": "ap", "status": "open" }],
-    "available": { "entity": "application", "id": "a1", "user": "head", "transitions": [], "state": "underReview", "reset": true }
+    "available": { "entity": "application", "id": "a1", "user": "head", "transitions": [], "state": "underReview", "reset": true, "resetComment": "optional" }
    }
   },
   { "expect": { "available": { "entity": "application", "id": "a1", "user": "ali", "transitions": [], "reset": false } } },

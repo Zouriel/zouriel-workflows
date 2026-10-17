@@ -239,6 +239,16 @@
               "properties": { "form": { "$ref": "#/$defs/formDefinition" } },
               "additionalProperties": false
             },
+            "comment": {
+              "description": "Remarks people give when they reset (spec §6): none, optional (default) or required. Steps read them as trigger.comment.",
+              "$ref": "#/$defs/remarks"
+            },
+            "states": {
+              "description": "The state ids the reset is offered in; absent = every state. It is never offered when it would change nothing.",
+              "type": "array",
+              "items": { "$ref": "#/$defs/id" },
+              "uniqueItems": true
+            },
             "runExitEnter": { "type": "boolean" },
             "cancelAutomations": { "type": "boolean" },
             "steps": { "$ref": "#/$defs/steps" }
@@ -247,6 +257,10 @@
         }
       },
       "additionalProperties": false
+    },
+    "remarks": {
+      "description": "Whether people are asked for remarks: none (not asked), optional or required.",
+      "enum": ["none", "optional", "required"]
     },
     "state": {
       "type": "object",
@@ -305,7 +319,11 @@
         },
         "confirm": { "type": "string", "maxLength": 500 },
         "tone": { "enum": ["neutral", "primary", "success", "warning", "danger"] },
-        "hidden": { "type": "boolean" }
+        "hidden": { "type": "boolean" },
+        "comment": {
+          "description": "Remarks people give when they apply it (spec §6). Absent: optional when tone is danger, otherwise none. Automatic and workflow moves never need one.",
+          "$ref": "#/$defs/remarks"
+        }
       },
       "additionalProperties": false
     },
@@ -500,7 +518,7 @@
         "form": { "$ref": "#/$defs/formDefinition" },
         "instructions": { "$ref": "#/$defs/template" },
         "allowDelegation": { "type": "boolean" },
-        "requireComment": { "enum": ["never", "always"] },
+        "requireComment": { "enum": ["never", "reject", "always"], "description": "reject: outcomes whose tone is danger (or whose key is rejected) need a comment." },
         "outcomes": {
           "type": "array",
           "minItems": 1,
@@ -635,6 +653,7 @@
         "lifecycle": { "$ref": "#/$defs/key" },
         "transition": { "$ref": "#/$defs/key" },
         "input": { "type": "object", "additionalProperties": { "$ref": "#/$defs/operand" } },
+        "comment": { "$ref": "#/$defs/template", "description": "Remarks recorded with the move (trigger.comment); the transition's required check is skipped." },
         "ifNotAllowed": { "enum": ["fail", "skip"] }
       }
     },

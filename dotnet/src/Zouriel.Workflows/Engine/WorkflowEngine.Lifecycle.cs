@@ -133,13 +133,15 @@ public sealed partial class WorkflowEngine
     /// person (<see cref="WorkflowActor.IsUser"/>); app code that moves records itself calls
     /// <see cref="ApplyTransitionAsSystemAsync"/>.
     /// </summary>
-    public Task<RecordView> ApplyTransitionAsync(string entity, string id, string transition, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default)
+    /// <param name="comment">The person's remarks (spec §6): required when the transition's <c>comment</c> is <c>required</c>, ignored when it is <c>none</c>.</param>
+    public Task<RecordView> ApplyTransitionAsync(string entity, string id, string transition, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default,
+        string? comment = null)
     {
         if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can apply a transition.");
         return RunAsync(async u =>
         {
             var c = await LifecycleOfAsync(u, entity, id, lifecycle, ct);
-            await ApplyTransitionCoreAsync(u, c.Definition.Key, entity, id, transition, input ?? [], user, isPerson: true, auto: false, 0, ct);
+            await ApplyTransitionCoreAsync(u, c.Definition.Key, entity, id, transition, input ?? [], user, isPerson: true, auto: false, 0, ct, comment: comment);
             return await RecordViewAsync(u, entity, id, user, ct);
         }, ct);
     }
@@ -162,7 +164,7 @@ public sealed partial class WorkflowEngine
         ?? throw new WorkflowException("unknownLifecycle", $"No published lifecycle applies to this {entity}.");
 
     internal async Task ApplyTransitionCoreAsync(Uow u, string lifecycleKey, string entity, string id, string transitionKey, Dictionary<string, object?> input,
-        WorkflowActor actor, bool isPerson, bool auto, int depth, CancellationToken ct, int chain = 0)
+        WorkflowActor actor, bool isPerson, bool auto, int depth, CancellationToken ct, int chain = 0, string? comment = null)
     {
         var c = await RequireLifecycleAsync(u, lifecycleKey, entity, ct);
         var record = await EnsureRecordInstanceAsync(u, c, entity, id, ct, actor);
@@ -181,12 +183,14 @@ public sealed partial class WorkflowEngine
             var errors = Options.FormValidator.Validate(form, input, u.Today);
             if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
         }
+        // Remarks (spec §6): only a person must give required ones; automatic and workflow moves never need them.
+        comment = CheckRemarks(tr.ResolvedComment, comment, isPerson && !auto, tr.Label);
         var from = c.StateById(record.State)!;
         var to = c.StateById(tr.To)!;
         var trigger = new TriggerInfo
         {
             Type = "transition", Field = lc.Field, From = from.Key, To = to.Key, Transition = tr.Key, ActorType = actor.Type, ActorId = actor.Id,
-            ActorName = actor.Name, At = Values.FormatInstant(u.Now),
+            ActorName = actor.Name, At = Values.FormatInstant(u.Now), Comment = comment,
         };
         await ExitStateAsync(u, c, record, from, actor, trigger, ct);
         await WriteStateAsync(u, c, entity, id, to, actor, depth, record.Id, ct);
@@ -201,13 +205,39 @@ public sealed partial class WorkflowEngine
             Category = "lifecycle", Action = auto ? "autoTransitioned" : "transitioned", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id,
             InstanceId = record.Id, DefinitionId = c.DefinitionId, Actor = actor, CorrelationId = record.CorrelationId,
             Before = new Dictionary<string, object?> { ["state"] = from.Key }, After = new Dictionary<string, object?> { ["state"] = to.Key },
-            Data = new Dictionary<string, object?> { ["transition"] = tr.Key, ["label"] = tr.Label, ["input"] = input },
+            Data = WithComment(new Dictionary<string, object?> { ["transition"] = tr.Key, ["label"] = tr.Label, ["input"] = input }, comment),
         }, ct);
         u.Log?.Add("lifecycle", "transitioned", id, $"{from.Label} → {to.Label} ({tr.Label})");
-        await QueueLifecycleEventAsync(u, c, entity, id, from.Key, to.Key, tr.Key, actor, depth, record.CorrelationId, ct);
+        await QueueLifecycleEventAsync(u, c, entity, id, from.Key, to.Key, tr.Key, actor, depth, record.CorrelationId, ct, comment);
         await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, actor, input, ct);
         // The transition's own steps may have moved the record on already; then that state was entered instead.
         if (record.State == to.Id) await EnterStateAsync(u, c, record, to, actor, trigger, depth, chain, ct, input);
+    }
+
+    /// <summary>
+    /// The remarks to keep for a move or reset (spec §6): trimmed, null when empty or when the setting is
+    /// <c>none</c>. A person must give them when the setting is <c>required</c> (<c>commentRequired</c>) and may
+    /// give at most <see cref="Remarks.MaxLength"/> characters (<c>invalidInput</c>); a workflow's are cut to that length.
+    /// </summary>
+    internal static string? CheckRemarks(string setting, string? comment, bool byPerson, string label)
+    {
+        if (setting == Remarks.None) return null;
+        var text = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim();
+        if (text is null && byPerson && setting == Remarks.Required)
+            throw new WorkflowException("commentRequired", $"Add remarks to explain why you “{label}”.");
+        if (text is { Length: > Remarks.MaxLength })
+        {
+            if (byPerson) throw new WorkflowException("invalidInput", $"Remarks can be at most {Remarks.MaxLength} characters.");
+            text = text[..Remarks.MaxLength];
+        }
+        return text;
+    }
+
+    /// <summary>Adds the remarks to audit data when there are any.</summary>
+    private static Dictionary<string, object?> WithComment(Dictionary<string, object?> data, string? comment)
+    {
+        if (comment is not null) data["comment"] = comment;
+        return data;
     }
 
     internal Task<bool> MayApplyAsync(Uow u, ValueScope scope, Transition tr, WorkflowActor actor, InstanceRecord record, CancellationToken ct) =>
@@ -295,14 +325,15 @@ public sealed partial class WorkflowEngine
         }
     }
 
-    private async Task QueueLifecycleEventAsync(Uow u, CompiledDefinition c, string entity, string id, string? from, string to, string? transition, WorkflowActor actor, int depth, string correlation, CancellationToken ct)
+    private async Task QueueLifecycleEventAsync(Uow u, CompiledDefinition c, string entity, string id, string? from, string to, string? transition, WorkflowActor actor, int depth, string correlation, CancellationToken ct,
+        string? comment = null)
     {
         if (u.Simulation) return;
         var ev = new LifecycleEvent
         {
             Lifecycle = c.Definition.Key, Entity = entity, EntityId = id, FromState = from, ToState = to, Transition = transition,
             ActorType = actor.Type, ActorId = actor.Id, ActorName = actor.Name, Depth = depth, CorrelationId = correlation, At = u.Now,
-            CausationDefinitionId = WorkflowWriteScope.Current?.DefinitionId,
+            CausationDefinitionId = WorkflowWriteScope.Current?.DefinitionId, Comment = comment,
         };
         await u.S.AddOutboxAsync(new OutboxRecord
         {
@@ -384,8 +415,9 @@ public sealed partial class WorkflowEngine
     /// </summary>
     /// <param name="undo">The ids of the reset list's items to take back (see <see cref="GetResetPreviewAsync"/>); null or empty = none.</param>
     /// <param name="token">The reset list's <see cref="ResetPreview.Token"/>; when given and the list has changed since, the reset fails with <c>resetChanged</c>.</param>
+    /// <param name="comment">The person's remarks: required when the reset's <c>comment</c> is <c>required</c>, ignored when it is <c>none</c>.</param>
     public Task<RecordView> ResetAsync(string entity, string id, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default,
-        IReadOnlyCollection<string>? undo = null, string? token = null)
+        IReadOnlyCollection<string>? undo = null, string? token = null, string? comment = null)
     {
         if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can reset a workflow.");
         return RunAsync(async u =>
@@ -396,6 +428,8 @@ public sealed partial class WorkflowEngine
             var reset = c.Lifecycle.Reset ?? throw new WorkflowException("resetDisabled", $"{c.Definition.Title} cannot be reset.");
             var label = reset.Label ?? "Reset workflow";
             if (!await MayResetAsync(u, c, record, user, ct)) throw new WorkflowException("notAllowed", $"You are not allowed to “{label}”.");
+            if (!ResetOfferedIn(reset, record))
+                throw new WorkflowException("notAllowed", $"“{label}” isn't offered in “{c.StateById(record.State)?.Label ?? "this state"}”.");
             var to = ResetTarget(c);
             if (record.State == to.Id && record.Status != InstanceStatus.OutOfSync && (await RunningAboutAsync(u, record, reset, ct)).Count == 0)
                 throw new WorkflowException("nothingToReset", $"The record is already in “{to.Label}” with nothing running.");
@@ -405,11 +439,12 @@ public sealed partial class WorkflowEngine
                 var errors = Options.FormValidator.Validate(form, input, u.Today);
                 if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
             }
+            comment = CheckRemarks(reset.ResolvedComment, comment, byPerson: true, label);
             var from = c.StateById(record.State);
             var trigger = new TriggerInfo
             {
                 Type = "reset", Field = c.Lifecycle.Field, From = from?.Key, To = to.Key, ActorType = user.Type, ActorId = user.Id, ActorName = user.Name,
-                At = Values.FormatInstant(u.Now),
+                At = Values.FormatInstant(u.Now), Comment = comment,
             };
             foreach (var run in await RunningAboutAsync(u, record, reset, ct))
                 await CancelInstanceAsync(u, run, user, $"The workflow was reset by {user.Name ?? user.Id}.", ct);
@@ -430,10 +465,10 @@ public sealed partial class WorkflowEngine
                 Category = "lifecycle", Action = "reset", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id, InstanceId = record.Id,
                 DefinitionId = c.DefinitionId, Actor = user, CorrelationId = record.CorrelationId,
                 Before = new Dictionary<string, object?> { ["state"] = from?.Key }, After = new Dictionary<string, object?> { ["state"] = to.Key },
-                Data = new Dictionary<string, object?> { ["label"] = label, ["input"] = input, ["undone"] = undone },
+                Data = WithComment(new Dictionary<string, object?> { ["label"] = label, ["input"] = input, ["undone"] = undone }, comment),
             }, ct);
             u.Log?.Add("lifecycle", "reset", id, $"{from?.Label ?? "?"} → {to.Label} ({label})");
-            await QueueLifecycleEventAsync(u, c, entity, id, from?.Key, to.Key, null, user, 0, record.CorrelationId, ct);
+            await QueueLifecycleEventAsync(u, c, entity, id, from?.Key, to.Key, null, user, 0, record.CorrelationId, ct, comment);
             // The reset steps read the answers (input.*) and may change this record and related ones.
             await StartRunAsync(u, record, c, "reset", "reset", trigger, user, input, ct);
             if (record.State == to.Id)
@@ -448,6 +483,10 @@ public sealed partial class WorkflowEngine
     /// <summary>The state a reset goes back to: <c>reset.to</c>, else the initial state.</summary>
     internal static State ResetTarget(CompiledDefinition c) =>
         c.Lifecycle.Reset?.To is { } to && c.StateById(to) is { } st ? st : c.InitialState;
+
+    /// <summary>Whether the reset is offered in the record's current state (<c>reset.states</c>; absent = every state).</summary>
+    internal static bool ResetOfferedIn(LifecycleReset reset, InstanceRecord record) =>
+        reset.States is null || (record.State is not null && reset.States.Contains(record.State));
 
     /// <summary>Whether the viewer may reset the record's workflow (it has a reset and they are in its <c>who</c>).</summary>
     internal async Task<bool> MayResetAsync(Uow u, CompiledDefinition c, InstanceRecord record, WorkflowActor actor, CancellationToken ct) =>

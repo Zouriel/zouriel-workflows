@@ -215,7 +215,7 @@ public abstract class HumanStep : Step
     public Template? Instructions { get; set; }
     /// <summary>Whether assignees may hand the task to someone else; null uses the settings default.</summary>
     public bool? AllowDelegation { get; set; }
-    /// <c>never</c>, <c>reject</c> (rejections need a comment) or <c>always</c>.
+    /// <c>never</c>, <c>reject</c> (an approval's rejection, or a task outcome whose tone is <c>danger</c>, needs a comment) or <c>always</c>.
     public string? RequireComment { get; set; }
 }
 
@@ -353,6 +353,8 @@ public sealed class ApplyTransitionStep : Step
     public string Transition { get; set; } = "";
     /// <summary>Answers for the transition's input form, by key.</summary>
     public Dictionary<string, Operand>? Input { get; set; }
+    /// <summary>Remarks recorded with the move (<c>trigger.comment</c>); the transition's required check does not apply to a workflow.</summary>
+    public Template? Comment { get; set; }
     /// <c>fail</c> (default) or <c>skip</c> (output <c>applied</c> false) when the record is not in a from state or the guard fails.
     public string? IfNotAllowed { get; set; }
 }

@@ -137,10 +137,20 @@ internal sealed class TriggerInfo
     public string? At { get; set; }
     public string? EventId { get; set; }
     public Dictionary<string, object?>? Data { get; set; }
+    /// <summary>The remarks given with the move or reset that started the run (<c>trigger.comment</c>), if any.</summary>
+    public string? Comment { get; set; }
 
     public string ToJson() => Values.Serialize(ToValue());
 
-    public Dictionary<string, object?> ToValue() => new()
+    public Dictionary<string, object?> ToValue()
+    {
+        var v = Fields();
+        // Only present when remarks were given, so triggers without them read exactly as before.
+        if (Comment is not null) v["comment"] = Comment;
+        return v;
+    }
+
+    private Dictionary<string, object?> Fields() => new()
     {
         ["type"] = Type,
         ["field"] = Field,
@@ -173,6 +183,7 @@ internal sealed class TriggerInfo
             At = S("at"),
             EventId = S("eventId"),
             Data = v.GetValueOrDefault("data") as Dictionary<string, object?>,
+            Comment = S("comment"),
         };
     }
 }

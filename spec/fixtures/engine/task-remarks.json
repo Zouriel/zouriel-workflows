@@ -1,0 +1,28 @@
+{
+  "name": "requireComment reject on a task: a red (danger) outcome needs a comment, an outcome that is not red does not",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [] },
+  "definitions": [ {
+    "specVersion": 1, "id": "wf_task_remarks", "key": "screen", "kind": "automation", "title": "Screen", "entity": "application",
+    "trigger": { "type": "created" },
+    "steps": [
+      { "id": "tk", "type": "task", "title": "Screen it", "assignees": [ { "user": "rev1" } ], "due": "P1D", "requireComment": "reject",
+        "outcomes": [
+          { "id": "o1", "key": "accept", "label": "Accept", "tone": "success", "steps": [] },
+          { "id": "o2", "key": "decline", "label": "Decline", "tone": "danger", "steps": [] },
+          { "id": "o3", "key": "later", "label": "Later", "steps": [] } ],
+        "onTimeout": { "id": "to", "steps": [] } }
+    ]
+  } ],
+  "steps": [
+    { "create": { "entity": "application", "id": "a1", "values": { "title": "One" } } },
+    { "decide": { "step": "tk", "user": "rev1", "outcome": "decline" }, "expectError": "commentRequired" },
+    { "decide": { "step": "tk", "user": "rev1", "outcome": "decline", "comment": "  " }, "expectError": "commentRequired" },
+    { "decide": { "step": "tk", "user": "rev1", "outcome": "decline", "comment": "Out of scope" },
+      "expect": { "outputs": { "screen": { "tk": { "outcome": "decline", "comment": "Out of scope" } } },
+        "audit": [ { "is": "task.decided", "actor": "rev1", "data": { "outcome": "decline", "comment": "Out of scope" } } ] } },
+    { "create": { "entity": "application", "id": "a2", "values": { "title": "Two" } } },
+    { "decide": { "step": "tk", "user": "rev1", "outcome": "later" },
+      "expect": { "outputs": { "screen": { "tk": { "outcome": "later" } } } } }
+  ]
+}

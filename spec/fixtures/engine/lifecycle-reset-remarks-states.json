@@ -1,0 +1,63 @@
+{
+ "name": "Reset remarks and where Start over is offered: required remarks refuse a reset without them and are trimmed, audited and read as trigger.comment by the reset steps; reset.states hides the reset outside those states and refuses it there",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": [
+   { "id": "a1", "title": "Bursary", "applicant": "ali" },
+   { "id": "a2", "title": "Grant", "applicant": "ali" }
+  ]
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_reset_states",
+   "key": "resetStates",
+   "kind": "lifecycle",
+   "title": "Reset states",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "active" },
+     { "id": "st_rev", "key": "underReview", "label": "Under review", "category": "active" },
+     { "id": "st_no", "key": "rejected", "label": "Rejected", "category": "terminal" }
+    ],
+    "transitions": [
+     { "id": "t_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "field": "entity.applicant" }] },
+     { "id": "t_start", "key": "startReview", "label": "Start review", "from": ["st_sub"], "to": "st_rev", "who": [{ "role": "reviewer" }] },
+     { "id": "t_reject", "key": "reject", "label": "Reject", "from": ["st_rev"], "to": "st_no", "who": [{ "role": "reviewer" }] }
+    ],
+    "reset": {
+     "label": "Start over",
+     "who": [{ "role": "admin" }],
+     "comment": "required",
+     "states": ["st_sub", "st_rev"],
+     "steps": [{ "id": "r_note", "type": "setFields", "values": [{ "field": "notes", "value": { "ref": "trigger.comment" } }] }]
+    }
+   }
+  }
+ ],
+ "steps": [
+  { "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "ali" },
+    "expect": { "available": { "entity": "application", "id": "a1", "user": "head", "transitions": [], "state": "submitted", "reset": true, "resetComment": "required" } } },
+  { "reset": { "entity": "application", "id": "a1", "actor": "head" }, "expectError": "commentRequired" },
+  { "reset": { "entity": "application", "id": "a1", "actor": "head", "comment": " \n " }, "expectError": "commentRequired" },
+  {
+   "reset": { "entity": "application", "id": "a1", "actor": "head", "comment": "  Submitted by mistake " },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "draft", "notes": "Submitted by mistake" } },
+    "audit": [{ "is": "lifecycle.reset", "actor": "head", "data": { "label": "Start over", "comment": "Submitted by mistake" } }]
+   }
+  },
+  { "transition": { "entity": "application", "id": "a2", "transition": "submit", "actor": "ali" } },
+  { "transition": { "entity": "application", "id": "a2", "transition": "startReview", "actor": "rev1" },
+    "expect": { "available": { "entity": "application", "id": "a2", "user": "head", "transitions": [], "state": "underReview", "reset": true } } },
+  { "transition": { "entity": "application", "id": "a2", "transition": "reject", "actor": "rev1" },
+    "expect": { "available": { "entity": "application", "id": "a2", "user": "head", "transitions": [], "state": "rejected", "reset": false } } },
+  { "expect": { "resetPreview": { "entity": "application", "id": "a2", "user": "head", "error": "notAllowed" } } },
+  { "reset": { "entity": "application", "id": "a2", "actor": "head", "comment": "Rejected by mistake" }, "expectError": "notAllowed",
+    "expect": { "record": { "entity": "application", "id": "a2", "values": { "status": "rejected", "notes": null } } } }
+ ]
+}

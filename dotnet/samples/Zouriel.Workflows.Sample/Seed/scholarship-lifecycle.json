@@ -45,6 +45,7 @@
     "reset": {
       "label": "Start over",
       "who": [ { "role": "head" } ],
+      "comment": "none",
       "confirm": "Start this application over? Open reviews and payments stop, the reviewer is cleared and every document needs checking again.",
       "input": { "form": { "schemaVersion": 1, "id": "f_reset", "title": "Start over", "pages": [ { "id": "p1", "elements": [
         { "kind": "field", "id": "f_reason", "key": "reason", "type": "textarea", "label": "Why is it starting over?", "required": true,

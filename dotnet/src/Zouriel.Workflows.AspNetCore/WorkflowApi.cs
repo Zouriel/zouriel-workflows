@@ -79,7 +79,8 @@ public sealed record PublishBody(string? Note);
 /// <param name="Lifecycle">Which lifecycle, when the record has more than one.</param>
 /// <param name="Undo">The reset list's item ids to take back (from <c>GET …/reset</c>); empty = none.</param>
 /// <param name="Token">The reset list's token (from <c>GET …/reset</c>); when the list has changed since, the reset fails with <c>resetChanged</c>.</param>
-public sealed record ResetBody(Dictionary<string, JsonNode?>? Input, string? Lifecycle, List<string>? Undo, string? Token = null);
+/// <param name="Comment">The person's remarks: required when the reset's <c>comment</c> is <c>required</c> (<c>commentRequired</c>), ignored when <c>none</c>; at most 2000 characters.</param>
+public sealed record ResetBody(Dictionary<string, JsonNode?>? Input, string? Lifecycle, List<string>? Undo, string? Token = null, string? Comment = null);
 
 /// <summary>One permission change: who may do a node of a workflow.</summary>
 /// <param name="Node">A transition id, <c>reset</c>, <c>trigger</c> (a manual start) or an approval/task step id.</param>
@@ -134,10 +135,16 @@ public sealed record DelegateBody(string To, string? Note);
 /// <param name="Reason">Why.</param>
 public sealed record ReassignBody(List<string> Assignees, string? Reason);
 
-/// <summary>Body of transition and manual-start requests.</summary>
+/// <summary>Body of manual-start requests.</summary>
 /// <param name="Input">The form's answers.</param>
 /// <param name="Lifecycle">Which lifecycle, when the entity has more than one.</param>
 public sealed record InputBody(Dictionary<string, JsonNode?>? Input, string? Lifecycle);
+
+/// <summary>Body of <c>POST /records/{entity}/{id}/transitions/{key}</c>.</summary>
+/// <param name="Input">The transition form's answers.</param>
+/// <param name="Lifecycle">Which lifecycle, when the entity has more than one.</param>
+/// <param name="Comment">The person's remarks: required when the transition's <c>comment</c> is <c>required</c> (<c>commentRequired</c>), ignored when <c>none</c>; at most 2000 characters.</param>
+public sealed record TransitionBody(Dictionary<string, JsonNode?>? Input, string? Lifecycle, string? Comment = null);
 
 /// <summary>Body of <c>POST /records/{entity}/{id}/force-state</c>.</summary>
 /// <param name="State">The state key to move to.</param>
@@ -374,11 +381,11 @@ public static class WorkflowApi
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await RecordHistoryAsync(e, entity, id, Math.Clamp(take ?? 200, 1, 2000), ct));
         }), o.ViewPolicy);
-        Secure(g.MapPost("/records/{entity}/{id}/transitions/{key}", async (string entity, string id, string key, InputBody? body, WorkflowEngine e,
+        Secure(g.MapPost("/records/{entity}/{id}/transitions/{key}", async (string entity, string id, string key, TransitionBody? body, WorkflowEngine e,
             IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
             await RequireRecordAsync(entity, id, access, http, ct);
-            return Results.Ok(await e.ApplyTransitionAsync(entity, id, key, Map(body?.Input), Actor(http), body?.Lifecycle, ct));
+            return Results.Ok(await e.ApplyTransitionAsync(entity, id, key, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Comment));
         }), o.ViewPolicy);
         // Starting a record's workflow over: the lifecycle's reset.who decides who may (spec §6 reset).
         // What a reset would take back, for the people it allows (the reset list).
@@ -392,7 +399,7 @@ public static class WorkflowApi
             IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
             await RequireRecordAsync(entity, id, access, http, ct);
-            return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Undo, body?.Token));
+            return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Undo, body?.Token, body?.Comment));
         }).WithDescription(ResetDescription), o.ViewPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/force-state", async (string entity, string id, ForceStateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.ForceStateAsync(entity, id, body.State, body.Reason, body.SkipSteps, Actor(http), body.Lifecycle, ct))), o.InterventionPolicy);

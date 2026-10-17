@@ -1078,7 +1078,7 @@
                     "type": "null"
                   },
                   {
-                    "$ref": "#/components/schemas/InputBody"
+                    "$ref": "#/components/schemas/TransitionBody"
                   }
                 ]
               }
@@ -1097,7 +1097,6 @@
         "tags": [
           "Workflows"
         ],
-        "description": "What a reset would take back (spec \u00a76): the reset option and the items, oldest first, with a `token`. Item kinds: `created`, `field`, `action`, `message`, `webhook`, `move` (another record moved by applyTransition; never undoable). 403 `notAllowed` when the caller is not among the lifecycle's reset `who` or there is nothing to reset.",
         "parameters": [
           {
             "name": "entity",
@@ -1125,14 +1124,7 @@
         ],
         "responses": {
           "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResetPreview"
-                }
-              }
-            }
+            "description": "OK"
           }
         }
       },
@@ -1140,7 +1132,6 @@
         "tags": [
           "Workflows"
         ],
-        "description": "Starts the record's workflow over (spec \u00a76). `undo` lists item ids to take back; `token` (from GET) makes the reset fail with 409 `resetChanged` when the list has changed since it was opened, as does an id no longer listed. 400 `notUndoable` for an item that cannot be taken back, `invalidInput` for the form. Writes that take things back start no automations.",
         "parameters": [
           {
             "name": "entity",
@@ -1945,7 +1936,7 @@
             "description": "Which lifecycle, when the entity has more than one."
           }
         },
-        "description": "Body of transition and manual-start requests."
+        "description": "Body of manual-start requests."
       },
       "JsonArray": {
         "type": "array"
@@ -2141,143 +2132,15 @@
             },
             "description": "The reset list's item ids to take back (from `GET \u2026/reset`); empty = none."
           },
-          "token": {
+          "comment": {
             "type": [
               "null",
               "string"
             ],
-            "description": "The reset list's token (from `GET \u2026/reset`); when the list has changed since, the reset fails with `resetChanged`."
+            "description": "The person's remarks: required when the reset's `comment` is `required` (`commentRequired`), ignored when `none`; at most 2000 characters."
           }
         },
         "description": "Body of `POST /records/{entity}/{id}/reset`."
-      },
-      "ResetItem": {
-        "required": [
-          "id",
-          "kind",
-          "title",
-          "detail",
-          "workflow",
-          "step",
-          "undoable",
-          "selected",
-          "warning"
-        ],
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Stable id to send back in the reset's `undo` list."
-          },
-          "kind": {
-            "type": "string",
-            "description": "`field` (a field it changed), `created` (a record it created), `action`, `message`, `webhook` or `move` (another record moved by `applyTransition`, never undoable)."
-          },
-          "title": {
-            "type": "string",
-            "description": "What it was, in words (\"Reviewer of Application \u201cBursary\u201d: back to nobody\")."
-          },
-          "detail": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "description": "More about it (the value now, what created it), if any."
-          },
-          "workflow": {
-            "type": "string",
-            "description": "The workflow that did it."
-          },
-          "step": {
-            "type": "string",
-            "description": "The step that did it."
-          },
-          "undoable": {
-            "type": "boolean",
-            "description": "Whether the reset can take it back (messages, webhooks and actions without an undo cannot)."
-          },
-          "selected": {
-            "type": "boolean",
-            "description": "Whether it is ticked by default (not when it was changed again since, or cannot be undone)."
-          },
-          "warning": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "description": "Why it is unticked or cannot be undone, if so."
-          }
-        },
-        "description": "One thing a workflow did that the reset list shows (spec \u00a76 reset)."
-      },
-      "ResetOption": {
-        "required": [
-          "label",
-          "to",
-          "toLabel",
-          "confirm",
-          "form"
-        ],
-        "type": "object",
-        "properties": {
-          "label": {
-            "type": "string",
-            "description": "The button label (\"Reset workflow\" by default)."
-          },
-          "to": {
-            "type": "string",
-            "description": "The state key it goes back to."
-          },
-          "toLabel": {
-            "type": "string",
-            "description": "That state's label."
-          },
-          "confirm": {
-            "type": [
-              "null",
-              "string"
-            ],
-            "description": "A confirmation question to ask first, if set."
-          },
-          "form": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "description": "The form to fill in (e.g. a reason), if the reset asks for one.",
-                "$ref": "#/components/schemas/JsonNode"
-              }
-            ]
-          }
-        },
-        "description": "Starting the record's workflow over, offered to the people the lifecycle's reset allows (spec \u00a76)."
-      },
-      "ResetPreview": {
-        "required": [
-          "reset",
-          "items",
-          "token"
-        ],
-        "type": "object",
-        "properties": {
-          "reset": {
-            "description": "The reset as offered to the viewer.",
-            "$ref": "#/components/schemas/ResetOption"
-          },
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ResetItem"
-            },
-            "description": "What the record's workflows did since it last started over, oldest first."
-          },
-          "token": {
-            "type": "string",
-            "description": "Fingerprint of the items and the values they would restore. Send it back with the reset: when the list has\nchanged since (someone edited a field it would restore), the reset fails with `resetChanged`."
-          }
-        },
-        "description": "What a reset would do: its option (label, target, form) and the workflow's work it can take back."
       },
       "RetryBody": {
         "required": [
@@ -2367,6 +2230,37 @@
           }
         },
         "description": "Body of `POST /instances/{id}/skip`."
+      },
+      "TransitionBody": {
+        "required": [
+          "input",
+          "lifecycle"
+        ],
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "The transition form's answers."
+          },
+          "lifecycle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Which lifecycle, when the entity has more than one."
+          },
+          "comment": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The person's remarks: required when the transition's `comment` is `required` (`commentRequired`), ignored when `none`; at most 2000 characters."
+          }
+        },
+        "description": "Body of `POST /records/{entity}/{id}/transitions/{key}`."
       },
       "TriggerOverview": {
         "required": [
