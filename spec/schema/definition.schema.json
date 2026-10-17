@@ -592,6 +592,7 @@
     },
     "createRecordStep": {
       "type": "object",
+      "description": "Creates a record (spec §7). Lint: values must be settable fields (fieldNotSettable), constants among an enum field's options (unknownValue), never a field a lifecycle controls, this definition's own or a published one (ownedField), and every field the registry marks required must be set (missingRequiredField). At run time a field a lifecycle controls is refused (ownedField).",
       "required": ["type", "entity", "values"],
       "properties": {
         "type": { "const": "createRecord" },

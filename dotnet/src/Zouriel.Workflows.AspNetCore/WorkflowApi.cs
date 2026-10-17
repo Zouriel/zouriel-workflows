@@ -387,13 +387,13 @@ public static class WorkflowApi
         {
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.GetResetPreviewAsync(entity, id, Actor(http), lifecycle, ct));
-        }), o.ViewPolicy);
+        }).Produces<ResetPreview>().WithDescription(ResetListDescription), o.ViewPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/reset", async (string entity, string id, ResetBody? body, WorkflowEngine e,
             IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
             await RequireRecordAsync(entity, id, access, http, ct);
             return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Undo, body?.Token));
-        }), o.ViewPolicy);
+        }).WithDescription(ResetDescription), o.ViewPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/force-state", async (string entity, string id, ForceStateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.ForceStateAsync(entity, id, body.State, body.Reason, body.SkipSteps, Actor(http), body.Lifecycle, ct))), o.InterventionPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/manual/{workflow}", async (string entity, string id, string workflow, InputBody? body, WorkflowEngine e,
@@ -432,6 +432,16 @@ public static class WorkflowApi
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    private const string ResetListDescription =
+        "What a reset would take back (spec §6): the reset option and the items, oldest first, with a `token`. Item kinds: `created`, `field`, " +
+        "`action`, `message`, `webhook`, `move` (another record moved by applyTransition; never undoable). 403 `notAllowed` when the caller is not " +
+        "among the lifecycle's reset `who` or there is nothing to reset.";
+
+    private const string ResetDescription =
+        "Starts the record's workflow over (spec §6). `undo` lists item ids to take back; `token` (from GET) makes the reset fail with 409 " +
+        "`resetChanged` when the list has changed since it was opened, as does an id no longer listed. 400 `notUndoable` for an item that " +
+        "cannot be taken back, `invalidInput` for the form. Writes that take things back start no automations.";
 
     private static RouteHandlerBuilder Secure(RouteHandlerBuilder r, string? policy) => policy is null ? r : r.RequireAuthorization(policy);
 

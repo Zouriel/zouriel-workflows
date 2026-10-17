@@ -129,7 +129,8 @@ depth + 1 when started by a change the engine itself made). Changes made at dept
 (settings, default 5) do not start instances; the engine writes an audit entry
 `trigger.suppressed` instead. A workflow's own writes never re-trigger the *same* definition unless
 its trigger sets `"retrigger": true`; this covers transitions its `applyTransition` steps apply
-(`stateEntered`/`transitionApplied` triggers) as well as field writes.
+(`stateEntered`/`transitionApplied` triggers) as well as field writes. Writes a reset makes to take
+back what a workflow did (§6) start no automations at all (the change event carries `suppressTriggers`).
 
 **Concurrency** (`settings.concurrency`): `perRecordSerial` (default) — a new instance of the same
 definition for the same record waits in `queued` status until earlier ones finish; `parallel` — no
@@ -221,25 +222,44 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   The record view offers `reset: { label, to, toLabel, confirm, form }` to people among `who` when a
   reset would change something, and `null` otherwise. Like any move into a state, a reset fires
   `stateEntered` triggers.
-- **Taking back what the workflow did.** Every completed step writes an undo record: `setFields`
-  keeps each field's value before and after, `createRecord` the record it made, `action` its input
-  and output, `notify` and `webhook` what they sent. `GET /records/{entity}/{id}/reset` (same `who`
-  as the reset, else `notAllowed`) returns `{ reset, items }`: what the record's runs and automations
-  did since it last started over (since its latest `lifecycle.reset` audit entry), oldest first. An
-  item is `{ id, kind, title, detail?, workflow, step, undoable, selected, warning? }` with `kind`:
-  `created` (`created:{entity}:{id}`, delete a record the workflow created, still present),
-  `field` (`field:{entity}:{id}:{field}`, one per field of any record, back to its value before the
-  first change; left out when it already has that value, when it is the lifecycle's own field, or
-  when its record is a `created` item), `action` (`action:{stepRecordId}`, undoable only when the
-  app's handler implements undo), `message` and `webhook` (never undoable). An item is `selected` by
-  default unless it cannot be undone or (fields) someone changed it again since the workflow set it,
-  which the `warning` says. The reset body takes `undo: [item id…]`; inside the reset's atomic
-  operation, after cancelling the runs and before writing the field, the engine takes the chosen
-  items back: app actions newest first, then fields restored (one write per record), then created
-  records deleted. An id that is no longer in the list fails the whole reset (`resetChanged`, 409:
-  open the list again); a chosen item that cannot be undone fails it with `notUndoable`. Items left
-  unticked stay as they are; they do not change what the lifecycle does next. The audit entry's
-  data lists the titles undone (`undone`).
+- **Taking back what the workflow did.** These completed steps write an undo journal entry
+  (`StepRecord.undo`): `setFields` (`fields`: the record, each field's value before and, as the gateway
+  holds it after the write, after), `createRecord` (`created`: the record and the values it was created
+  with, as stored), `action` (its input and output), `notify` (`message`, only when it went to at least
+  one recipient), `webhook` (what it called) and an applied `applyTransition` (`move`: the record,
+  lifecycle and transition). No other step writes one. Every entry carries a `seq`, monotonic per engine
+  (clock milliseconds × 1000, raised past the last one handed out), so entries written in one unit of
+  work, which share a start time, keep their order; entries are ordered by `seq` (a stable sort).
+  `GET /records/{entity}/{id}/reset` (`?lifecycle=` picks the lifecycle; its reset's `who` decides, else
+  `notAllowed`, also when the reset would change nothing) returns `{ reset, items, token }`: the requested
+  lifecycle's reset option and the unsettled journal entries of the record instance's own runs (never the
+  reset runs, reason `reset`) and of the automation instances about the record (sub-workflows about the
+  record included), oldest first. Runs of another lifecycle's record instance are never listed, and
+  neither is work a sub-workflow did on another record. An item is `{ id, kind, title, detail?, workflow,
+  step, undoable, selected, warning? }` with `kind`: `created` (`created:{entity}:{id}`, delete a record
+  the workflow created, still present; unticked with "Changed since the workflow created it; ticking it
+  deletes it anyway." when it no longer holds the values the workflows gave it), `field`
+  (`field:{entity}:{id}:{field}`, one per field of any record, back to its value before the first
+  change; left out when it already has that value, when it is the lifecycle's own field, or when its
+  record is a `created` item; sensitive values show as "(hidden)"), `action` (`action:{stepRecordId}`,
+  undoable only when the app's handler implements undo), `message`, `webhook` and `move`
+  (`move:{stepRecordId}`, another record moved by `applyTransition`: "Moves of other records aren't taken
+  back."; a move of this record's own lifecycle is not listed), never undoable. An item is `selected` by
+  default unless it cannot be undone or someone changed it since the workflow set or created it, which
+  the `warning` says. `token` fingerprints the items and the values they compare (a sensitive value only
+  through what its item already shows). The reset body takes `undo: [item id…]` and `token?`; inside the
+  reset's atomic operation, after cancelling the runs and before writing the field, the engine builds the
+  list again: a `token` that no longer matches, or an id that is no longer in the list, fails the whole
+  reset (`resetChanged`, 409: open the list again); a chosen item that cannot be undone fails it with
+  `notUndoable`. It then **settles** every journal entry the list was built from, ticked or not (the
+  entry records the reset that settled it), so the next reset lists only what happens after this one,
+  whatever the clock says and however long a run lasts. The chosen items are taken back: app actions
+  newest first (the handler's undo gets an `idempotencyKey`, the step record id: the reset's unit of work
+  may be retried, so an undo can be asked for twice), then fields restored (one write per record), then
+  created records deleted. Writes that take things back start no automations (`created`/`fieldChanged`/
+  `deleted` triggers ignore them, so nothing redoes what was undone); lifecycle bookkeeping, condition
+  waits and date triggers still follow them. Items left unticked stay as they are; they do not change
+  what the lifecycle does next. The audit entry's data lists the titles undone (`undone`).
 - **Versions.** The record instance is pinned to the version it started on. Publishing a new version
   does not move existing records; `POST /instances/{id}/migrate` (or bulk by definition) moves them,
   mapping states by key (a `stateMap` overrides; unmapped states make the request fail). Migrating
@@ -276,7 +296,7 @@ value cannot add path segments, a query or another host; webhooks do not follow 
 | `task` | Like `approval` but `outcomes: [{ id, key, label, tone?, steps }]` (1–8), `onTimeout: { steps }`, rule is always first decision wins. | `outcome` (key), `decidedBy`, `comment`, `data` |
 | `wait` | `until`: `{ type: "duration", duration, calendar? }` · `{ type: "date", date: <operand>, offset?, at? }` · `{ type: "condition", when, timeout, onTimeout: { steps } }` · `{ type: "signal", signal, timeout?, onTimeout? }` | `timedOut` (bool), `data` (signal data) |
 | `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
-| `createRecord` | `entity: <registry entity>`, `values: [{ field, value: operand }]` (fields must be `settable`; not a field a lifecycle owns, which starts at its initial state). Needs a gateway that can create records (`notSupported` otherwise). One committed create, like `setFields`. | `id` |
+| `createRecord` | `entity: <registry entity>`, `values: [{ field, value: operand }]` (fields must be `settable`, `fieldNotSettable`; constants among an enum field's options, `unknownValue`; not a field a lifecycle controls, this definition's or a published one, `ownedField`: it starts at its initial state; every field the registry marks `required` set, `missingRequiredField`). At run time a field any published lifecycle controls is refused (`ownedField`), since lint only knows the lifecycles published when the workflow was. Needs a gateway that can create records: `notSupported` when it cannot (or cannot make that type), `unknownEntity` when it does not store it. One committed create, like `setFields`. | `id` |
 | `setVariables` | `values: [{ variable: <variable id>, value: operand }]` | — |
 | `applyTransition` | `target?: "self"|<relation path>`, `lifecycle: <definition key>`, `transition: <key>`, `input?: { <key>: operand }`, `ifNotAllowed: "fail"|"skip"` | `applied` (bool) |
 | `notify` | `channel`, `to: recipients`, `subject?: template`, `body: template`, `link?: "record"|template` | `sent` (count) |

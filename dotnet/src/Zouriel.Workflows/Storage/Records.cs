@@ -227,8 +227,9 @@ public sealed class StepRecord
     public string? Error { get; set; }
     /// <summary>
     /// What it changed, as JSON, so a reset can take it back (spec §6 reset): <c>fields</c> (entity, id, before,
-    /// after), <c>created</c> (entity, id), <c>action</c> (action, input, output), <c>message</c> or <c>webhook</c>.
-    /// Unmasked (the exact values to restore); never shown as is.
+    /// after), <c>created</c> (entity, id, values), <c>action</c> (action, input, output), <c>message</c>, <c>webhook</c>
+    /// or <c>move</c> (entity, id, lifecycle, transition). Every entry has a <c>seq</c> (its order) and, once a reset
+    /// has considered it, <c>settled</c>. Unmasked (the exact values to restore); never shown as is.
     /// </summary>
     public string? Undo { get; set; }
     /// <summary>When it started.</summary>
