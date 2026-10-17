@@ -239,6 +239,14 @@ public interface IWorkflowSession : IAsyncDisposable
     Task<int> CleanupAsync(DateTimeOffset processedOutboxBefore, DateTimeOffset claimsBefore, CancellationToken ct = default);
 
     /// <summary>
+    /// Saves record changes made in this unit but not saved yet (an app action that changed entities through the host's
+    /// own data context without saving them). The engine calls it inside the action's write scope right after the
+    /// handler returns, so the change hook sees those writes as the workflow's (actor, depth, causation) rather than
+    /// as anonymous writes at commit. Stores that write records at once need nothing; the default does nothing.
+    /// </summary>
+    Task SaveRecordChangesAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    /// <summary>
     /// Starts a savepoint inside the unit (used around app actions so a failing handler's writes are undone).
     /// Returns false when the store cannot do it; the engine then carries on without one.
     /// </summary>

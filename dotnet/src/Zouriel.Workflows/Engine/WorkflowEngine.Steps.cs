@@ -642,6 +642,9 @@ public sealed partial class WorkflowEngine
                     IdempotencyKey = $"{x.I.Id}:{a.Id}:{t.Id}:{t.CurrentItem().Index}:{t.Top.Attempt}", Attempt = t.Top.Attempt,
                     Initiator = x.I.InitiatorId is null ? null : WorkflowActor.User(x.I.InitiatorId, x.I.InitiatorName),
                 }, cts.Token);
+                // Changes the handler made but did not save are saved here, inside the scope, so they stay the
+                // workflow's: its depth and causation (loop protection, no self-retrigger) and its actor.
+                await x.U.S.SaveRecordChangesAsync(cts.Token);
             }
             if (undoable) await x.U.S.ReleaseSavepointAsync(savepoint, ct);
             return outputs;

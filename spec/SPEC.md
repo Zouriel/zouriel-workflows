@@ -328,7 +328,9 @@ applies to steps that call out (`action`, `webhook`, `notify`, `subWorkflow`). D
 outputs `error` holds the message), or `{ "steps": [...] }` (run these, then continue after the
 step). `timeout` (a duration) fails the attempt if the call takes longer (it counts as a failed
 attempt: retried, then `onError`). A failed `action` attempt undoes the record writes its handler
-made before failing.
+made before failing. Record changes a handler makes and leaves unsaved (on the app's own data context)
+are saved right after it returns, still as the workflow's writes (its actor, depth + 1 and causation),
+never as anonymous writes when the unit commits.
 
 `notify` steps queue the message in the transactional outbox and complete; delivery happens after
 commit and is retried by the outbox (backing off up to an hour, parked for an admin after 10

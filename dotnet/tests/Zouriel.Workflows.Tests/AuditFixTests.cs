@@ -364,6 +364,60 @@ public sealed class AuditFixTests2(ITestOutputHelper output)
     }
 }
 
+/// <summary>Regressions from the final audit, part 3.</summary>
+public sealed class AuditFixTests3(ITestOutputHelper output)
+{
+    private static Task<WorkflowTestHost> HostAsync(Func<WorkflowEngineOptions, WorkflowEngineOptions>? configure = null) => AuditFixTests.HostAsync(configure);
+
+    private void Dump(WorkflowTestHost h)
+    {
+        foreach (var i in h.Store.All<InstanceRecord>("instances").OrderBy(i => i.StartedAt))
+            output.WriteLine($"{i.DefinitionKey} {i.Kind} {i.Reason} {i.Status} v{i.Version} depth={i.Depth} {i.Error}");
+    }
+
+    private sealed class DeferringAction : IWorkflowAction, IWorkflowActionResolver
+    {
+        public IWorkflowAction? Resolve(ActionDescriptor action) => this;
+
+        public Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
+        {
+            // Changes an entity on the app's data context and leaves saving it to the unit of work.
+            PendingWritesStore.Current!.Defer(g => g.SetFieldsAsync("application", context.EntityId!, new Dictionary<string, object?> { ["priority"] = "high" }, ct));
+            return Task.FromResult<IReadOnlyDictionary<string, object?>>(new Dictionary<string, object?> { ["ok"] = true });
+        }
+    }
+
+    // ── 8. Record changes an action makes but does not save stay the workflow's ──
+
+    [Fact]
+    public async Task Changes_an_action_leaves_unsaved_are_saved_inside_its_write_scope()
+    {
+        var h = await HostAsync(o => new WorkflowEngineOptions
+        {
+            Registry = o.Registry, Store = new PendingWritesStore(o.Store), Identity = o.Identity, Notifications = o.Notifications, Webhooks = o.Webhooks,
+            Actions = new DeferringAction(), Time = o.Time, RecordLinkTemplate = o.RecordLinkTemplate,
+        });
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_p", "key": "prio", "kind": "automation", "title": "Prio", "entity": "application",
+          "trigger": { "type": "fieldChanged", "field": "priority" },
+          "steps": [ { "id": "a", "type": "action", "action": "crm.ping", "input": {} } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q", ["priority"] = "low" });
+        await h.SettleAsync();
+        await h.Store.ChangeRecordAsync("application", "a1", new() { ["priority"] = "normal" });
+        await h.SettleAsync();
+        Dump(h);
+        Assert.Equal("high", h.Store.PeekRecord("application", "a1")!["priority"]);
+        // The action's own write does not start the workflow again (it is the workflow's change, at depth 1).
+        Assert.Single(h.Store.All<InstanceRecord>("instances"), i => i.DefinitionKey == "prio");
+        var change = h.Store.All<OutboxRecord>("outbox").Where(o => o.Kind == OutboxKinds.Change).Select(o => EntityChange.FromJson(o.Payload))
+            .Single(c => c.Fields.TryGetValue("priority", out var f) && Equals(f.To, "high"));
+        Assert.Equal("wf_p", change.CausationDefinitionId);
+        Assert.Equal(1, change.Depth);
+        Assert.Equal("workflow", change.ActorType);
+    }
+}
+
 /// <summary>Collects log messages for assertions.</summary>
 internal sealed class ListLogger(List<string> into) : Microsoft.Extensions.Logging.ILogger
 {
