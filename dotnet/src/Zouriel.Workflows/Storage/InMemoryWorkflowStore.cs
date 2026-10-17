@@ -65,6 +65,17 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         }
     }
 
+    /// <summary>The committed records of an entity (for tests).</summary>
+    public IReadOnlyList<RecordSnapshot> PeekRecords(string entity)
+    {
+        lock (Gate)
+        {
+            return Tables.TryGetValue("records", out var t)
+                ? t.Values.Cast<StoredRecord>().Where(r => r.Entity == entity).OrderBy(r => r.Order).Select(r => Clone(r).ToSnapshot()).ToList()
+                : [];
+        }
+    }
+
     /// <summary>Copies of every committed row of a table (for tests).</summary>
     public IReadOnlyList<T> All<T>(string table) where T : class
     {
@@ -461,6 +472,13 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             if (result?.Change is { } change) await session.AddOutboxAsync(session.Store.Changes!.ToOutbox(change), ct);
         }
 
+        public async Task<string> CreateAsync(string entity, IReadOnlyDictionary<string, object?> values, CancellationToken ct = default)
+        {
+            var id = Guid.NewGuid().ToString("N")[..12];
+            await CreateAsync(entity, id, new Dictionary<string, object?>(values, StringComparer.Ordinal), ct);
+            return id;
+        }
+
         public async Task CreateAsync(string entity, string id, Dictionary<string, object?> values, CancellationToken ct)
         {
             if (session.Get<StoredRecord>("records", Key(entity, id)) is not null) throw new WorkflowException("duplicateRecord", $"{entity} {id} already exists.");
@@ -471,7 +489,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             if (result?.Change is { } change) await session.AddOutboxAsync(session.Store.Changes!.ToOutbox(change), ct);
         }
 
-        public async Task DeleteAsync(string entity, string id, CancellationToken ct)
+        public async Task DeleteAsync(string entity, string id, CancellationToken ct = default)
         {
             var existing = session.Get<StoredRecord>("records", Key(entity, id)) ?? throw new WorkflowException("noRecord", $"{entity} {id} does not exist.");
             var result = session.Store.Changes?.Inspect(entity, id, ChangeKinds.Deleted, existing.ToSnapshot().Values, null);

@@ -26,7 +26,7 @@ public static class Linter
     public static readonly IReadOnlyDictionary<string, string> StepLabels = new Dictionary<string, string>
     {
         ["branch"] = "Branch", ["switch"] = "Switch", ["parallel"] = "Parallel paths", ["forEach"] = "For each",
-        ["approval"] = "Approval", ["task"] = "Task", ["wait"] = "Wait", ["setFields"] = "Update record",
+        ["approval"] = "Approval", ["task"] = "Task", ["wait"] = "Wait", ["setFields"] = "Update record", ["createRecord"] = "Create record",
         ["setVariables"] = "Set variables", ["applyTransition"] = "Move lifecycle", ["notify"] = "Send notification",
         ["webhook"] = "Call webhook", ["action"] = "Run action", ["subWorkflow"] = "Run workflow", ["goTo"] = "Go back",
         ["end"] = "End",
@@ -37,7 +37,7 @@ public static class Linter
     {
         ["branch"] = ["path"], ["switch"] = ["case"], ["parallel"] = ["completed"], ["forEach"] = ["count"],
         ["approval"] = ["outcome", "decidedBy", "comments", "data"], ["task"] = ["outcome", "decidedBy", "comment", "data"],
-        ["wait"] = ["timedOut", "data"], ["setFields"] = [], ["setVariables"] = [], ["applyTransition"] = ["applied"],
+        ["wait"] = ["timedOut", "data"], ["setFields"] = [], ["createRecord"] = ["id"], ["setVariables"] = [], ["applyTransition"] = ["applied"],
         ["notify"] = ["sent", "error"], ["webhook"] = ["status", "body", "error"], ["action"] = ["error"],
         ["subWorkflow"] = ["instanceId", "status", "outputs", "error"], ["goTo"] = ["count"], ["end"] = [],
     };
@@ -360,6 +360,7 @@ public static class Linter
                 case TaskStep tk: LintTask(tk, env); break;
                 case WaitStep w: LintWait(w, env); break;
                 case SetFieldsStep sf: LintSetFields(sf, env); break;
+                case CreateRecordStep cr: LintCreateRecord(cr, env); break;
                 case SetVariablesStep sv: LintSetVariables(sv, env); break;
                 case ApplyTransitionStep at: LintApplyTransition(at, env); break;
                 case NotifyStep n: LintNotify(n, env); break;
@@ -470,6 +471,25 @@ public static class Linter
                 var owner = ctx.OtherPublished.FirstOrDefault(d => d.IsLifecycle && d.Entity == target && d.Lifecycle?.Field == v.Field && d.Lifecycle.Enforce);
                 if (owner is not null) Error("ownedField", sf.Id, $"{f?.Label ?? v.Field} is controlled by the lifecycle '{owner.Title}'; use 'Move lifecycle' instead.");
                 CheckOperand(v.Value, sf.Id, env);
+            }
+        }
+
+        private void LintCreateRecord(CreateRecordStep cr, Env env)
+        {
+            var target = R.Entity(cr.Entity);
+            if (target is null)
+            {
+                Error(string.IsNullOrEmpty(cr.Entity) ? "missingEntity" : "unknownEntity", cr.Id, $"Choose which kind of record '{Name(cr)}' creates.");
+                return;
+            }
+            foreach (var v in cr.Values)
+            {
+                var f = target.Field(v.Field);
+                if (f is null) Error("unknownField", cr.Id, $"'{v.Field}' is not a field of {target.Label}.");
+                else if (!f.IsSettable) Error("fieldNotSettable", cr.Id, $"Workflows cannot set {f.Label}; the app has not allowed it.");
+                else if (ctx.OtherPublished.Any(d => d.IsLifecycle && d.Entity == target.Key && d.Lifecycle?.Field == f.Key))
+                    Error("ownedField", cr.Id, $"{f.Label} is controlled by a lifecycle; a new record starts in its first state.");
+                CheckOperand(v.Value, cr.Id, env);
             }
         }
 

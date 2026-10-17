@@ -225,6 +225,12 @@ public sealed class StepRecord
     public string? Output { get; set; }
     /// <summary>The failure message, if it failed.</summary>
     public string? Error { get; set; }
+    /// <summary>
+    /// What it changed, as JSON, so a reset can take it back (spec §6 reset): <c>fields</c> (entity, id, before,
+    /// after), <c>created</c> (entity, id), <c>action</c> (action, input, output), <c>message</c> or <c>webhook</c>.
+    /// Unmasked (the exact values to restore); never shown as is.
+    /// </summary>
+    public string? Undo { get; set; }
     /// <summary>When it started.</summary>
     public DateTimeOffset StartedAt { get; set; }
     /// <summary>When it ended, if it has.</summary>

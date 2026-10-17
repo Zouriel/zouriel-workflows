@@ -382,7 +382,9 @@ public sealed partial class WorkflowEngine
     /// automations about it, unless <c>cancelAutomations</c> is false), the state is written, then the reset
     /// steps run (they can change this record and related ones). Everything happens in one unit of work.
     /// </summary>
-    public Task<RecordView> ResetAsync(string entity, string id, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default)
+    /// <param name="undo">The ids of the reset list's items to take back (see <see cref="GetResetPreviewAsync"/>); null or empty = none.</param>
+    public Task<RecordView> ResetAsync(string entity, string id, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default,
+        IReadOnlyCollection<string>? undo = null)
     {
         if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can reset a workflow.");
         return RunAsync(async u =>
@@ -410,6 +412,8 @@ public sealed partial class WorkflowEngine
             };
             foreach (var run in await RunningAboutAsync(u, record, reset, ct))
                 await CancelInstanceAsync(u, run, user, $"The workflow was reset by {user.Name ?? user.Id}.", ct);
+            // What the person chose to take back of the workflow's work (spec §6 reset list).
+            var undone = await UndoChosenAsync(u, c, record, undo ?? [], user, ct);
             var runExitEnter = reset.RunExitEnter == true;
             if (from is not null && runExitEnter) await ExitStateAsync(u, c, record, from, user, trigger, ct);
             else foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
@@ -425,7 +429,7 @@ public sealed partial class WorkflowEngine
                 Category = "lifecycle", Action = "reset", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id, InstanceId = record.Id,
                 DefinitionId = c.DefinitionId, Actor = user, CorrelationId = record.CorrelationId,
                 Before = new Dictionary<string, object?> { ["state"] = from?.Key }, After = new Dictionary<string, object?> { ["state"] = to.Key },
-                Data = new Dictionary<string, object?> { ["label"] = label, ["input"] = input },
+                Data = new Dictionary<string, object?> { ["label"] = label, ["input"] = input, ["undone"] = undone },
             }, ct);
             u.Log?.Add("lifecycle", "reset", id, $"{from?.Label ?? "?"} → {to.Label} ({label})");
             await QueueLifecycleEventAsync(u, c, entity, id, from?.Key, to.Key, null, user, 0, record.CorrelationId, ct);

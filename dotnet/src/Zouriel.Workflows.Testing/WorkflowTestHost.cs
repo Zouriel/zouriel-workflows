@@ -177,20 +177,41 @@ public sealed class FakeActions : IWorkflowActionResolver
 {
     private readonly ConcurrentDictionary<string, Behaviour> _behaviours = new();
     private readonly ConcurrentQueue<WorkflowActionContext> _calls = new();
+    private readonly ConcurrentQueue<WorkflowActionUndoContext> _undone = new();
+    private readonly ConcurrentDictionary<string, bool> _undoable = new();
 
     /// <summary>Every action call made so far, in order (with idempotency keys and attempts).</summary>
     public IReadOnlyList<WorkflowActionContext> Calls => _calls.ToList();
+
+    /// <summary>Every undo a reset asked for, in order.</summary>
+    public IReadOnlyList<WorkflowActionUndoContext> Undone => _undone.ToList();
+
+    /// <summary>Lets a reset undo an action (its handler then implements <see cref="IUndoableWorkflowAction"/>).</summary>
+    public void Undoable(string key) => _undoable[key] = true;
 
     /// <summary>Sets what an action does: its outputs, how many first calls fail, and how long each call takes (honouring cancellation).</summary>
     public void Set(string key, IReadOnlyDictionary<string, object?>? output = null, int failTimes = 0, string? failMessage = null, TimeSpan? delay = null) =>
         _behaviours[key] = new Behaviour(output ?? new Dictionary<string, object?>(), failTimes, failMessage ?? "The action failed.", delay);
 
     /// <summary>A handler that behaves as <see cref="Set"/> said for the action's key (empty outputs when never set).</summary>
-    public IWorkflowAction? Resolve(ActionDescriptor action) => new Handler(this, action.Key);
+    public IWorkflowAction? Resolve(ActionDescriptor action) =>
+        _undoable.ContainsKey(action.Key) ? new UndoableHandler(this, action.Key) : new Handler(this, action.Key);
 
     private sealed record Behaviour(IReadOnlyDictionary<string, object?> Output, int FailTimes, string FailMessage, TimeSpan? Delay = null)
     {
         public int Calls;
+    }
+
+    private sealed class UndoableHandler(FakeActions owner, string key) : IUndoableWorkflowAction
+    {
+        public Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct) =>
+            new Handler(owner, key).ExecuteAsync(context, ct);
+
+        public Task UndoAsync(WorkflowActionUndoContext context, CancellationToken ct)
+        {
+            owner._undone.Enqueue(context);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class Handler(FakeActions owner, string key) : IWorkflowAction

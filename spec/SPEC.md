@@ -221,6 +221,25 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   The record view offers `reset: { label, to, toLabel, confirm, form }` to people among `who` when a
   reset would change something, and `null` otherwise. Like any move into a state, a reset fires
   `stateEntered` triggers.
+- **Taking back what the workflow did.** Every completed step writes an undo record: `setFields`
+  keeps each field's value before and after, `createRecord` the record it made, `action` its input
+  and output, `notify` and `webhook` what they sent. `GET /records/{entity}/{id}/reset` (same `who`
+  as the reset, else `notAllowed`) returns `{ reset, items }`: what the record's runs and automations
+  did since it last started over (since its latest `lifecycle.reset` audit entry), oldest first. An
+  item is `{ id, kind, title, detail?, workflow, step, undoable, selected, warning? }` with `kind`:
+  `created` (`created:{entity}:{id}`, delete a record the workflow created, still present),
+  `field` (`field:{entity}:{id}:{field}`, one per field of any record, back to its value before the
+  first change; left out when it already has that value, when it is the lifecycle's own field, or
+  when its record is a `created` item), `action` (`action:{stepRecordId}`, undoable only when the
+  app's handler implements undo), `message` and `webhook` (never undoable). An item is `selected` by
+  default unless it cannot be undone or (fields) someone changed it again since the workflow set it,
+  which the `warning` says. The reset body takes `undo: [item id…]`; inside the reset's atomic
+  operation, after cancelling the runs and before writing the field, the engine takes the chosen
+  items back: app actions newest first, then fields restored (one write per record), then created
+  records deleted. An id that is no longer in the list fails the whole reset (`resetChanged`, 409:
+  open the list again); a chosen item that cannot be undone fails it with `notUndoable`. Items left
+  unticked stay as they are; they do not change what the lifecycle does next. The audit entry's
+  data lists the titles undone (`undone`).
 - **Versions.** The record instance is pinned to the version it started on. Publishing a new version
   does not move existing records; `POST /instances/{id}/migrate` (or bulk by definition) moves them,
   mapping states by key (a `stateMap` overrides; unmapped states make the request fail). Migrating
@@ -257,11 +276,12 @@ value cannot add path segments, a query or another host; webhooks do not follow 
 | `task` | Like `approval` but `outcomes: [{ id, key, label, tone?, steps }]` (1–8), `onTimeout: { steps }`, rule is always first decision wins. | `outcome` (key), `decidedBy`, `comment`, `data` |
 | `wait` | `until`: `{ type: "duration", duration, calendar? }` · `{ type: "date", date: <operand>, offset?, at? }` · `{ type: "condition", when, timeout, onTimeout: { steps } }` · `{ type: "signal", signal, timeout?, onTimeout? }` | `timedOut` (bool), `data` (signal data) |
 | `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
+| `createRecord` | `entity: <registry entity>`, `values: [{ field, value: operand }]` (fields must be `settable`; not a field a lifecycle owns, which starts at its initial state). Needs a gateway that can create records (`notSupported` otherwise). One committed create, like `setFields`. | `id` |
 | `setVariables` | `values: [{ variable: <variable id>, value: operand }]` | — |
 | `applyTransition` | `target?: "self"|<relation path>`, `lifecycle: <definition key>`, `transition: <key>`, `input?: { <key>: operand }`, `ifNotAllowed: "fail"|"skip"` | `applied` (bool) |
 | `notify` | `channel`, `to: recipients`, `subject?: template`, `body: template`, `link?: "record"|template` | `sent` (count) |
 | `webhook` | `connection?` (named in settings) or `url` (must match an allowed origin), `method`, `path?: template`, `headers?: {name: template}`, `body?: json-with-operands`, `expect?: [status…]` | `status`, `body` |
-| `action` | `action: <registry key>`, `input: { <key>: operand }` | the action's declared outputs |
+| `action` | `action: <registry key>`, `input: { <key>: operand }`. A handler that can also undo (`undo(input, output)`) makes the action undoable by a reset. | the action's declared outputs |
 | `subWorkflow` | `workflow: <automation key>`, `target?`, `wait: bool`, `input?` | `instanceId`, `status`, `outputs` (the child's `vars`) |
 | `goTo` | `target: <step id>`, `maxTimes` (1–50). Jumps back to an earlier step in the same list or an enclosing list on the current path (never into or out of a `parallel` path or `forEach`). When the count is reached the step is skipped. | `count` |
 | `end` | `result: "completed"|"failed"`, `reason?: template` | — |

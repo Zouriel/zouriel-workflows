@@ -317,6 +317,15 @@ public sealed class SetFieldsStep : Step
     public List<FieldValue> Values { get; set; } = [];
 }
 
+/// <summary>Creates a record (spec §7 createRecord); its id is the output <c>id</c>. A reset can delete it again.</summary>
+public sealed class CreateRecordStep : Step
+{
+    /// <summary>The registry entity key of the record to create.</summary>
+    public string Entity { get; set; } = "";
+    /// <summary>Its settable fields and values (a relation field linking it to this record is the usual one).</summary>
+    public List<FieldValue> Values { get; set; } = [];
+}
+
 /// <summary>One variable a <c>setVariables</c> step sets.</summary>
 public sealed class VariableValue
 {
@@ -439,6 +448,7 @@ public static class StepTypes
         ["task"] = typeof(TaskStep),
         ["wait"] = typeof(WaitStep),
         ["setFields"] = typeof(SetFieldsStep),
+        ["createRecord"] = typeof(CreateRecordStep),
         ["setVariables"] = typeof(SetVariablesStep),
         ["applyTransition"] = typeof(ApplyTransitionStep),
         ["notify"] = typeof(NotifyStep),

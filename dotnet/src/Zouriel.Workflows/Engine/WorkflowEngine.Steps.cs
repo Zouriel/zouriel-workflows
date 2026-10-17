@@ -26,6 +26,7 @@ public sealed partial class WorkflowEngine
                 case HumanStep h: await CreateTaskAsync(x, t, h, ct); break;
                 case WaitStep w: await WaitAsync(x, t, w, ct); break;
                 case SetFieldsStep sf: await SetFieldsAsync(x, t, sf, ct); break;
+                case CreateRecordStep cr: await CreateRecordAsync(x, t, cr, ct); break;
                 case SetVariablesStep sv: await SetVariablesAsync(x, t, sv, ct); break;
                 case ApplyTransitionStep at: await ApplyTransitionStepAsync(x, t, at, ct); break;
                 case NotifyStep n: await NotifyAsync(x, t, n, ct); break;
@@ -315,11 +316,18 @@ public sealed partial class WorkflowEngine
         }
         var masked = (await x.U.MaskerAsync(entity, id, ct)).MaskMap(values);
         var rec = await BeginStepAsync(x, t, sf, new Dictionary<string, object?> { ["entity"] = entity, ["id"] = id, ["values"] = masked }, ct);
+        // The values before the write, so a reset can restore them.
+        var before = await x.U.S.Entities.GetAsync(entity, id, ct);
         using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
         {
             await x.U.S.Entities.SetFieldsAsync(entity, id, values, ct);
         }
         x.U.ForgetMasker(entity, id);
+        rec.Undo = Values.Serialize(new Dictionary<string, object?>
+        {
+            ["kind"] = "fields", ["entity"] = entity, ["id"] = id,
+            ["before"] = values.Keys.ToDictionary(k => k, k => before?[k]), ["after"] = values.ToDictionary(kv => kv.Key, kv => Values.Normalize(kv.Value)),
+        });
         await CompleteStepAsync(x, rec, sf, null, ct);
         Advance(t);
     }
@@ -336,6 +344,30 @@ public sealed partial class WorkflowEngine
         var snap = await scope.LoadAsync(entity, id, ct);
         var related = snap?[field];
         return (f.Entity, related is null ? null : Values.Text(related));
+    }
+
+    private async Task CreateRecordAsync(Exec x, Token t, CreateRecordStep cr, CancellationToken ct)
+    {
+        var scope = x.Scope(t);
+        var desc = Registry.Entity(cr.Entity) ?? throw new WorkflowException("unknownEntity", $"'{cr.Entity}' is not a record type workflows know.");
+        var values = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var v in cr.Values)
+        {
+            var field = desc.Field(v.Field);
+            if (field is null || !field.IsSettable) throw new WorkflowException("fieldNotSettable", $"Workflows cannot set '{v.Field}' of {desc.Label}.");
+            values[v.Field] = await scope.OperandAsync(v.Value, ct);
+        }
+        var rec = await BeginStepAsync(x, t, cr, new Dictionary<string, object?> { ["entity"] = cr.Entity, ["values"] = (await x.U.MaskerAsync(cr.Entity, null, ct)).MaskMap(values) }, ct);
+        string id;
+        using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
+        {
+            id = await x.U.S.Entities.CreateAsync(cr.Entity, values, ct);
+        }
+        rec.Undo = Values.Serialize(new Dictionary<string, object?> { ["kind"] = "created", ["entity"] = cr.Entity, ["id"] = id });
+        x.S.SetOutput(cr.Id, "id", id);
+        await CompleteStepAsync(x, rec, cr, x.S.Outputs[cr.Id], ct);
+        scope.Invalidate();
+        Advance(t);
     }
 
     private async Task SetVariablesAsync(Exec x, Token t, SetVariablesStep sv, CancellationToken ct)
@@ -395,6 +427,10 @@ public sealed partial class WorkflowEngine
         var key = $"{x.I.Id}:{n.Id}:{t.Id}:{t.CurrentItem().Index}:{x.S.GoTo.Values.Sum()}";
         if (recipients.Count > 0) await QueueNotificationAsync(x.U, new WorkflowNotification(n.Channel, recipients, subject, body, link, x.I.Id, x.I.Entity, x.I.EntityId, key), ct);
         x.S.SetOutput(n.Id, "sent", recipients.Count);
+        rec.Undo = Values.Serialize(new Dictionary<string, object?>
+        {
+            ["kind"] = "message", ["channel"] = n.Channel, ["to"] = recipients.Select(r => (object?)(r.Name ?? r.Email ?? r.UserId)).ToList(), ["subject"] = subject,
+        });
         await CompleteStepAsync(x, rec, n, x.S.Outputs[n.Id], ct);
         Advance(t);
     }
@@ -511,6 +547,7 @@ public sealed partial class WorkflowEngine
             await HandleStepErrorAsync(x, t, wh, new WorkflowException("webhookFailed", $"The webhook answered {res.Status}."), rec, ct);
             return;
         }
+        rec.Undo = Values.Serialize(new Dictionary<string, object?> { ["kind"] = "webhook", ["method"] = wh.Method, ["url"] = url });
         await CompleteStepAsync(x, rec, wh, x.S.Outputs[wh.Id], ct);
         Advance(t);
     }
@@ -553,6 +590,10 @@ public sealed partial class WorkflowEngine
             outputs = await RunActionAsync(x, t, a, handler, input, ct);
         }
         foreach (var (k, v) in outputs) x.S.SetOutput(a.Id, k, v);
+        rec.Undo = Values.Serialize(new Dictionary<string, object?>
+        {
+            ["kind"] = "action", ["action"] = a.Action, ["input"] = input, ["output"] = outputs.ToDictionary(kv => kv.Key, kv => Values.Normalize(kv.Value)),
+        });
         await CompleteStepAsync(x, rec, a, x.S.Outputs.GetValueOrDefault(a.Id), ct);
         scope.Invalidate();
         Advance(t);

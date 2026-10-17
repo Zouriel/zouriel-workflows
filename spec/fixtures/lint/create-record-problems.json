@@ -1,0 +1,38 @@
+{
+ "name": "create record problems: no record type, an unknown one, unknown and unsettable fields, and a field a lifecycle controls",
+ "registry": "../engine/_registry.json",
+ "others": [
+  {
+   "specVersion": 1, "id": "lc_stage", "key": "stages", "kind": "lifecycle", "title": "Stages", "entity": "application",
+   "lifecycle": {
+    "field": "stage",
+    "states": [
+     { "id": "a", "key": "new", "label": "New", "category": "initial" },
+     { "id": "b", "key": "checked", "label": "Checked", "category": "terminal" }
+    ],
+    "transitions": [{ "id": "t", "key": "check", "label": "Check", "from": ["a"], "to": "b", "who": [{ "role": "admin" }] }]
+   }
+  }
+ ],
+ "definition": {
+  "specVersion": 1, "id": "wf", "key": "wf", "kind": "automation", "title": "W", "entity": "application",
+  "trigger": { "type": "manual", "label": "Go", "who": [{ "role": "admin" }] },
+  "steps": [
+   { "id": "a", "type": "createRecord", "entity": "", "values": [] },
+   { "id": "b", "type": "createRecord", "entity": "invoice", "values": [] },
+   { "id": "c", "type": "createRecord", "entity": "document", "values": [
+    { "field": "colour", "value": { "const": "red" } },
+    { "field": "name", "value": { "const": "Passport" } },
+    { "field": "verified", "value": { "const": false } }
+   ] },
+   { "id": "d", "type": "createRecord", "entity": "application", "values": [{ "field": "stage", "value": { "const": "checked" } }] }
+  ]
+ },
+ "expected": [
+  { "code": "missingEntity", "node": "a" },
+  { "code": "unknownEntity", "node": "b" },
+  { "code": "unknownField", "node": "c" },
+  { "code": "fieldNotSettable", "node": "c" },
+  { "code": "ownedField", "node": "d" }
+ ]
+}

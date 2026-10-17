@@ -1,0 +1,62 @@
+{
+ "name": "Reset list: everything the workflow did since the record started (fields on it and on a related record, a record it created, a message) is listed; a field changed again since is unticked; the ticked items are undone with the reset and the rest is kept",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "programme": [{ "id": "p1", "name": "Engineering", "coordinator": "head", "budget": 50000 }],
+  "application": []
+ },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "lc_undo", "key": "applicationReview", "kind": "lifecycle", "title": "Application review", "entity": "application",
+   "lifecycle": {
+    "field": "status", "mode": "enforce",
+    "states": [
+     { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "active" }
+    ],
+    "transitions": [
+     { "id": "t_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "field": "entity.applicant" }],
+       "steps": [
+        { "id": "s_self", "type": "setFields", "title": "Assign", "values": [
+         { "field": "reviewer", "value": { "const": "rev1" } },
+         { "field": "priority", "value": { "const": "high" } } ] },
+        { "id": "s_prog", "type": "setFields", "title": "Reserve budget", "target": "entity.programme", "values": [ { "field": "budget", "value": { "const": 30000 } } ] },
+        { "id": "s_doc", "type": "createRecord", "title": "Open a checklist", "entity": "document", "values": [ { "field": "verified", "value": { "const": true } } ] },
+        { "id": "s_mail", "type": "notify", "title": "Tell the applicant", "channel": "email", "to": [ { "field": "entity.applicant" } ], "subject": "Received", "body": "Thanks" }
+       ] }
+    ],
+    "reset": { "label": "Start over", "who": [ { "role": "admin" } ] }
+   }
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Bursary", "applicant": "ali", "programme": "p1", "priority": "normal" } } },
+  {
+   "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "ali" },
+   "expect": {
+    "record": { "entity": "application", "id": "a1", "values": { "status": "submitted", "reviewer": "rev1", "priority": "high" } }
+   }
+  },
+  { "expect": { "record": { "entity": "programme", "id": "p1", "values": { "budget": 30000 } } } },
+  { "change": { "entity": "application", "id": "a1", "values": { "priority": "low" } } },
+  {
+   "expect": {
+    "resetPreview": { "entity": "application", "id": "a1", "user": "admin", "items": [
+     { "kind": "created", "selected": true, "undoable": true },
+     { "id": "field:application:a1:reviewer", "kind": "field", "selected": true, "undoable": true, "title": "Reviewer of Application “Bursary”: back to nothing" },
+     { "id": "field:application:a1:priority", "kind": "field", "selected": false, "undoable": true },
+     { "id": "field:programme:p1:budget", "kind": "field", "selected": true, "undoable": true, "title": "Budget of Programme “Engineering”: back to 50000" },
+     { "kind": "message", "selected": false, "undoable": false }
+    ] }
+   }
+  },
+  { "reset": { "entity": "application", "id": "a1", "actor": "admin", "undo": ["field:application:a1:nope"] }, "expectError": "resetChanged" },
+  { "reset": { "entity": "application", "id": "a1", "actor": "admin", "undoSelected": true },
+    "expect": {
+     "record": { "entity": "application", "id": "a1", "values": { "status": "draft", "reviewer": null, "priority": "low" } },
+     "audit": [ { "is": "lifecycle.reset", "actor": "admin", "data": { "label": "Start over" } } ]
+    } },
+  { "expect": { "record": { "entity": "programme", "id": "p1", "values": { "budget": 50000 } } } }
+ ]
+}

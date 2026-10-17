@@ -10,7 +10,7 @@ namespace Zouriel.Workflows.Sample;
 
 /// <summary>An app action: workflows call it with "Run action → Create invoice".</summary>
 /// <param name="db">The app's database (the same unit of work as the workflow).</param>
-public sealed class CreateInvoice(SampleDb db) : IWorkflowAction
+public sealed class CreateInvoice(SampleDb db) : IUndoableWorkflowAction
 {
     public async Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
     {
@@ -22,6 +22,15 @@ public sealed class CreateInvoice(SampleDb db) : IWorkflowAction
             if (app is not null) app.Notes = $"{app.Notes} Invoice {number} for {context.Input.GetValueOrDefault("amount")}.".Trim();
         }
         return new Dictionary<string, object?> { ["invoiceNo"] = number };
+    }
+
+    /// <summary>A reset that takes the invoice back removes its note (a real app would void the invoice).</summary>
+    public async Task UndoAsync(WorkflowActionUndoContext context, CancellationToken ct)
+    {
+        if (context.EntityId is null || !int.TryParse(context.EntityId, out var id) || context.Output.GetValueOrDefault("invoiceNo") is not string number) return;
+        var app = await db.Applications.FindAsync([id], ct);
+        if (app?.Notes is { } notes)
+            app.Notes = System.Text.RegularExpressions.Regex.Replace(notes, $@"\s*Invoice {number} for [^.]*\.", "").Trim();
     }
 }
 

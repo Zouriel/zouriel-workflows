@@ -74,6 +74,12 @@ public sealed record MePermissions(bool Edit, bool Publish, bool Settings, bool 
 /// <param name="Note">What changed, shown in the version list.</param>
 public sealed record PublishBody(string? Note);
 
+/// <summary>Body of <c>POST /records/{entity}/{id}/reset</c>.</summary>
+/// <param name="Input">The reset form's answers, if it has a form.</param>
+/// <param name="Lifecycle">Which lifecycle, when the record has more than one.</param>
+/// <param name="Undo">The reset list's item ids to take back (from <c>GET …/reset</c>); empty = none.</param>
+public sealed record ResetBody(Dictionary<string, JsonNode?>? Input, string? Lifecycle, List<string>? Undo);
+
 /// <summary>One permission change: who may do a node of a workflow.</summary>
 /// <param name="Node">A transition id, <c>reset</c>, <c>trigger</c> (a manual start) or an approval/task step id.</param>
 /// <param name="Who">The assignees (roles, groups, users, fields) who may do it; empty = nobody.</param>
@@ -374,11 +380,18 @@ public static class WorkflowApi
             return Results.Ok(await e.ApplyTransitionAsync(entity, id, key, Map(body?.Input), Actor(http), body?.Lifecycle, ct));
         }), o.ViewPolicy);
         // Starting a record's workflow over: the lifecycle's reset.who decides who may (spec §6 reset).
-        Secure(g.MapPost("/records/{entity}/{id}/reset", async (string entity, string id, InputBody? body, WorkflowEngine e,
+        // What a reset would take back, for the people it allows (the reset list).
+        Secure(g.MapGet("/records/{entity}/{id}/reset", async (string entity, string id, string? lifecycle, WorkflowEngine e,
             IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
         {
             await RequireRecordAsync(entity, id, access, http, ct);
-            return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct));
+            return Results.Ok(await e.GetResetPreviewAsync(entity, id, Actor(http), lifecycle, ct));
+        }), o.ViewPolicy);
+        Secure(g.MapPost("/records/{entity}/{id}/reset", async (string entity, string id, ResetBody? body, WorkflowEngine e,
+            IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
+        {
+            await RequireRecordAsync(entity, id, access, http, ct);
+            return Results.Ok(await e.ResetAsync(entity, id, Map(body?.Input), Actor(http), body?.Lifecycle, ct, body?.Undo));
         }), o.ViewPolicy);
         Secure(g.MapPost("/records/{entity}/{id}/force-state", async (string entity, string id, ForceStateBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.ForceStateAsync(entity, id, body.State, body.Reason, body.SkipSteps, Actor(http), body.Lifecycle, ct))), o.InterventionPolicy);
@@ -534,7 +547,7 @@ public static class WorkflowApi
         {
             "notAllowed" => 403,
             "notFound" or "noRecord" or "definitionNotFound" => 404,
-            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" => 409,
+            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" or "resetChanged" => 409,
             "tooLarge" => 413,
             _ => 400,
         };

@@ -156,6 +156,33 @@ public interface IWorkflowAction
     Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct);
 }
 
+/// <summary>
+/// An action that can take back what it did, so a reset can undo it (spec §6 reset): e.g. an action that
+/// creates an invoice deletes or voids it again. Actions without it are listed as "can't be undone".
+/// </summary>
+public interface IUndoableWorkflowAction : IWorkflowAction
+{
+    /// <summary>Undoes one earlier run of the action, inside the reset's unit of work. Throwing stops the reset.</summary>
+    Task UndoAsync(WorkflowActionUndoContext context, CancellationToken ct);
+}
+
+/// <summary>What <see cref="IUndoableWorkflowAction.UndoAsync"/> gets: the earlier run's input and output.</summary>
+public sealed class WorkflowActionUndoContext
+{
+    /// <summary>The registry action key.</summary>
+    public required string ActionKey { get; init; }
+    /// <summary>The inputs the action ran with.</summary>
+    public required IReadOnlyDictionary<string, object?> Input { get; init; }
+    /// <summary>The outputs it returned (e.g. the id of what it created).</summary>
+    public required IReadOnlyDictionary<string, object?> Output { get; init; }
+    /// <summary>The record the workflow was about, if any.</summary>
+    public string? Entity { get; init; }
+    /// <summary>That record's id.</summary>
+    public string? EntityId { get; init; }
+    /// <summary>The person resetting the workflow.</summary>
+    public required WorkflowActor Actor { get; init; }
+}
+
 /// <summary>Resolves action handlers (from DI in ASP.NET apps).</summary>
 public interface IWorkflowActionResolver
 {

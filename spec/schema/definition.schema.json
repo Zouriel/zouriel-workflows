@@ -359,6 +359,7 @@
         { "$ref": "#/$defs/taskStep" },
         { "$ref": "#/$defs/waitStep" },
         { "$ref": "#/$defs/setFieldsStep" },
+        { "$ref": "#/$defs/createRecordStep" },
         { "$ref": "#/$defs/setVariablesStep" },
         { "$ref": "#/$defs/applyTransitionStep" },
         { "$ref": "#/$defs/notifyStep" },
@@ -579,6 +580,24 @@
         "values": {
           "type": "array",
           "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "required": ["field", "value"],
+            "properties": { "field": { "$ref": "#/$defs/key" }, "value": { "$ref": "#/$defs/operand" } },
+            "additionalProperties": false
+          }
+        }
+      }
+    },
+    "createRecordStep": {
+      "type": "object",
+      "required": ["type", "entity", "values"],
+      "properties": {
+        "type": { "const": "createRecord" },
+        "entity": { "$ref": "#/$defs/key" },
+        "values": {
+          "type": "array",
           "maxItems": 50,
           "items": {
             "type": "object",

@@ -1093,6 +1093,41 @@
       }
     },
     "/api/workflows/records/{entity}/{id}/reset": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lifecycle",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
       "post": {
         "tags": [
           "Workflows"
@@ -1124,7 +1159,7 @@
                     "type": "null"
                   },
                   {
-                    "$ref": "#/components/schemas/InputBody"
+                    "$ref": "#/components/schemas/ResetBody"
                   }
                 ]
               }
@@ -2064,6 +2099,41 @@
           }
         },
         "description": "Body of `POST /tasks/{id}/reassign`."
+      },
+      "ResetBody": {
+        "required": [
+          "input",
+          "lifecycle",
+          "undo"
+        ],
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "The reset form's answers, if it has a form."
+          },
+          "lifecycle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Which lifecycle, when the record has more than one."
+          },
+          "undo": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The reset list's item ids to take back (from `GET \u2026/reset`); empty = none."
+          }
+        },
+        "description": "Body of `POST /records/{entity}/{id}/reset`."
       },
       "RetryBody": {
         "required": [

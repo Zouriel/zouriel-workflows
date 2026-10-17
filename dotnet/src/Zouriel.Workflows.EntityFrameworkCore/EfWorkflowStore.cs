@@ -593,6 +593,32 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
         await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
     }
 
+    public async Task<string> CreateAsync(string entity, IReadOnlyDictionary<string, object?> values, CancellationToken ct = default)
+    {
+        var e = Entity(entity);
+        var obj = Activator.CreateInstance(e.ClrType!) ?? throw new WorkflowException("notSupported", $"{e.Label} records cannot be created by workflows.");
+        foreach (var (k, v) in values)
+        {
+            var f = e.Field(k) ?? throw new WorkflowException("unknownField", $"'{k}' is not a field of {e.Label}.");
+            if (f.Setter is null) throw new WorkflowException("fieldNotSettable", $"{f.Label} cannot be set by workflows.");
+            f.Setter(obj, v);
+        }
+        db.Add(obj);
+        // Saved now (inside the unit's transaction), like SetFieldsAsync, so the change hook sees the workflow's scope.
+        await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
+        var key = db.Model.FindEntityType(e.ClrType!)!.FindPrimaryKey()!.Properties[0];
+        return Values.Text(db.Entry(obj).Property(key.Name).CurrentValue);
+    }
+
+    public async Task DeleteAsync(string entity, string id, CancellationToken ct = default)
+    {
+        var e = Entity(entity);
+        var obj = await FindAsync(e, id, ct);
+        if (obj is null) return;
+        db.Remove(obj);
+        await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
+    }
+
     public Task<IReadOnlyList<string>> ListIdsAsync(string entity, string? after, int limit, CancellationToken ct = default)
     {
         var e = Entity(entity);

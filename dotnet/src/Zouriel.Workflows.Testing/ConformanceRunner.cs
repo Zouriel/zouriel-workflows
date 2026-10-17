@@ -132,7 +132,12 @@ public static class ConformanceRunner
         }
         else if (s["reset"] is JsonObject rs)
         {
-            await e.ResetAsync(rs["entity"]!.GetValue<string>(), rs["id"]!.GetValue<string>(), Map(rs["input"]), Actor(host, rs["actor"]), rs["lifecycle"]?.GetValue<string>(), ct);
+            var (re, rid, actor) = (rs["entity"]!.GetValue<string>(), rs["id"]!.GetValue<string>(), Actor(host, rs["actor"]));
+            // "undo": explicit item ids, or "undoSelected": true for whatever the reset list ticks by default.
+            var undo = (rs["undo"] as JsonArray)?.Select(x => x!.GetValue<string>()).ToList();
+            if (rs["undoSelected"]?.GetValue<bool>() == true)
+                undo = (await e.GetResetPreviewAsync(re, rid, actor, rs["lifecycle"]?.GetValue<string>(), ct)).Items.Where(i => i.Selected).Select(i => i.Id).ToList();
+            await e.ResetAsync(re, rid, Map(rs["input"]), actor, rs["lifecycle"]?.GetValue<string>(), ct, undo);
         }
         else if (s["forceState"] is JsonObject fs)
         {
@@ -317,6 +322,19 @@ public static class ConformanceRunner
             if (av["state"] is JsonValue st && view.State != st.GetValue<string>()) throw new ConformanceException($"available.state: expected {st}, got {view.State}");
             if (av["reset"] is JsonValue rv && (view.Reset is not null) != rv.GetValue<bool>())
                 throw new ConformanceException($"available.reset: expected {rv}, got {view.Reset is not null}");
+        }
+        if (expect["resetPreview"] is JsonObject rp)
+        {
+            // The reset list, item by item: { id, kind?, selected?, undoable? } in order.
+            var preview = await e.GetResetPreviewAsync(rp["entity"]!.GetValue<string>(), rp["id"]!.GetValue<string>(), Actor(host, rp["user"]), null, ct);
+            var actual = preview.Items.Select(i => (object?)new Dictionary<string, object?>
+            {
+                ["id"] = i.Id, ["kind"] = i.Kind, ["selected"] = i.Selected, ["undoable"] = i.Undoable, ["title"] = i.Title,
+            }).ToList();
+            var wantItems = rp["items"]!.AsArray();
+            if (wantItems.Count != actual.Count)
+                throw new ConformanceException($"resetPreview.items: expected {wantItems.Count}, got {actual.Count}: {string.Join(", ", preview.Items.Select(i => i.Id))}");
+            for (var k = 0; k < wantItems.Count; k++) CompareSubset($"resetPreview.items[{k}]", wantItems[k], actual[k]);
         }
         if (expect["audit"] is JsonArray wantAudit)
         {

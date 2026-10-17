@@ -28,6 +28,17 @@ public interface IEntityGateway
     /// start), at most <paramref name="limit"/>. Callers page through all records by passing the last id back.
     /// </summary>
     Task<IReadOnlyList<string>> ListIdsAsync(string entity, string? after, int limit, CancellationToken ct = default);
+
+    /// <summary>
+    /// Creates a record on behalf of a workflow (spec §7 createRecord) and returns its id. The write is a
+    /// committed change like any other. Gateways that cannot create records refuse with <c>notSupported</c>.
+    /// </summary>
+    Task<string> CreateAsync(string entity, IReadOnlyDictionary<string, object?> values, CancellationToken ct = default) =>
+        throw new WorkflowException("notSupported", $"This app does not let workflows create {entity} records.");
+
+    /// <summary>Deletes a record (a reset undoing a record a workflow created). Gateways that cannot refuse with <c>notSupported</c>.</summary>
+    Task DeleteAsync(string entity, string id, CancellationToken ct = default) =>
+        throw new WorkflowException("notSupported", $"This app does not let workflows delete {entity} records.");
 }
 
 /// <summary>Filters for listing instances.</summary>
