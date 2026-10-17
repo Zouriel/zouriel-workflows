@@ -17,6 +17,8 @@ public sealed partial class WorkflowEngine
         public CompiledDefinition C { get; } = def;
         public RunState S { get; } = state;
         public bool Ended { get; set; }
+        /// <summary>The step record of the step being executed right now (so a thrown error can close it).</summary>
+        public StepRecord? Current { get; set; }
         public WorkflowActor Actor => WorkflowActor.Workflow(I.DefinitionKey, I.Id);
         public ValueScope Scope(Token? t = null) => U.Scope(I, S, t);
     }
@@ -407,6 +409,7 @@ public sealed partial class WorkflowEngine
             Status = StepStatus.Running, Input = input is null ? null : Values.Serialize(input), StartedAt = x.U.Now,
         };
         await x.U.S.AddStepAsync(rec, ct);
+        x.Current = rec;
         await x.U.AuditAsync(StepAudit(x, step, "started", t.Top.Attempt > 1 ? new Dictionary<string, object?> { ["attempt"] = (double)t.Top.Attempt } : null), ct);
         x.U.Log?.Add("step", "started", step.Id, step.Title ?? step.Type);
         return rec;
@@ -414,6 +417,7 @@ public sealed partial class WorkflowEngine
 
     internal async Task CompleteStepAsync(Exec x, StepRecord rec, Step step, Dictionary<string, object?>? outputs, CancellationToken ct, string status = StepStatus.Completed)
     {
+        if (x.Current == rec) x.Current = null;
         rec.Status = status;
         rec.EndedAt = x.U.Now;
         rec.Output = outputs is null ? null : Values.Serialize(outputs);
@@ -477,10 +481,10 @@ public sealed partial class WorkflowEngine
             var value = await scope.ResolveAsync(r.Ref, ct);
             var field = scope.FieldOf(r.Ref);
             if (field?.Type == FieldTypes.Enum) sb.Append(field.OptionLabel(value));
-            else if ((field?.Type == FieldTypes.User || r.Ref is "trigger.actor" or "instance.initiator") && value is string uid)
-                sb.Append((await Options.Identity.GetUserAsync(uid, ct))?.Name ?? uid);
-            else if (field?.Type == FieldTypes.Relation && value is string rid && field.Entity is not null)
-                sb.Append(await RecordTitleAsync(scope, field.Entity, rid, ct) ?? rid);
+            else if ((field?.Type == FieldTypes.User || r.Ref is "trigger.actor" or "instance.initiator") && value is not null)
+                sb.Append((await Options.Identity.GetUserAsync(Values.Text(value), ct))?.Name ?? Values.Text(value));
+            else if (field?.Type == FieldTypes.Relation && value is not null && field.Entity is not null)
+                sb.Append(await RecordTitleAsync(scope, field.Entity, Values.Text(value), ct) ?? Values.Text(value));
             else sb.Append(Values.Text(value));
         }
         return sb.ToString();

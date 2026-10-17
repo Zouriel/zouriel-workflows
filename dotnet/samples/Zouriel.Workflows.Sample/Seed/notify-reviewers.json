@@ -1,0 +1,12 @@
+{
+  "specVersion": 1, "id": "wf_notify_reviewers", "key": "notifyReviewers", "kind": "automation", "title": "Tell the panel about new applications", "entity": "application",
+  "trigger": { "type": "stateEntered", "lifecycle": "scholarshipReview", "states": ["Submitted"] },
+  "steps": [
+    { "id": "s_hi", "type": "branch", "title": "Is it urgent?", "paths": [
+      { "id": "p_hi", "label": "High priority", "when": { "ref": "entity.priority", "op": "eq", "value": { "const": "High" } },
+        "steps": [ { "id": "s_hi_n", "type": "notify", "title": "Alert the head", "channel": "inApp", "to": [ { "role": "head" } ],
+          "subject": ["Urgent: ", { "ref": "entity.title" }], "body": ["A high-priority application for ", { "ref": "entity.amount" }, " was submitted."], "link": "record" } ] } ] },
+    { "id": "s_panel", "type": "notify", "title": "Tell the review panel", "channel": "inApp", "to": [ { "group": "panel" } ],
+      "subject": ["New application: ", { "ref": "entity.title" }], "body": [{ "ref": "entity.applicant" }, " applied to ", { "ref": "entity.programme" }, "."], "link": "record" }
+  ]
+}

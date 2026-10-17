@@ -78,6 +78,9 @@ public interface IWorkflowSession : IAsyncDisposable
 {
     IEntityGateway Entities { get; }
 
+    /// <summary>The DI scope of this unit of work, if any; app services the engine calls are resolved from it.</summary>
+    IServiceProvider? Services => null;
+
     Task<DefinitionRecord?> GetDefinitionAsync(string id, CancellationToken ct = default);
     Task<DefinitionRecord?> GetDefinitionByKeyAsync(string key, CancellationToken ct = default);
     Task<IReadOnlyList<DefinitionRecord>> ListDefinitionsAsync(CancellationToken ct = default);

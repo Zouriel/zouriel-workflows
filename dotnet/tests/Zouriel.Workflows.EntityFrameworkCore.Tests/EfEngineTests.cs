@@ -150,6 +150,31 @@ public abstract class EfEngineTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Actions_get_scoped_services_and_their_writes_commit_with_the_workflow()
+    {
+        await App.PublishAsync("""
+        { "specVersion": 1, "id": "wf_act", "key": "stampIt", "kind": "automation", "title": "Stamp", "entity": "application",
+          "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+          "steps": [ { "id": "a", "type": "action", "action": "stamp", "input": { "text": { "const": "stamped" } } },
+                     { "id": "s", "type": "setFields", "values": [ { "field": "amount", "value": { "ref": "steps.a.length" } } ] } ] }
+        """);
+        var id = await App.WithDbAsync(async db =>
+        {
+            var a = new Application { Title = "Act", Stage = "new" };
+            db.Add(a);
+            await db.SaveChangesAsync();
+            a.Stage = "checked";
+            await db.SaveChangesAsync();
+            return a.Id;
+        });
+        await App.SettleAsync();
+        var saved = await App.WithDbAsync(db => db.Applications.AsNoTracking().FirstAsync(a => a.Id == id));
+        Assert.Equal("stamped", saved.Notes);
+        Assert.Equal(7m, saved.Amount);
+        Assert.Equal("completed", (await App.Engine.QueryInstancesAsync(new InstanceQuery { DefinitionKey = "stampIt" })).Items.Single().Status);
+    }
+
+    [Fact]
     public async Task For_each_reads_related_records_and_writes_back()
     {
         await App.PublishAsync("""

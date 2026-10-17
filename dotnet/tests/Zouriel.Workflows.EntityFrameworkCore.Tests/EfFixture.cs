@@ -23,6 +23,18 @@ public sealed class PostgresFixture : IAsyncLifetime
 [CollectionDefinition("postgres")]
 public sealed class PostgresCollection : ICollectionFixture<PostgresFixture>;
 
+/// <summary>An action with a scoped dependency (the app's DbContext), as real actions have.</summary>
+public sealed class StampNotes(AppDb db) : IWorkflowAction
+{
+    public async Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
+    {
+        var a = await db.Applications.FindAsync([int.Parse(context.EntityId!, System.Globalization.CultureInfo.InvariantCulture)], ct);
+        var text = (string)context.Input["text"]!;
+        a!.Notes = text;
+        return new Dictionary<string, object?> { ["length"] = text.Length };
+    }
+}
+
 /// <summary>A service provider wired like a real app: AppDb with the workflow tables and interceptor.</summary>
 public sealed class TestApp : IAsyncDisposable
 {
@@ -60,6 +72,7 @@ public sealed class TestApp : IAsyncDisposable
                 .Relation(a => a.Programme, "programme")
                 .Collection(a => a.Documents, "documents"))
             .Entity<Document>("document", e => e.Field(d => d.Name).Field(d => d.Verified, f => f.Settable()))
+            .Action<StampNotes>("stamp", a => a.For("application").Input("text", "Text", required: true).Output("length", "Length", "number"))
             .Role("reviewer", "Reviewer"));
         Services = services.BuildServiceProvider();
         Identity.Add(new WorkflowUser("ali", "Ali"));

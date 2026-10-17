@@ -94,12 +94,22 @@ public sealed partial class WorkflowEngine
             try
             {
                 await using var session = await Options.Store.BeginAsync(ct);
-                var uow = await OpenAsync(session, ct);
-                var result = await work(uow);
-                await RunDeferredAsync(uow, ct);
-                await StartQueuedAfterAsync(uow, ct);
-                await session.CommitAsync(ct);
-                return result;
+                // App services called during this unit (actions, identity…) come from the session's DI scope.
+                var previous = DependencyInjection.WorkflowServiceScope.Current;
+                DependencyInjection.WorkflowServiceScope.Current = session.Services ?? previous;
+                try
+                {
+                    var uow = await OpenAsync(session, ct);
+                    var result = await work(uow);
+                    await RunDeferredAsync(uow, ct);
+                    await StartQueuedAfterAsync(uow, ct);
+                    await session.CommitAsync(ct);
+                    return result;
+                }
+                finally
+                {
+                    DependencyInjection.WorkflowServiceScope.Current = previous;
+                }
             }
             catch (WorkflowConcurrencyException) when (attempt < 4)
             {

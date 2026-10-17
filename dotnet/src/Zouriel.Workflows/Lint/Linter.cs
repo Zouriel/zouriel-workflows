@@ -202,7 +202,8 @@ public static class Linter
                 if (field?.Options is { } opts && opts.All(o => Json.Values.Text(o.Value) != s.Key))
                     Error("unknownValue", s.Id, $"'{s.Key}' is not one of {field.Label}'s values.");
                 var env = new Env(entity?.Key, null, [], false, null);
-                if (s.OnEnter is not null) LintSteps(s.OnEnter, env, $"onEnter:{s.Id}");
+                // Entering a state by a transition with a form passes its answers on (input.*).
+                if (s.OnEnter is not null) LintSteps(s.OnEnter, env with { InputAllowed = true }, $"onEnter:{s.Id}");
                 if (s.OnExit is not null) LintSteps(s.OnExit, env, $"onExit:{s.Id}");
                 if (s.Sla is not null)
                 {

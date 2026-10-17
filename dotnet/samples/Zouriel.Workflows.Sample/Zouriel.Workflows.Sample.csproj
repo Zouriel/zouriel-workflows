@@ -2,8 +2,24 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>Zouriel.Workflows.Sample</RootNamespace>
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.10" />
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Zouriel.Workflows\Zouriel.Workflows.csproj" />
+    <ProjectReference Include="..\..\src\Zouriel.Workflows.EntityFrameworkCore\Zouriel.Workflows.EntityFrameworkCore.csproj" />
+    <ProjectReference Include="..\..\src\Zouriel.Workflows.AspNetCore\Zouriel.Workflows.AspNetCore.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Seed\*.json" />
+  </ItemGroup>
 
 </Project>

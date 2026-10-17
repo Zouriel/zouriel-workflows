@@ -1,0 +1,9 @@
+{
+  "specVersion": 1, "id": "wf_deadline", "key": "deadlineReminder", "kind": "automation", "title": "Remind applicants before the deadline", "entity": "application",
+  "trigger": { "type": "dateReached", "field": "deadline", "offset": "-P2D", "at": "09:00",
+    "when": { "ref": "entity.status", "op": "eq", "value": { "const": "Draft" } } },
+  "steps": [
+    { "id": "s_remind", "type": "notify", "title": "Remind the applicant", "channel": "email", "to": [ { "field": "entity.applicant" } ],
+      "subject": "Two days left", "body": ["“", { "ref": "entity.title" }, "” is still a draft. The deadline is ", { "ref": "entity.deadline" }, "."], "link": "record" }
+  ]
+}

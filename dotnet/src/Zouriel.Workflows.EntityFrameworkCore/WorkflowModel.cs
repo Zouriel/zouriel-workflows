@@ -137,8 +137,8 @@ public static class WorkflowModelBuilderExtensions
         });
         mb.Entity<SettingsRecord>(e =>
         {
-            e.Property<string>("Key").HasMaxLength(32);
-            e.HasKey("Key");
+            e.HasKey(x => x.Key);
+            e.Property(x => x.Key).HasMaxLength(32);
             e.Property(x => x.Revision).IsConcurrencyToken();
             Common(e, "settings");
         });

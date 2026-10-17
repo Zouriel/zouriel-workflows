@@ -1,7 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
-using Zouriel.Workflows.DependencyInjection;
 using Zouriel.Workflows.Engine;
 using Zouriel.Workflows.Json;
 using Zouriel.Workflows.Registry;
@@ -19,20 +18,19 @@ public sealed class EfWorkflowStore<TContext>(IServiceScopeFactory scopes, Workf
     public async Task<IWorkflowSession> BeginAsync(CancellationToken ct = default)
     {
         var scope = scopes.CreateAsyncScope();
-        var previous = WorkflowServiceScope.Current;
-        WorkflowServiceScope.Current = scope.ServiceProvider;
         var db = scope.ServiceProvider.GetRequiredService<TContext>();
         var tx = await db.Database.BeginTransactionAsync(ct);
-        return new EfWorkflowSession(db, tx, scope, previous, registry);
+        return new EfWorkflowSession(db, tx, scope, registry);
     }
 }
 
-internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, AsyncServiceScope scope, IServiceProvider? previousScope, WorkflowRegistry registry) : IWorkflowSession
+internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, AsyncServiceScope scope, WorkflowRegistry registry) : IWorkflowSession
 {
     private bool _committed;
     private readonly Provider _provider = ProviderOf(db);
 
     public IEntityGateway Entities { get; } = new EfEntityGateway(db, registry);
+    public IServiceProvider Services => scope.ServiceProvider;
     internal DbContext Db => db;
 
     private enum Provider { Postgres, SqlServer, Sqlite, Other }
@@ -346,7 +344,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     public async Task<SettingsRecord?> GetSettingsAsync(CancellationToken ct = default)
     {
         await FlushAsync(ct);
-        return await Set<SettingsRecord>().FirstOrDefaultAsync(s => EF.Property<string>(s, "Key") == "global", ct);
+        return await Set<SettingsRecord>().FirstOrDefaultAsync(s => s.Key == "global", ct);
     }
 
     public async Task SaveSettingsAsync(SettingsRecord s, CancellationToken ct = default)
@@ -354,8 +352,8 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         var existing = await GetSettingsAsync(ct);
         if (existing is null)
         {
+            s.Key = "global";
             Set<SettingsRecord>().Add(s);
-            db.Entry(s).Property("Key").CurrentValue = "global";
             return;
         }
         existing.Json = s.Json;
@@ -395,7 +393,6 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     {
         if (!_committed) await tx.RollbackAsync();
         await tx.DisposeAsync();
-        WorkflowServiceScope.Current = previousScope;
         await scope.DisposeAsync();
     }
 
@@ -451,7 +448,8 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
             var v = f.Getter?.Invoke(entity);
             if (f.Type == FieldTypes.Relation)
             {
-                v = v is null || f.Entity is null ? null : registry.Entity(f.Entity)?.IdGetter?.Invoke(v);
+                // Record ids are strings everywhere in workflows, whatever the key type.
+                v = v is null || f.Entity is null ? null : registry.Entity(f.Entity)?.IdGetter?.Invoke(v) is { } rid ? Values.Text(rid) : null;
             }
             values[f.Key] = Values.Normalize(v);
         }

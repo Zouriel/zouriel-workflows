@@ -265,6 +265,7 @@ public sealed class AuditRecord
 
 public sealed class SettingsRecord
 {
+    public string Key { get; set; } = "global";
     public string Json { get; set; } = "{\"version\":1}";
     public int Revision { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }

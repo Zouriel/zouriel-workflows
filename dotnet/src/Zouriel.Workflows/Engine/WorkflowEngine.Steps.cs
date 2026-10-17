@@ -626,7 +626,9 @@ public sealed partial class WorkflowEngine
     {
         var message = error is WorkflowException we ? we.Message : $"{error.GetType().Name}: {error.Message}";
         var attempt = t.Top.Attempt;
+        rec ??= x.Current is { } cur && cur.NodeId == step.Id ? cur : null;
         rec ??= t.StepRecord is null ? null : (await x.U.S.ListStepsAsync(x.I.Id, ct)).FirstOrDefault(s => s.Id == t.StepRecord);
+        x.Current = null;
         t.StepRecord = null;
         if (rec is not null)
         {

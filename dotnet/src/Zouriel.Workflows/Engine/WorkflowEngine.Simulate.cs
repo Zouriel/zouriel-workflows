@@ -51,6 +51,7 @@ public sealed partial class WorkflowEngine
     /// </summary>
     public async Task<SimulationResult> SimulateAsync(string definitionJson, SimulationRequest req, WorkflowActor actor, CancellationToken ct = default)
     {
+        Normalize(req);
         var problems = await ValidateAsync(definitionJson, ct);
         if (problems.Any(p => p.Severity == "error")) return new SimulationResult(problems, [], [], [], null, "Fix the problems before testing.");
         var def = Definitions.Parse(definitionJson);
@@ -140,6 +141,20 @@ public sealed partial class WorkflowEngine
             if (record is not null) record = AuditMask(record, SensitiveFields(await sim.OpenAsync(s, ct), def.Entity));
         }
         return new SimulationResult(problems, log.Entries, instances, tasks, record, error);
+    }
+
+    /// <summary>Request bodies arrive with JSON elements inside; turn them into workflow values.</summary>
+    private static void Normalize(SimulationRequest req)
+    {
+        static Dictionary<string, object?>? N(Dictionary<string, object?>? d) => d?.ToDictionary(kv => kv.Key, kv => Values.Normalize(kv.Value));
+        req.Values = N(req.Values);
+        req.Trigger = N(req.Trigger);
+        req.Input = N(req.Input);
+        foreach (var e in req.Events ?? [])
+        {
+            e.Data = N(e.Data);
+            e.Values = N(e.Values);
+        }
     }
 
     private static Dictionary<string, object?> AuditMask(Dictionary<string, object?> values, HashSet<string> sensitive) =>

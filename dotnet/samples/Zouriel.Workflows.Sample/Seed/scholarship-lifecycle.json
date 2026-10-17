@@ -1,0 +1,49 @@
+{
+  "specVersion": 1, "id": "wf_scholarship", "key": "scholarshipReview", "kind": "lifecycle", "title": "Scholarship review", "entity": "application",
+  "description": "Every application moves from draft to a decision. Applicants submit, reviewers decide, the head can step in.",
+  "lifecycle": {
+    "field": "status", "mode": "enforce",
+    "states": [
+      { "id": "st_draft", "key": "Draft", "label": "Draft", "category": "initial", "tone": "neutral" },
+      { "id": "st_submitted", "key": "Submitted", "label": "Submitted", "category": "active", "tone": "info",
+        "onEnter": [ { "id": "s_ack", "type": "notify", "title": "Thank the applicant", "channel": "email", "to": [ { "field": "entity.applicant" } ],
+          "subject": ["We received “", { "ref": "entity.title" }, "”"], "body": ["Thank you. Your application is with the review panel."], "link": "record" } ] },
+      { "id": "st_review", "key": "UnderReview", "label": "Under review", "category": "active", "tone": "warning",
+        "sla": { "within": "P3D", "calendar": "working", "steps": [
+          { "id": "s_sla", "type": "notify", "title": "Tell the head it is late", "channel": "inApp", "to": [ { "role": "head" } ],
+            "subject": "Review overdue", "body": ["“", { "ref": "entity.title" }, "” has been under review for more than 3 working days."], "link": "record" } ] } },
+      { "id": "st_approved", "key": "Approved", "label": "Approved", "category": "terminal", "tone": "success" },
+      { "id": "st_rejected", "key": "Rejected", "label": "Rejected", "category": "terminal", "tone": "danger",
+        "onEnter": [ { "id": "s_rej", "type": "notify", "title": "Tell the applicant", "channel": "email", "to": [ { "field": "entity.applicant" } ],
+          "subject": "Your application", "body": ["We are sorry: “", { "ref": "entity.title" }, "” was not successful. Reason: ", { "ref": "input.reason" }] } ] },
+      { "id": "st_withdrawn", "key": "Withdrawn", "label": "Withdrawn", "category": "terminal", "tone": "neutral" }
+    ],
+    "transitions": [
+      { "id": "tr_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_submitted", "who": [ { "field": "entity.applicant" } ], "tone": "primary",
+        "confirm": "Submit your application? You can't change it afterwards." },
+      { "id": "tr_take", "key": "startReview", "label": "Start review", "from": ["st_submitted"], "to": "st_review", "who": [ { "role": "reviewer" } ],
+        "auto": { "when": { "ref": "entity.reviewer", "op": "notEmpty" } },
+        "steps": [ { "id": "s_assign", "type": "branch", "title": "Assign a reviewer if none", "paths": [
+          { "id": "p_none", "label": "No reviewer yet", "when": { "ref": "entity.reviewer", "op": "empty" },
+            "steps": [ { "id": "s_set_rev", "type": "setFields", "title": "Assign the person who started", "values": [ { "field": "reviewer", "value": { "ref": "trigger.actor" } } ] } ] } ] } ] },
+      { "id": "tr_approve", "key": "approve", "label": "Approve", "from": ["st_review"], "to": "st_approved", "who": [ { "role": "reviewer" }, { "role": "head" } ], "tone": "success",
+        "when": { "match": "all", "conditions": [ { "ref": "entity.amount", "op": "lte", "value": { "ref": "entity.programme.budget" } } ] },
+        "input": { "form": { "schemaVersion": 1, "id": "f_approve", "title": "Approve", "pages": [ { "id": "p1", "elements": [
+          { "kind": "field", "id": "f_comment", "key": "comment", "type": "textarea", "label": "Comment for the file", "required": true,
+            "validators": [ { "id": "v_min", "type": "minLength", "params": { "min": 10 } } ] } ] } ] } },
+        "steps": [ { "id": "s_note", "type": "setFields", "title": "Keep the comment", "values": [ { "field": "notes", "value": { "ref": "input.comment" } } ] } ] },
+      { "id": "tr_reject", "key": "reject", "label": "Reject", "from": ["st_review"], "to": "st_rejected", "who": [ { "role": "reviewer" }, { "role": "head" } ], "tone": "danger",
+        "input": { "form": { "schemaVersion": 1, "id": "f_reject", "title": "Reject", "pages": [ { "id": "p1", "elements": [
+          { "kind": "field", "id": "f_reason", "key": "reason", "type": "select", "label": "Reason", "required": true,
+            "options": [ { "id": "o1", "value": "Incomplete documents", "label": "Incomplete documents" }, { "id": "o2", "value": "Not eligible", "label": "Not eligible" },
+                         { "id": "o3", "value": "No budget left", "label": "No budget left" } ] } ] } ] } } },
+      { "id": "tr_back", "key": "sendBack", "label": "Send back for changes", "from": ["st_review", "st_submitted"], "to": "st_draft", "who": [ { "role": "reviewer" } ], "tone": "warning" },
+      { "id": "tr_withdraw", "key": "withdraw", "label": "Withdraw", "from": "*", "to": "st_withdrawn", "who": [ { "field": "entity.applicant" }, { "role": "head" } ],
+        "confirm": "Withdraw this application?" },
+      { "id": "tr_expire", "key": "expire", "label": "Expire unsent drafts", "from": ["st_draft"], "to": "st_withdrawn", "auto": { "after": "P30D" }, "hidden": true }
+    ],
+    "layout": {
+      "st_draft": [0, 120], "st_submitted": [260, 120], "st_review": [520, 120], "st_approved": [800, 30], "st_rejected": [800, 210], "st_withdrawn": [260, 300]
+    }
+  }
+}

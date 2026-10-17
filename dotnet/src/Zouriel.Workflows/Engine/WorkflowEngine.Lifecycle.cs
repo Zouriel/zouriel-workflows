@@ -132,7 +132,7 @@ public sealed partial class WorkflowEngine
         u.Log?.Add("lifecycle", "transitioned", id, $"{from.Label} → {to.Label} ({tr.Label})");
         await QueueLifecycleEventAsync(u, c, entity, id, from.Key, to.Key, tr.Key, actor, depth, record.CorrelationId, ct);
         await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, actor, input, ct);
-        await EnterStateAsync(u, c, record, to, actor, trigger, depth, chain, ct);
+        await EnterStateAsync(u, c, record, to, actor, trigger, depth, chain, ct, input);
     }
 
     internal async Task<bool> MayApplyAsync(Uow u, ValueScope scope, Transition tr, WorkflowActor actor, InstanceRecord record, CancellationToken ct)
@@ -160,9 +160,11 @@ public sealed partial class WorkflowEngine
         await StartRunAsync(u, record, c, $"onExit:{from.Id}", $"onExit:{from.Id}", trigger, actor, null, ct);
     }
 
-    private async Task EnterStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State to, WorkflowActor actor, TriggerInfo trigger, int depth, int chain, CancellationToken ct)
+    private async Task EnterStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State to, WorkflowActor actor, TriggerInfo trigger, int depth, int chain,
+        CancellationToken ct, Dictionary<string, object?>? input = null)
     {
-        await StartRunAsync(u, record, c, $"onEnter:{to.Id}", $"onEnter:{to.Id}", trigger, actor, null, ct);
+        // onEnter steps can read the answers of the transition that entered the state (input.*).
+        await StartRunAsync(u, record, c, $"onEnter:{to.Id}", $"onEnter:{to.Id}", trigger, actor, input, ct);
         if (to.IsTerminal) return;
         await PlanStateTimersAsync(u, c, record, to, ct);
         await CheckAutoWhenAsync(u, c, record, depth, chain, ct);

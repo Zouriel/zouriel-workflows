@@ -10,6 +10,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Zouriel.Workflows.EntityFrameworkCore.Tests/Zouriel.Workflows.EntityFrameworkCore.Tests.csproj" />
+    <Project Path="tests/Zouriel.Workflows.Sample.Tests/Zouriel.Workflows.Sample.Tests.csproj" />
     <Project Path="tests/Zouriel.Workflows.Tests/Zouriel.Workflows.Tests.csproj" />
   </Folder>
 </Solution>
