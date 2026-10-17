@@ -31,6 +31,14 @@ public sealed class WorkflowModelOptions
     public string TablePrefix { get; set; } = "wf_";
     /// <summary>Store instants as ticks (needed on SQLite, which cannot compare DateTimeOffset values).</summary>
     public bool InstantsAsTicks { get; set; }
+    /// <summary>
+    /// Adds a unique filtered index so the database itself refuses a second live (not completed, failed or
+    /// cancelled) record instance of one workflow for one record, even when two units race to create it; the
+    /// losing unit fails on the index and is retried. Needs filtered (partial) indexes: PostgreSQL, SQL Server
+    /// and SQLite have them. Turn it off on a provider without them, where it would refuse finished instances too.
+    /// Default on.
+    /// </summary>
+    public bool UniqueLiveRecordInstances { get; set; } = true;
 }
 
 /// <summary>Adds the workflow tables to a DbContext model.</summary>
@@ -99,6 +107,15 @@ public static class WorkflowModelBuilderExtensions
             e.HasIndex(x => x.ParentId);
             e.Property(x => x.RowVersion).IsConcurrencyToken();
             Common(e, "instances");
+            if (o.UniqueLiveRecordInstances)
+            {
+                // At most one live record instance per (definition, entity, record). Column names as Common maps them.
+                var finished = string.Join(", ", new[] { InstanceStatus.Completed, InstanceStatus.Failed, InstanceStatus.Cancelled }.Select(v => $"'{v}'"));
+                e.HasIndex(x => new { x.DefinitionId, x.Entity, x.EntityId })
+                    .IsUnique()
+                    .HasDatabaseName($"IX_{T("instances")}_live_record")
+                    .HasFilter($"{Snake(nameof(InstanceRecord.Kind))} = '{InstanceKinds.Record}' AND {Snake(nameof(InstanceRecord.Status))} NOT IN ({finished})");
+            }
         });
         mb.Entity<StepRecord>(e =>
         {
