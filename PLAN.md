@@ -28,7 +28,7 @@ comprehensive rather than minimal.
   only used where it fits: the **lifecycle state diagram**.
 - **Lifecycle model.** Jira's model maps directly onto admin processes: states, one-way transitions,
   and per transition *conditions* (who may), *validators* (input checks) and *post-functions* (effects).
-  We call these **Who can do this / Check before / Then do**. HEMS's engine has the same shape.
+  We call these **Who can do this / Check before / Then do**.
 - **Triggers** fire when a record *enters* a matching value, not for records already in it (Airtable's
   rule). They fire only on **committed** changes, delivered through a **transactional outbox**, at least
   once, and deduplicated per change event.
@@ -225,7 +225,7 @@ tokens from `tokens.css` are used. Density follows the existing design direction
 | `ui-workflow-run` | One instance drawn over its definition: per-step status badges, the path not taken greyed out, a step timeline with inputs and outputs, incident actions. |
 | `ui-workflow-audit` | Audit timeline and table with filters, diff viewer, export, chain verify. |
 | `ui-workflow-tasks` | Task inbox: my tasks / my team's tasks, due and overdue, decide with form, delegate. |
-| `ui-workflow-record-panel` | Drop-in panel for a record page: current state badge, the transitions available to *this user* (with their input forms), open tasks, history. This is what HEMS's workflow side panel does by hand today. |
+| `ui-workflow-record-panel` | Drop-in panel for a record page: current state badge, the transitions available to *this user* (with their input forms), open tasks, history. |
 | `ui-workflow-state-badge` | A small state chip using the state's tone. |
 
 The data access contract is `UiWorkflowApi`: an interface with a default HTTP implementation for the
