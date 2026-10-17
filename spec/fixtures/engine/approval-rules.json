@@ -1,0 +1,35 @@
+{
+  "name": "Approval rules: 'all' fails on one rejection; 'count' settles at N approvals or when N is out of reach; a comment can be required",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [
+    { "id": "a1", "title": "One", "stage": "new" }, { "id": "a2", "title": "Two", "stage": "new" }, { "id": "a3", "title": "Three", "stage": "new" } ] },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_all", "key": "allMust", "kind": "automation", "title": "All must approve", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "One" } } },
+      "steps": [ { "id": "ap", "type": "approval", "assignees": [ { "group": "panel" } ], "rule": { "type": "all" }, "due": "P3D", "requireComment": "reject",
+        "outcomes": { "approved": [], "rejected": [ { "id": "r", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "low" } } ] } ], "timedOut": [] } } ] },
+    { "specVersion": 1, "id": "wf_two", "key": "twoOfThree", "kind": "automation", "title": "Two of three", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "anyOf", "value": { "const": ["Two", "Three"] } } },
+      "steps": [ { "id": "ap", "type": "approval", "assignees": [ { "role": "reviewer" } ], "rule": { "type": "count", "value": 2 }, "due": "P3D",
+        "outcomes": { "approved": [ { "id": "y", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "high" } } ] } ],
+                      "rejected": [ { "id": "n", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "low" } } ] } ], "timedOut": [] } } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } }, "expect": { "tasks": [ { "step": "ap", "assignees": ["rev1", "rev2"] } ] } },
+    { "decide": { "step": "ap", "user": "rev1", "outcome": "approved" }, "expect": { "tasks": [ { "status": "open" } ] } },
+    { "decide": { "step": "ap", "user": "rev1", "outcome": "approved" }, "expectError": "alreadyDecided" },
+    { "decide": { "step": "ap", "user": "rev2", "outcome": "rejected" }, "expectError": "commentRequired" },
+    { "decide": { "step": "ap", "user": "rev2", "outcome": "rejected", "comment": "Missing form" },
+      "expect": { "tasks": [ { "status": "completed", "outcome": "rejected" } ], "record": { "entity": "application", "id": "a1", "values": { "priority": "low" } },
+        "outputs": { "allMust": { "ap": { "outcome": "rejected", "decidedBy": ["rev1", "rev2"] } } } } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } } },
+    { "decide": { "step": "ap", "user": "rev3", "outcome": "approved" } },
+    { "decide": { "step": "ap", "user": "rev1", "outcome": "approved" },
+      "expect": { "record": { "entity": "application", "id": "a2", "values": { "priority": "high" } },
+        "tasks": [ { "outcome": "rejected" }, { "status": "completed", "outcome": "approved", "assignees": ["rev1", "rev2", "rev3"] } ] } },
+    { "change": { "entity": "application", "id": "a3", "values": { "stage": "checked" } } },
+    { "decide": { "step": "ap", "user": "rev1", "outcome": "rejected" }, "expect": { "tasks": [ {}, {}, { "status": "open" } ] } },
+    { "decide": { "step": "ap", "user": "rev2", "outcome": "rejected" },
+      "expect": { "tasks": [ {}, {}, { "status": "completed", "outcome": "rejected" } ], "record": { "entity": "application", "id": "a3", "values": { "priority": "low" } } } }
+  ]
+}

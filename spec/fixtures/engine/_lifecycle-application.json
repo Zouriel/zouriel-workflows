@@ -1,0 +1,31 @@
+{
+  "specVersion": 1, "id": "lc_app", "key": "applicationReview", "kind": "lifecycle", "title": "Application review", "entity": "application",
+  "lifecycle": {
+    "field": "status", "mode": "enforce",
+    "states": [
+      { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" },
+      { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "active", "tone": "info" },
+      { "id": "st_rev", "key": "underReview", "label": "Under review", "category": "active", "tone": "warning",
+        "sla": { "within": "P2D", "steps": [ { "id": "sla_n", "type": "notify", "channel": "email", "to": [ { "managerOf": "entity.reviewer" } ], "body": ["Review of ", { "ref": "entity.title" }, " is overdue"] } ] } },
+      { "id": "st_ok", "key": "approved", "label": "Approved", "category": "terminal", "tone": "success",
+        "onEnter": [ { "id": "ok_n", "type": "notify", "channel": "email", "to": [ { "field": "entity.applicant" } ], "subject": "Approved", "body": ["Approved with note: ", { "ref": "trigger.transition" }] } ] },
+      { "id": "st_no", "key": "rejected", "label": "Rejected", "category": "terminal", "tone": "danger" },
+      { "id": "st_wd", "key": "withdrawn", "label": "Withdrawn", "category": "terminal" }
+    ],
+    "transitions": [
+      { "id": "tr_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [ { "field": "entity.applicant" } ],
+        "steps": [ { "id": "sub_s", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "checked" } } ] } ] },
+      { "id": "tr_review", "key": "startReview", "label": "Start review", "from": ["st_sub"], "to": "st_rev", "who": [ { "role": "reviewer" } ],
+        "auto": { "when": { "ref": "entity.reviewer", "op": "notEmpty" } } },
+      { "id": "tr_ok", "key": "approve", "label": "Approve", "from": ["st_rev"], "to": "st_ok", "who": [ { "role": "reviewer" } ], "tone": "success",
+        "when": { "ref": "entity.amount", "op": "lte", "value": { "const": 10000 } },
+        "input": { "form": { "schemaVersion": 1, "id": "f_ok", "title": "Approve", "pages": [ { "id": "p", "elements": [
+          { "kind": "field", "id": "f_comment", "key": "comment", "type": "textarea", "label": "Comment", "required": true } ] } ] } },
+        "steps": [ { "id": "ok_s", "type": "setFields", "values": [ { "field": "notes", "value": { "ref": "input.comment" } } ] } ] },
+      { "id": "tr_no", "key": "reject", "label": "Reject", "from": ["st_rev"], "to": "st_no", "who": [ { "role": "reviewer" } ], "tone": "danger" },
+      { "id": "tr_wd", "key": "withdraw", "label": "Withdraw", "from": "*", "to": "st_wd", "who": [ { "field": "entity.applicant" } ] },
+      { "id": "tr_exp", "key": "expire", "label": "Expire", "from": ["st_draft"], "to": "st_wd", "auto": { "after": "P30D" }, "hidden": true }
+    ],
+    "layout": { "st_draft": [0, 0] }
+  }
+}

@@ -1,0 +1,73 @@
+{
+ "name": "webhooks must use allowed addresses; go back must target an earlier step; forEach needs a collection",
+ "settings": {
+  "version": 1,
+  "webhooks": {
+   "allowedOrigins": [
+    "https://ok.example.com"
+   ]
+  }
+ },
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "h",
+    "type": "webhook",
+    "url": "https://evil.example.com/x",
+    "method": "POST"
+   },
+   {
+    "id": "h2",
+    "type": "webhook",
+    "url": "https://ok.example.com/x",
+    "method": "POST"
+   },
+   {
+    "id": "g",
+    "type": "goTo",
+    "target": "z",
+    "maxTimes": 2
+   },
+   {
+    "id": "f",
+    "type": "forEach",
+    "collection": "entity.amount",
+    "max": 5,
+    "steps": []
+   },
+   {
+    "id": "z",
+    "type": "end",
+    "result": "completed"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "webhookOriginNotAllowed",
+   "node": "h"
+  },
+  {
+   "code": "goToInvalidTarget",
+   "node": "g"
+  },
+  {
+   "code": "notACollection",
+   "node": "f"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

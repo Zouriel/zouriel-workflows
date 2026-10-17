@@ -1,0 +1,109 @@
+{
+ "name": "Audit hash chain: sha256(prevHash + \"\\n\" + JCS(entry)), the first prevHash is 64 zeros. Computed independently (Python) from the .NET engine.",
+ "entries": [
+  {
+   "entry": {
+    "seq": 1,
+    "id": "e1",
+    "at": "2026-10-19T09:00:00.000Z",
+    "actor": {
+     "type": "user",
+     "id": "admin",
+     "name": "Admin"
+    },
+    "category": "definition",
+    "action": "published",
+    "subject": {
+     "type": "definition",
+     "id": "wf_1"
+    },
+    "correlationId": "wf_1",
+    "definitionId": "wf_1",
+    "data": {
+     "version": 1,
+     "note": "First “release”",
+     "diff": null
+    }
+   },
+   "prevHash": "0000000000000000000000000000000000000000000000000000000000000000",
+   "canonical": "{\"action\":\"published\",\"actor\":{\"id\":\"admin\",\"name\":\"Admin\",\"type\":\"user\"},\"at\":\"2026-10-19T09:00:00.000Z\",\"category\":\"definition\",\"correlationId\":\"wf_1\",\"data\":{\"diff\":null,\"note\":\"First “release”\",\"version\":1},\"definitionId\":\"wf_1\",\"id\":\"e1\",\"seq\":1,\"subject\":{\"id\":\"wf_1\",\"type\":\"definition\"}}",
+   "hash": "cd818f900d3ef38841462331e17cfe5862b61e8921698128d8466245cc8b30c9"
+  },
+  {
+   "entry": {
+    "seq": 2,
+    "id": "e2",
+    "at": "2026-10-19T09:00:01.250Z",
+    "actor": {
+     "type": "workflow",
+     "id": "i_1",
+     "name": "notify"
+    },
+    "category": "step",
+    "action": "completed",
+    "subject": {
+     "type": "step",
+     "id": "s1",
+     "entity": "application",
+     "entityId": "a1"
+    },
+    "correlationId": "i_1",
+    "instanceId": "i_1",
+    "definitionId": "wf_1",
+    "data": {
+     "outputs": {
+      "sent": 3,
+      "to": [
+       "rev1",
+       "rev2"
+      ]
+     },
+     "title": "Tab\there / slash \\ quote \" ünï €"
+    }
+   },
+   "prevHash": "cd818f900d3ef38841462331e17cfe5862b61e8921698128d8466245cc8b30c9",
+   "canonical": "{\"action\":\"completed\",\"actor\":{\"id\":\"i_1\",\"name\":\"notify\",\"type\":\"workflow\"},\"at\":\"2026-10-19T09:00:01.250Z\",\"category\":\"step\",\"correlationId\":\"i_1\",\"data\":{\"outputs\":{\"sent\":3,\"to\":[\"rev1\",\"rev2\"]},\"title\":\"Tab\\there / slash \\\\ quote \\\" ünï €\"},\"definitionId\":\"wf_1\",\"id\":\"e2\",\"instanceId\":\"i_1\",\"seq\":2,\"subject\":{\"entity\":\"application\",\"entityId\":\"a1\",\"id\":\"s1\",\"type\":\"step\"}}",
+   "hash": "8b726bac9834ece68c44895a88250ae04ef5656453847db831e3adb8cc7ddafb"
+  },
+  {
+   "entry": {
+    "seq": 3,
+    "id": "e3",
+    "at": "2026-10-19T10:30:00.000Z",
+    "actor": {
+     "type": "system",
+     "name": "System"
+    },
+    "category": "lifecycle",
+    "action": "transitioned",
+    "subject": {
+     "type": "record",
+     "id": "a1",
+     "entity": "application",
+     "entityId": "a1"
+    },
+    "correlationId": "c9",
+    "instanceId": "r_1",
+    "definitionId": "lc_1",
+    "before": {
+     "state": "draft"
+    },
+    "after": {
+     "state": "submitted"
+    },
+    "data": {
+     "transition": "submit",
+     "input": {
+      "secret": "***",
+      "n": -12,
+      "ok": true
+     }
+    },
+    "causationId": "i_1"
+   },
+   "prevHash": "8b726bac9834ece68c44895a88250ae04ef5656453847db831e3adb8cc7ddafb",
+   "canonical": "{\"action\":\"transitioned\",\"actor\":{\"name\":\"System\",\"type\":\"system\"},\"after\":{\"state\":\"submitted\"},\"at\":\"2026-10-19T10:30:00.000Z\",\"before\":{\"state\":\"draft\"},\"category\":\"lifecycle\",\"causationId\":\"i_1\",\"correlationId\":\"c9\",\"data\":{\"input\":{\"n\":-12,\"ok\":true,\"secret\":\"***\"},\"transition\":\"submit\"},\"definitionId\":\"lc_1\",\"id\":\"e3\",\"instanceId\":\"r_1\",\"seq\":3,\"subject\":{\"entity\":\"application\",\"entityId\":\"a1\",\"id\":\"a1\",\"type\":\"record\"}}",
+   "hash": "5602264f4a554d6b96241da4230840d7c2d0a7b495596d8d702a92d08b36970f"
+  }
+ ]
+}

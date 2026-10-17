@@ -1,0 +1,24 @@
+{
+  "name": "from/to filters and the extra condition decide whether a change starts the workflow",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [
+    { "id": "a1", "title": "Small", "stage": "new", "amount": 500 },
+    { "id": "a2", "title": "Large", "stage": "new", "amount": 9000 } ] },
+  "definitions": [ {
+    "specVersion": 1, "id": "wf_big", "key": "bigDone", "kind": "automation", "title": "Big ones finished", "entity": "application",
+    "trigger": { "type": "fieldChanged", "field": "stage", "from": ["checked"], "to": ["done"],
+      "when": { "match": "all", "conditions": [ { "ref": "entity.amount", "op": "gt", "value": { "const": 5000 } } ] } },
+    "steps": [ { "id": "s1", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "high" } } ] } ]
+  } ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "done" } }, "expect": { "instances": [] } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } }, "expect": { "instances": [] } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "done" } }, "expect": { "instances": [] } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "done" } },
+      "expect": {
+        "instances": [ { "definition": "bigDone", "status": "completed", "record": "a2" } ],
+        "record": { "entity": "application", "id": "a2", "values": { "priority": "high" } }
+      } }
+  ]
+}

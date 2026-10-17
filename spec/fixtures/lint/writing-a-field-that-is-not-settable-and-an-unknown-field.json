@@ -1,0 +1,49 @@
+{
+ "name": "writing a field that is not settable, and an unknown field",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "s",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "applicant",
+      "value": {
+       "const": "x"
+      }
+     },
+     {
+      "field": "nope",
+      "value": {
+       "const": 1
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "fieldNotSettable",
+   "node": "s"
+  },
+  {
+   "code": "unknownField",
+   "node": "s"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

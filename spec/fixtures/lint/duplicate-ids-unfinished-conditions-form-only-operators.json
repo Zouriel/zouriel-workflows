@@ -1,0 +1,64 @@
+{
+ "name": "duplicate ids, unfinished conditions, form-only operators",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "x",
+    "type": "branch",
+    "paths": [
+     {
+      "id": "p",
+      "label": "P",
+      "when": {
+       "ref": "entity.amount",
+       "op": "gt"
+      },
+      "steps": []
+     },
+     {
+      "id": "q",
+      "label": "Q",
+      "when": {
+       "ref": "entity.amount",
+       "op": "visible"
+      },
+      "steps": []
+     }
+    ]
+   },
+   {
+    "id": "x",
+    "type": "end",
+    "result": "completed"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "incompleteCondition",
+   "node": "x"
+  },
+  {
+   "code": "formOnlyOperator",
+   "node": "x"
+  },
+  {
+   "code": "duplicateId",
+   "node": "x"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

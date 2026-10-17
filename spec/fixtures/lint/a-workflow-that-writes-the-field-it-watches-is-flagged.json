@@ -1,0 +1,40 @@
+{
+ "name": "a workflow that writes the field it watches is flagged",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "s",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "stage",
+      "value": {
+       "const": "done"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "triggerLoop",
+   "node": "s",
+   "severity": "warning"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

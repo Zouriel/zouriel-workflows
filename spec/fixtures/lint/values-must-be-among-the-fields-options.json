@@ -1,0 +1,38 @@
+{
+ "name": "values must be among the field's options",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "finished"
+   ]
+  },
+  "steps": [
+   {
+    "id": "s",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "notes",
+      "value": {
+       "const": "x"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "unknownValue"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

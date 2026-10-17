@@ -1,0 +1,295 @@
+{
+ "name": "Delegation, sensitive values masked in audit, pausing an entity, archived workflows, and automations started by a signal",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": [
+   {
+    "id": "a1",
+    "title": "M",
+    "stage": "new",
+    "applicantEmail": "ali@private.example",
+    "programme": "pg1"
+   }
+  ],
+  "programme": [
+   {
+    "id": "pg1",
+    "name": "Engineering",
+    "coordinator": "rev3"
+   }
+  ]
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "wf_d",
+   "key": "delegable",
+   "kind": "automation",
+   "title": "Delegable",
+   "entity": "application",
+   "trigger": {
+    "type": "fieldChanged",
+    "field": "stage",
+    "to": [
+     "checked"
+    ]
+   },
+   "steps": [
+    {
+     "id": "t",
+     "type": "approval",
+     "assignees": [
+      {
+       "field": "entity.programme.coordinator"
+      }
+     ],
+     "rule": {
+      "type": "any"
+     },
+     "due": "P1D",
+     "allowDelegation": true,
+     "instructions": [
+      "Programme: ",
+      {
+       "ref": "entity.programme"
+      },
+      ", coordinator ",
+      {
+       "ref": "entity.programme.coordinator"
+      }
+     ],
+     "outcomes": {
+      "approved": [
+       {
+        "id": "mail",
+        "type": "notify",
+        "channel": "email",
+        "to": [
+         {
+          "email": [
+           {
+            "ref": "entity.applicantEmail"
+           }
+          ]
+         }
+        ],
+        "body": "Approved"
+       }
+      ],
+      "rejected": [],
+      "timedOut": []
+     }
+    }
+   ]
+  },
+  {
+   "specVersion": 1,
+   "id": "wf_sig",
+   "key": "onNightly",
+   "kind": "automation",
+   "title": "On nightly",
+   "trigger": {
+    "type": "signal",
+    "signal": "nightly"
+   },
+   "steps": [
+    {
+     "id": "n",
+     "type": "notify",
+     "channel": "email",
+     "to": [
+      {
+       "user": "admin"
+      }
+     ],
+     "body": [
+      "Nightly done: ",
+      {
+       "ref": "trigger.data.rows"
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "stage": "checked"
+    }
+   },
+   "expect": {
+    "tasks": [
+     {
+      "assignees": [
+       "rev3"
+      ],
+      "instructions": "Programme: Engineering, coordinator Rhea Reviewer"
+     }
+    ]
+   }
+  },
+  {
+   "delegate": {
+    "step": "t",
+    "user": "rev1",
+    "to": "rev2"
+   },
+   "expectError": "notAllowed"
+  },
+  {
+   "delegate": {
+    "step": "t",
+    "user": "rev3",
+    "to": "rev2"
+   },
+   "expect": {
+    "tasks": [
+     {
+      "assignees": [
+       "rev2"
+      ]
+     }
+    ],
+    "audit": [
+     {
+      "is": "task.delegated",
+      "actor": "rev3"
+     }
+    ]
+   }
+  },
+  {
+   "decide": {
+    "step": "t",
+    "user": "rev2",
+    "outcome": "approved"
+   },
+   "expect": {
+    "notifications": [
+     {
+      "to": [
+       "rev3"
+      ]
+     },
+     {
+      "to": [
+       "rev2"
+      ]
+     },
+     {
+      "to": [
+       "ali@private.example"
+      ],
+      "body": "Approved"
+     }
+    ]
+   }
+  },
+  {
+   "signal": {
+    "signal": "nightly",
+    "data": {
+     "rows": 42
+    }
+   },
+   "expect": {
+    "notifications": [
+     {},
+     {},
+     {},
+     {
+      "to": [
+       "admin"
+      ],
+      "body": "Nightly done: 42"
+     }
+    ]
+   }
+  },
+  {
+   "settings": {
+    "version": 1,
+    "paused": [
+     {
+      "entity": "application"
+     }
+    ]
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "stage": "new"
+    }
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "stage": "checked"
+    }
+   },
+   "expect": {
+    "instanceKinds": [
+     "automation"
+    ],
+    "instances": [
+     {
+      "definition": "delegable"
+     },
+     {
+      "definition": "onNightly"
+     }
+    ],
+    "audit": [
+     "trigger.paused"
+    ]
+   }
+  },
+  {
+   "settings": {
+    "version": 1
+   }
+  },
+  {
+   "archive": "delegable"
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "stage": "done"
+    }
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "stage": "checked"
+    }
+   },
+   "expect": {
+    "instanceKinds": [
+     "automation"
+    ],
+    "instances": [
+     {},
+     {}
+    ],
+    "auditChainValid": true
+   }
+  }
+ ]
+}

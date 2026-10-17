@@ -1,0 +1,38 @@
+{
+ "name": "watching a field the app does not allow, and an unknown value",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "applicant",
+   "to": [
+    "x"
+   ]
+  },
+  "steps": [
+   {
+    "id": "s",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "notes",
+      "value": {
+       "const": "x"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "fieldNotWatchable"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

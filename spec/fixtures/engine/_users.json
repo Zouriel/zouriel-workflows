@@ -1,0 +1,9 @@
+[
+  { "id": "ali", "name": "Ali Hassan", "email": "ali@example.com" },
+  { "id": "rev1", "name": "Rana Reviewer", "email": "rana@example.com", "roles": ["reviewer"], "groups": ["panel"], "manager": "head" },
+  { "id": "rev2", "name": "Rafiq Reviewer", "email": "rafiq@example.com", "roles": ["reviewer"], "groups": ["panel"], "manager": "head" },
+  { "id": "rev3", "name": "Rhea Reviewer", "email": "rhea@example.com", "roles": ["reviewer"], "manager": "head" },
+  { "id": "fin1", "name": "Farah Finance", "email": "farah@example.com", "roles": ["finance"], "manager": "head" },
+  { "id": "head", "name": "Hana Head", "email": "hana@example.com", "roles": ["admin"] },
+  { "id": "admin", "name": "Admin", "email": "admin@example.com", "roles": ["admin"] }
+]

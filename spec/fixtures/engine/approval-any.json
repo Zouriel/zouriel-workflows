@@ -1,0 +1,45 @@
+{
+  "name": "An 'any' approval: the first approval settles it, the approved path runs, timers are cleared",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "Laptop grant", "stage": "new", "applicant": "ali", "amount": 800 } ] },
+  "definitions": [ {
+    "specVersion": 1, "id": "wf_appr", "key": "approveGrant", "kind": "automation", "title": "Approve grant", "entity": "application",
+    "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+    "steps": [
+      { "id": "ap", "type": "approval", "title": "Reviewer sign-off", "assignees": [ { "role": "reviewer" } ], "rule": { "type": "any" },
+        "due": "P2D", "reminders": ["P1D"], "instructions": ["Please review ", { "ref": "entity.title" }],
+        "outcomes": {
+          "approved": [ { "id": "ok", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "done" } } ] } ],
+          "rejected": [ { "id": "no", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "low" } } ] } ],
+          "timedOut": [ { "id": "late", "type": "notify", "channel": "email", "to": [ { "user": "head" } ], "body": "Nobody reviewed it." } ]
+        } },
+      { "id": "after", "type": "notify", "channel": "email", "to": [ { "field": "entity.applicant" } ],
+        "subject": "Decision", "body": ["Outcome: ", { "ref": "steps.ap.outcome" }] }
+    ]
+  } ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": {
+        "instances": [ { "definition": "approveGrant", "status": "waiting" } ],
+        "tasks": [ { "step": "ap", "status": "open", "assignees": ["rev1", "rev2", "rev3"], "title": "Reviewer sign-off",
+                     "instructions": "Please review Laptop grant", "due": "2026-10-21T09:00:00.000Z" } ],
+        "notifications": [ { "channel": "inApp", "to": ["rev1", "rev2", "rev3"], "subject": "New approval: Reviewer sign-off (Laptop grant)" } ],
+        "bookmarks": 2
+      } },
+    { "decide": { "step": "ap", "user": "ali", "outcome": "approved" }, "expectError": "notAllowed" },
+    { "decide": { "step": "ap", "user": "rev2", "outcome": "maybe" }, "expectError": "invalidOutcome" },
+    { "decide": { "step": "ap", "user": "rev2", "outcome": "approved", "comment": "Looks fine" },
+      "expect": {
+        "instances": [ { "definition": "approveGrant", "status": "completed" } ],
+        "tasks": [ { "step": "ap", "status": "completed", "outcome": "approved" } ],
+        "record": { "entity": "application", "id": "a1", "values": { "stage": "done" } },
+        "outputs": { "approveGrant": { "ap": { "outcome": "approved", "decidedBy": ["rev2"], "comments": ["Rafiq Reviewer: Looks fine"] } } },
+        "notifications": [
+          { "channel": "inApp", "to": ["rev1", "rev2", "rev3"] },
+          { "channel": "email", "to": ["ali"], "subject": "Decision", "body": "Outcome: approved" } ],
+        "bookmarks": 0,
+        "audit": [ "task.created", { "is": "task.decided", "actor": "rev2", "data": { "outcome": "approved" } }, "instance.completed" ]
+      } },
+    { "decide": { "step": "ap", "user": "rev1", "outcome": "approved" }, "expectError": "taskClosed" }
+  ]
+}

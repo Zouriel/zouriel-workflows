@@ -1,0 +1,38 @@
+{
+  "name": "Created and deleted triggers; a workflow's own write does not restart it; chains stop at the depth limit; deleting a record cancels its waiting runs",
+  "registry": "_registry.json", "users": "_users.json",
+  "settings": { "version": 1, "defaults": { "maxChainDepth": 2 } },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_new", "key": "onNew", "kind": "automation", "title": "On new", "entity": "application",
+      "trigger": { "type": "created" },
+      "steps": [ { "id": "s", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "normal" } } ] },
+                 { "id": "w", "type": "wait", "until": { "type": "duration", "duration": "P1D" } } ] },
+    { "specVersion": 1, "id": "wf_bump", "key": "bump", "kind": "automation", "title": "Bump score on change", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "score" },
+      "steps": [ { "id": "s", "type": "setFields", "values": [ { "field": "score", "value": { "calc": { "op": "sum", "args": [ { "ref": "entity.score" }, { "const": 1 } ] } } } ] } ] },
+    { "specVersion": 1, "id": "wf_p1", "key": "ping1", "kind": "automation", "title": "Ping 1", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+      "steps": [ { "id": "s", "type": "setFields", "values": [ { "field": "paid", "value": { "const": true } } ] } ] },
+    { "specVersion": 1, "id": "wf_p2", "key": "ping2", "kind": "automation", "title": "Ping 2", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "paid", "to": [true] },
+      "steps": [ { "id": "s", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "high" } } ] } ] },
+    { "specVersion": 1, "id": "wf_p3", "key": "ping3", "kind": "automation", "title": "Ping 3", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "priority", "to": ["high"] },
+      "steps": [ { "id": "s", "type": "setFields", "values": [ { "field": "notes", "value": { "const": "too deep" } } ] } ] },
+    { "specVersion": 1, "id": "wf_del", "key": "onDelete", "kind": "automation", "title": "On delete", "entity": "application",
+      "trigger": { "type": "deleted" },
+      "steps": [ { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "admin" } ], "body": ["Deleted ", { "ref": "entity.title" }] } ] }
+  ],
+  "steps": [
+    { "create": { "entity": "application", "id": "a1", "values": { "title": "Fresh", "stage": "new", "score": 0 } },
+      "expect": { "instances": [ { "definition": "onNew", "status": "waiting" } ], "record": { "entity": "application", "id": "a1", "values": { "priority": "normal" } } } },
+    { "change": { "entity": "application", "id": "a1", "values": { "score": 5 } },
+      "expect": { "record": { "entity": "application", "id": "a1", "values": { "score": 6 } }, "instances": [ {}, { "definition": "bump", "status": "completed" } ] } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": { "record": { "entity": "application", "id": "a1", "values": { "paid": true, "priority": "high", "notes": null } },
+        "audit": [ { "is": "trigger.suppressed", "data": { "reason": "maxChainDepth" } } ] } },
+    { "delete": { "entity": "application", "id": "a1" },
+      "expect": { "instances": [ { "definition": "onNew", "status": "cancelled" }, {}, {}, {}, { "definition": "onDelete", "status": "completed" } ],
+        "notifications": [ { "body": "Deleted Fresh" } ], "bookmarks": 0 } }
+  ]
+}

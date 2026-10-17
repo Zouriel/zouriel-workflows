@@ -1,0 +1,33 @@
+{
+  "name": "A field change into a chosen value starts the workflow once; other changes do not",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "Bursary for Ali", "stage": "new", "applicant": "ali", "amount": 1200, "priority": "normal" } ] },
+  "definitions": [ {
+    "specVersion": 1, "id": "wf_notify", "key": "notifyOnChecked", "kind": "automation", "title": "Tell reviewers when checked", "entity": "application",
+    "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+    "steps": [
+      { "id": "n1", "type": "notify", "channel": "email", "to": [ { "role": "reviewer" } ],
+        "subject": ["Checked: ", { "ref": "entity.title" }],
+        "body": ["“", { "ref": "entity.title" }, "” by ", { "ref": "entity.applicant" }, " is ", { "ref": "entity.stage" }, " (was ", { "ref": "trigger.from" }, "). Priority: ", { "ref": "entity.priority" }, "."],
+        "link": "record" }
+    ]
+  } ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "priority": "high" } },
+      "expect": { "instances": [], "notifications": [] } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": {
+        "instances": [ { "definition": "notifyOnChecked", "status": "completed", "record": "a1" } ],
+        "notifications": [ { "channel": "email", "to": ["rev1", "rev2", "rev3"], "subject": "Checked: Bursary for Ali",
+          "body": "“Bursary for Ali” by Ali Hassan is Checked (was new). Priority: High.", "link": "https://app.test/application/a1" } ],
+        "outputs": { "notifyOnChecked": { "n1": { "sent": 3 } } },
+        "audit": ["definition.created", "definition.published", "instance.started", "step.started", "step.completed", "instance.completed"]
+      } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked", "notes": "same value" } },
+      "expect": { "notificationCount": 1 } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "done" } },
+      "expect": { "notificationCount": 1 } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": { "notificationCount": 2, "auditChainValid": true } }
+  ]
+}

@@ -1,0 +1,442 @@
+{
+  "kind": "calc",
+  "today": "2026-10-11",
+  "cases": [
+    {
+      "name": "adds every entry of a repeating section",
+      "calc": {
+        "op": "sum",
+        "args": [
+          {
+            "ref": "price"
+          },
+          {
+            "const": 5
+          }
+        ]
+      },
+      "values": {
+        "price": [
+          10,
+          2.5,
+          "3"
+        ]
+      },
+      "expected": 20.5
+    },
+    {
+      "name": "multiplies and rounds",
+      "calc": {
+        "op": "multiply",
+        "args": [
+          {
+            "ref": "q"
+          },
+          {
+            "ref": "p"
+          }
+        ],
+        "decimals": 2
+      },
+      "values": {
+        "q": [
+          3
+        ],
+        "p": [
+          0.333
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "name": "floating point noise is rounded away",
+      "calc": {
+        "op": "sum",
+        "args": [
+          {
+            "const": 0.1
+          },
+          {
+            "const": 0.2
+          }
+        ]
+      },
+      "values": {},
+      "expected": 0.3
+    },
+    {
+      "name": "rounds halves up",
+      "calc": {
+        "op": "sum",
+        "args": [
+          {
+            "const": 2.5
+          }
+        ],
+        "decimals": 0
+      },
+      "values": {},
+      "expected": 3
+    },
+    {
+      "name": "rounds negative halves up too",
+      "calc": {
+        "op": "sum",
+        "args": [
+          {
+            "const": -2.5
+          }
+        ],
+        "decimals": 0
+      },
+      "values": {},
+      "expected": -2
+    },
+    {
+      "name": "empty until there is something to work with",
+      "calc": {
+        "op": "sum",
+        "args": [
+          {
+            "ref": "x"
+          }
+        ]
+      },
+      "values": {
+        "x": [
+          null
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "divide by zero is empty",
+      "calc": {
+        "op": "divide",
+        "args": [
+          {
+            "ref": "a"
+          },
+          {
+            "ref": "b"
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          1
+        ],
+        "b": [
+          0
+        ]
+      },
+      "expected": null
+    },
+    {
+      "name": "divide",
+      "calc": {
+        "op": "divide",
+        "args": [
+          {
+            "const": 10
+          },
+          {
+            "const": 4
+          }
+        ]
+      },
+      "values": {},
+      "expected": 2.5
+    },
+    {
+      "name": "subtract takes the rest from the first",
+      "calc": {
+        "op": "subtract",
+        "args": [
+          {
+            "ref": "a"
+          },
+          {
+            "ref": "b"
+          },
+          {
+            "const": 1
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          10,
+          5
+        ],
+        "b": [
+          2
+        ]
+      },
+      "expected": 12
+    },
+    {
+      "name": "average",
+      "calc": {
+        "op": "average",
+        "args": [
+          {
+            "ref": "a"
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          1,
+          2,
+          "",
+          4
+        ]
+      },
+      "expected": 2.3333333333
+    },
+    {
+      "name": "min and max",
+      "calc": {
+        "op": "max",
+        "args": [
+          {
+            "ref": "a"
+          },
+          {
+            "calc": {
+              "op": "min",
+              "args": [
+                {
+                  "const": 7
+                },
+                {
+                  "const": 3
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          1,
+          2
+        ]
+      },
+      "expected": 3
+    },
+    {
+      "name": "booleans count as 1 and 0",
+      "calc": {
+        "op": "sum",
+        "args": [
+          {
+            "ref": "a"
+          },
+          {
+            "ref": "b"
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          true
+        ],
+        "b": [
+          false
+        ]
+      },
+      "expected": 1
+    },
+    {
+      "name": "age in whole years, the day before a birthday",
+      "calc": {
+        "op": "ageYears",
+        "args": [
+          {
+            "ref": "dob"
+          }
+        ]
+      },
+      "values": {
+        "dob": [
+          "2000-10-12"
+        ]
+      },
+      "expected": 25
+    },
+    {
+      "name": "age in whole years, on the birthday",
+      "calc": {
+        "op": "ageYears",
+        "args": [
+          {
+            "ref": "dob"
+          }
+        ]
+      },
+      "values": {
+        "dob": [
+          "2000-10-11"
+        ]
+      },
+      "expected": 26
+    },
+    {
+      "name": "age until a second date",
+      "calc": {
+        "op": "ageYears",
+        "args": [
+          {
+            "ref": "dob"
+          },
+          {
+            "const": "2020-02-28T10:00"
+          }
+        ]
+      },
+      "values": {
+        "dob": [
+          "2000-02-29"
+        ]
+      },
+      "expected": 19
+    },
+    {
+      "name": "days between across a clock change",
+      "calc": {
+        "op": "daysBetween",
+        "args": [
+          {
+            "const": "2026-03-01"
+          },
+          {
+            "const": "2026-04-01"
+          }
+        ]
+      },
+      "values": {},
+      "expected": 31
+    },
+    {
+      "name": "days until today",
+      "calc": {
+        "op": "daysBetween",
+        "args": [
+          {
+            "const": "2026-10-01"
+          }
+        ]
+      },
+      "values": {},
+      "expected": 10
+    },
+    {
+      "name": "days between needs dates",
+      "calc": {
+        "op": "daysBetween",
+        "args": [
+          {
+            "const": "soon"
+          }
+        ]
+      },
+      "values": {},
+      "expected": null
+    },
+    {
+      "name": "counts ticked options and entries",
+      "calc": {
+        "op": "count",
+        "args": [
+          {
+            "ref": "m"
+          },
+          {
+            "ref": "kids"
+          }
+        ]
+      },
+      "values": {
+        "m": [
+          [
+            "a",
+            "b"
+          ]
+        ]
+      },
+      "expected": 5,
+      "rows": {
+        "kids": 3
+      }
+    },
+    {
+      "name": "count skips empty and false",
+      "calc": {
+        "op": "count",
+        "args": [
+          {
+            "ref": "a"
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          "x",
+          "",
+          null,
+          false,
+          0
+        ]
+      },
+      "expected": 2
+    },
+    {
+      "name": "joins text",
+      "calc": {
+        "op": "concat",
+        "args": [
+          {
+            "ref": "a"
+          },
+          {
+            "const": 2
+          },
+          {
+            "ref": "m"
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          "Hi"
+        ],
+        "m": [
+          [
+            "x",
+            "y"
+          ]
+        ]
+      },
+      "expected": "Hi 2 x, y"
+    },
+    {
+      "name": "join with nothing is empty",
+      "calc": {
+        "op": "concat",
+        "args": [
+          {
+            "ref": "a"
+          }
+        ]
+      },
+      "values": {
+        "a": [
+          ""
+        ]
+      },
+      "expected": null
+    }
+  ]
+}

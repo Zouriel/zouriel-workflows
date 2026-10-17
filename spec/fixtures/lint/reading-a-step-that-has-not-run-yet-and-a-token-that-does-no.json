@@ -1,0 +1,73 @@
+{
+ "name": "reading a step that has not run yet, and a token that does not exist",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "n",
+    "type": "notify",
+    "channel": "email",
+    "to": [
+     {
+      "user": "x"
+     }
+    ],
+    "body": [
+     {
+      "ref": "steps.later.outcome"
+     },
+     {
+      "ref": "entity.secret"
+     }
+    ]
+   },
+   {
+    "id": "later",
+    "type": "approval",
+    "assignees": [
+     {
+      "user": "x"
+     }
+    ],
+    "rule": {
+     "type": "any"
+    },
+    "due": "P1D",
+    "outcomes": {
+     "approved": [],
+     "rejected": [],
+     "timedOut": [
+      {
+       "id": "z",
+       "type": "end",
+       "result": "completed"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "tokenNotUpstream",
+   "node": "n"
+  },
+  {
+   "code": "unknownToken",
+   "node": "n"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

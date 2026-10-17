@@ -1,0 +1,680 @@
+{
+ "name": "Lifecycle: initial state on create, owned field, who/guard/input checks, transition steps, auto-when, SLA, terminal states, forced state, and automations on lifecycle events",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": []
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_app",
+   "key": "applicationReview",
+   "kind": "lifecycle",
+   "title": "Application review",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "enforce",
+    "states": [
+     {
+      "id": "st_draft",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "st_sub",
+      "key": "submitted",
+      "label": "Submitted",
+      "category": "active",
+      "tone": "info"
+     },
+     {
+      "id": "st_rev",
+      "key": "underReview",
+      "label": "Under review",
+      "category": "active",
+      "tone": "warning",
+      "sla": {
+       "within": "P2D",
+       "steps": [
+        {
+         "id": "sla_n",
+         "type": "notify",
+         "channel": "email",
+         "to": [
+          {
+           "managerOf": "entity.reviewer"
+          }
+         ],
+         "body": [
+          "Review of ",
+          {
+           "ref": "entity.title"
+          },
+          " is overdue"
+         ]
+        }
+       ]
+      }
+     },
+     {
+      "id": "st_ok",
+      "key": "approved",
+      "label": "Approved",
+      "category": "terminal",
+      "tone": "success",
+      "onEnter": [
+       {
+        "id": "ok_n",
+        "type": "notify",
+        "channel": "email",
+        "to": [
+         {
+          "field": "entity.applicant"
+         }
+        ],
+        "subject": "Approved",
+        "body": [
+         "Approved with note: ",
+         {
+          "ref": "trigger.transition"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "st_no",
+      "key": "rejected",
+      "label": "Rejected",
+      "category": "terminal",
+      "tone": "danger"
+     },
+     {
+      "id": "st_wd",
+      "key": "withdrawn",
+      "label": "Withdrawn",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "tr_submit",
+      "key": "submit",
+      "label": "Submit",
+      "from": [
+       "st_draft"
+      ],
+      "to": "st_sub",
+      "who": [
+       {
+        "field": "entity.applicant"
+       }
+      ],
+      "steps": [
+       {
+        "id": "sub_s",
+        "type": "setFields",
+        "values": [
+         {
+          "field": "stage",
+          "value": {
+           "const": "checked"
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "tr_review",
+      "key": "startReview",
+      "label": "Start review",
+      "from": [
+       "st_sub"
+      ],
+      "to": "st_rev",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ],
+      "auto": {
+       "when": {
+        "ref": "entity.reviewer",
+        "op": "notEmpty"
+       }
+      }
+     },
+     {
+      "id": "tr_ok",
+      "key": "approve",
+      "label": "Approve",
+      "from": [
+       "st_rev"
+      ],
+      "to": "st_ok",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ],
+      "tone": "success",
+      "when": {
+       "ref": "entity.amount",
+       "op": "lte",
+       "value": {
+        "const": 10000
+       }
+      },
+      "input": {
+       "form": {
+        "schemaVersion": 1,
+        "id": "f_ok",
+        "title": "Approve",
+        "pages": [
+         {
+          "id": "p",
+          "elements": [
+           {
+            "kind": "field",
+            "id": "f_comment",
+            "key": "comment",
+            "type": "textarea",
+            "label": "Comment",
+            "required": true
+           }
+          ]
+         }
+        ]
+       }
+      },
+      "steps": [
+       {
+        "id": "ok_s",
+        "type": "setFields",
+        "values": [
+         {
+          "field": "notes",
+          "value": {
+           "ref": "input.comment"
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "tr_no",
+      "key": "reject",
+      "label": "Reject",
+      "from": [
+       "st_rev"
+      ],
+      "to": "st_no",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ],
+      "tone": "danger"
+     },
+     {
+      "id": "tr_wd",
+      "key": "withdraw",
+      "label": "Withdraw",
+      "from": "*",
+      "to": "st_wd",
+      "who": [
+       {
+        "field": "entity.applicant"
+       }
+      ]
+     },
+     {
+      "id": "tr_exp",
+      "key": "expire",
+      "label": "Expire",
+      "from": [
+       "st_draft"
+      ],
+      "to": "st_wd",
+      "auto": {
+       "after": "P30D"
+      },
+      "hidden": true
+     }
+    ],
+    "layout": {
+     "st_draft": [
+      0,
+      0
+     ]
+    }
+   }
+  },
+  {
+   "specVersion": 1,
+   "id": "wf_tell",
+   "key": "tellReviewers",
+   "kind": "automation",
+   "title": "Tell reviewers",
+   "entity": "application",
+   "trigger": {
+    "type": "stateEntered",
+    "lifecycle": "applicationReview",
+    "states": [
+     "submitted"
+    ]
+   },
+   "steps": [
+    {
+     "id": "n",
+     "type": "notify",
+     "channel": "inApp",
+     "to": [
+      {
+       "role": "reviewer"
+      }
+     ],
+     "subject": [
+      "Submitted: ",
+      {
+       "ref": "entity.title"
+      }
+     ],
+     "body": [
+      "From ",
+      {
+       "ref": "trigger.from"
+      },
+      " to ",
+      {
+       "ref": "trigger.to"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "specVersion": 1,
+   "id": "wf_paid",
+   "key": "payOut",
+   "kind": "automation",
+   "title": "Pay out",
+   "entity": "application",
+   "trigger": {
+    "type": "transitionApplied",
+    "lifecycle": "applicationReview",
+    "transitions": [
+     "approve"
+    ]
+   },
+   "steps": [
+    {
+     "id": "s",
+     "type": "setFields",
+     "values": [
+      {
+       "field": "paid",
+       "value": {
+        "const": true
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "Bursary",
+     "applicant": "ali",
+     "amount": 20000
+    }
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "draft"
+     }
+    },
+    "instances": [
+     {
+      "definition": "applicationReview",
+      "kind": "record",
+      "status": "active",
+      "state": "draft",
+      "record": "a1"
+     }
+    ],
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "ali",
+     "transitions": [
+      "submit",
+      "withdraw"
+     ],
+     "state": "draft"
+    }
+   }
+  },
+  {
+   "expect": {
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev1",
+     "transitions": []
+    }
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "status": "approved"
+    }
+   },
+   "expectError": "fieldOwned",
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "draft"
+     }
+    },
+    "audit": [
+     "lifecycle.writeRefused"
+    ]
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "submit",
+    "actor": "rev1"
+   },
+   "expectError": "notAllowed"
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "approve",
+    "actor": "rev1"
+   },
+   "expectError": "notInFromState"
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "submit",
+    "actor": "ali"
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "submitted",
+      "stage": "checked"
+     }
+    },
+    "instances": [
+     {
+      "definition": "applicationReview",
+      "kind": "record",
+      "state": "submitted"
+     },
+     {
+      "definition": "tellReviewers",
+      "status": "completed"
+     }
+    ],
+    "notifications": [
+     {
+      "channel": "inApp",
+      "to": [
+       "rev1",
+       "rev2",
+       "rev3"
+      ],
+      "subject": "Submitted: Bursary",
+      "body": "From draft to submitted"
+     }
+    ],
+    "audit": [
+     {
+      "is": "lifecycle.transitioned",
+      "actor": "ali",
+      "data": {
+       "transition": "submit"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "reviewer": "rev2"
+    }
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "underReview"
+     }
+    },
+    "audit": [
+     {
+      "is": "lifecycle.autoTransitioned",
+      "actor": "system",
+      "data": {
+       "transition": "startReview"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "advance": "P2D",
+   "expect": {
+    "notifications": [
+     {},
+     {
+      "to": [
+       "head"
+      ],
+      "body": "Review of Bursary is overdue"
+     }
+    ],
+    "audit": [
+     "lifecycle.slaBreached"
+    ]
+   }
+  },
+  {
+   "expect": {
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev1",
+     "transitions": [
+      "reject"
+     ],
+     "state": "underReview"
+    }
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "approve",
+    "actor": "rev1",
+    "input": {
+     "comment": "ok"
+    }
+   },
+   "expectError": "guardFailed"
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "amount": 800
+    }
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "approve",
+    "actor": "rev1",
+    "input": {}
+   },
+   "expectError": "invalidInput"
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "approve",
+    "actor": "rev1",
+    "input": {
+     "comment": "Well argued"
+    }
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "approved",
+      "notes": "Well argued",
+      "paid": true
+     }
+    },
+    "instances": [
+     {
+      "definition": "applicationReview",
+      "kind": "record",
+      "status": "completed",
+      "state": "approved"
+     },
+     {
+      "definition": "tellReviewers"
+     },
+     {
+      "definition": "payOut",
+      "status": "completed"
+     }
+    ],
+    "notifications": [
+     {},
+     {},
+     {
+      "to": [
+       "ali"
+      ],
+      "subject": "Approved",
+      "body": "Approved with note: approve"
+     }
+    ],
+    "bookmarks": 0,
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "ali",
+     "transitions": []
+    }
+   }
+  },
+  {
+   "forceState": {
+    "entity": "application",
+    "id": "a1",
+    "state": "underReview",
+    "reason": "",
+    "actor": "admin"
+   },
+   "expectError": "reasonRequired"
+  },
+  {
+   "forceState": {
+    "entity": "application",
+    "id": "a1",
+    "state": "underReview",
+    "reason": "Approved by mistake",
+    "actor": "admin"
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "underReview"
+     }
+    },
+    "instances": [
+     {
+      "definition": "applicationReview",
+      "status": "active",
+      "state": "underReview"
+     },
+     {},
+     {}
+    ],
+    "audit": [
+     {
+      "is": "lifecycle.forced",
+      "actor": "admin",
+      "data": {
+       "reason": "Approved by mistake"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "withdraw",
+    "actor": "ali"
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "withdrawn"
+     }
+    },
+    "bookmarks": 0,
+    "auditChainValid": true
+   }
+  }
+ ]
+}

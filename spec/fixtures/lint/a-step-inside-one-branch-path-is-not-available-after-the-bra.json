@@ -1,0 +1,75 @@
+{
+ "name": "a step inside one branch path is not available after the branch",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "b",
+    "type": "branch",
+    "paths": [
+     {
+      "id": "p",
+      "label": "P",
+      "when": {
+       "ref": "entity.amount",
+       "op": "gt",
+       "value": {
+        "const": 1
+       }
+      },
+      "steps": [
+       {
+        "id": "inner",
+        "type": "action",
+        "action": "crm.ping"
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "id": "after",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "notes",
+      "value": {
+       "ref": "steps.inner.ok"
+      }
+     }
+    ]
+   },
+   {
+    "id": "ok",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "notes",
+      "value": {
+       "ref": "steps.b.path"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "tokenNotUpstream",
+   "node": "after"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

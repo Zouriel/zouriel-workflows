@@ -1,0 +1,21 @@
+{
+ "name": "unknown record type and missing trigger",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "student",
+  "steps": []
+ },
+ "expected": [
+  {
+   "code": "unknownEntity"
+  },
+  {
+   "code": "missingTrigger"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

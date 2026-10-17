@@ -1,0 +1,32 @@
+{
+  "name": "Branch takes the first matching path, else 'otherwise'; switch matches values",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [
+    { "id": "a1", "title": "A", "stage": "new", "amount": 100, "priority": "low" },
+    { "id": "a2", "title": "B", "stage": "new", "amount": 7000, "priority": "high" },
+    { "id": "a3", "title": "C", "stage": "new", "amount": 3000 } ] },
+  "definitions": [ {
+    "specVersion": 1, "id": "wf_br", "key": "route", "kind": "automation", "title": "Route", "entity": "application",
+    "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+    "steps": [
+      { "id": "b", "type": "branch", "paths": [
+          { "id": "big", "label": "Big", "when": { "ref": "entity.amount", "op": "gte", "value": { "const": 5000 } },
+            "steps": [ { "id": "s_big", "type": "setFields", "values": [ { "field": "score", "value": { "const": 3 } } ] } ] },
+          { "id": "mid", "label": "Medium", "when": { "ref": "entity.amount", "op": "between", "value": { "const": 1000 }, "value2": { "const": 4999 } },
+            "steps": [ { "id": "s_mid", "type": "setFields", "values": [ { "field": "score", "value": { "const": 2 } } ] } ] } ],
+        "otherwise": { "id": "small", "label": "Small", "steps": [ { "id": "s_small", "type": "setFields", "values": [ { "field": "score", "value": { "const": 1 } } ] } ] } },
+      { "id": "sw", "type": "switch", "on": "entity.priority", "cases": [
+          { "id": "c_hi", "label": "High", "values": ["high"], "steps": [ { "id": "s_hi", "type": "setFields", "values": [ { "field": "notes", "value": { "const": "urgent" } } ] } ] },
+          { "id": "c_lo", "label": "Low or normal", "values": ["low", "normal"], "steps": [ { "id": "s_lo", "type": "setFields", "values": [ { "field": "notes", "value": { "const": "routine" } } ] } ] } ] }
+    ]
+  } ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": { "record": { "entity": "application", "id": "a1", "values": { "score": 1, "notes": "routine" } }, "outputs": { "route": { "b": { "path": "small" }, "sw": { "case": "c_lo" } } } } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } },
+      "expect": { "record": { "entity": "application", "id": "a2", "values": { "score": 3, "notes": "urgent" } } } },
+    { "change": { "entity": "application", "id": "a3", "values": { "stage": "checked" } },
+      "expect": { "record": { "entity": "application", "id": "a3", "values": { "score": 2, "notes": null } }, "outputs": { "route": { "b": { "path": "mid" }, "sw": { "case": null } } },
+        "audit": [ { "is": "step.branchTaken", "data": { "path": "mid" } } ] } }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "Webhooks: named connections with secrets resolved by the host, allowed origins only, response read into outputs",
+  "registry": "_registry.json", "users": "_users.json",
+  "settings": { "version": 1, "webhooks": { "allowedOrigins": ["https://hooks.example.com"],
+    "connections": [ { "key": "erp", "label": "ERP", "baseUrl": "https://erp.example.com/api" } ] } },
+  "records": { "application": [ { "id": "a1", "title": "W", "stage": "new", "amount": 10 }, { "id": "a2", "title": "Bad", "stage": "new" } ] },
+  "webhooks": { "https://erp.example.com": [ { "status": 201, "body": { "ref": "ERP-55" } } ], "https://hooks.example.com/fail": [ { "status": 500 } ] },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_wh", "key": "pushErp", "kind": "automation", "title": "Push to ERP", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "W" } } },
+      "steps": [
+        { "id": "h1", "type": "webhook", "connection": "erp", "method": "POST", "path": ["/applications/", { "ref": "entity.id" }],
+          "headers": { "X-Title": [ { "ref": "entity.title" } ] }, "body": { "amount": { "ref": "entity.amount" }, "fixed": [1, "two"], "nested": { "status": { "ref": "entity.stage" } } } },
+        { "id": "s", "type": "setFields", "values": [ { "field": "notes", "value": { "ref": "steps.h1.body.ref" } } ] },
+        { "id": "h2", "type": "webhook", "url": "https://hooks.example.com/fail", "method": "GET", "onError": "continue" } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": {
+        "webhooks": [
+          { "method": "POST", "url": "https://erp.example.com/api/applications/a1", "body": { "amount": 10, "fixed": [1, "two"], "nested": { "status": "checked" } }, "headers": { "X-Title": "W" } },
+          { "method": "GET", "url": "https://hooks.example.com/fail" } ],
+        "record": { "entity": "application", "id": "a1", "values": { "notes": "ERP-55" } },
+        "outputs": { "pushErp": { "h1": { "status": 201 }, "h2": { "status": 500, "error": "The webhook answered 500." } } },
+        "instances": [ { "status": "completed" } ] } }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+ "name": "lifecycle problems: field not allowed, no starting state, unknown values and states, duplicate keys (reported on each)",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc",
+  "key": "lc",
+  "kind": "lifecycle",
+  "title": "L",
+  "entity": "application",
+  "lifecycle": {
+   "field": "stage",
+   "states": [
+    {
+     "id": "a",
+     "key": "new",
+     "label": "New",
+     "category": "active"
+    },
+    {
+     "id": "b",
+     "key": "checked",
+     "label": "Checked",
+     "category": "active"
+    },
+    {
+     "id": "c",
+     "key": "bogus",
+     "label": "Bogus",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t1",
+     "key": "go",
+     "label": "Go",
+     "from": [
+      "a"
+     ],
+     "to": "zz"
+    },
+    {
+     "id": "t2",
+     "key": "go",
+     "label": "Again",
+     "from": [
+      "b"
+     ],
+     "to": "c",
+     "who": [
+      {
+       "role": "reviewer"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "expected": [
+  {
+   "code": "notLifecycleField"
+  },
+  {
+   "code": "noInitialState"
+  },
+  {
+   "code": "unknownValue",
+   "node": "c"
+  },
+  {
+   "code": "unknownState",
+   "node": "t1"
+  },
+  {
+   "code": "nobodyCanApply",
+   "node": "t1",
+   "severity": "warning"
+  },
+  {
+   "code": "duplicateKey",
+   "node": "t2"
+  },
+  {
+   "code": "duplicateKey",
+   "node": "t1"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

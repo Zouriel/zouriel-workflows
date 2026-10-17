@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zouriel.com/workflows/spec/v1/registry.schema.json",
+  "title": "Zouriel workflow registry (what the host app allows workflows to use)",
+  "type": "object",
+  "required": ["specVersion", "entities"],
+  "properties": {
+    "specVersion": { "const": 1 },
+    "entities": { "type": "array", "items": { "$ref": "#/$defs/entity" } },
+    "actions": { "type": "array", "items": { "$ref": "#/$defs/action" } },
+    "signals": { "type": "array", "items": { "$ref": "#/$defs/signal" } },
+    "channels": { "type": "array", "items": { "$ref": "#/$defs/labelled" } },
+    "roles": { "type": "array", "items": { "$ref": "#/$defs/labelled" } },
+    "groups": { "type": "array", "items": { "$ref": "#/$defs/labelled" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "key": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9_.]{0,63}$" },
+    "labelled": {
+      "type": "object",
+      "required": ["key", "label"],
+      "properties": { "key": { "type": "string", "minLength": 1 }, "label": { "type": "string" }, "description": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "fieldType": {
+      "enum": ["text", "longText", "email", "phone", "url", "number", "currency", "boolean", "date", "dateTime", "enum", "user", "relation", "collection", "json"]
+    },
+    "field": {
+      "type": "object",
+      "required": ["key", "label", "type"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "label": { "type": "string" },
+        "type": { "$ref": "#/$defs/fieldType" },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["value", "label"],
+            "properties": { "value": { "type": ["string", "number"] }, "label": { "type": "string" } },
+            "additionalProperties": false
+          }
+        },
+        "entity": { "$ref": "#/$defs/key" },
+        "readable": { "type": "boolean" },
+        "watchable": { "type": "boolean" },
+        "settable": { "type": "boolean" },
+        "lifecycle": { "type": "boolean" },
+        "sensitive": { "type": "boolean" },
+        "required": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "entity": {
+      "type": "object",
+      "required": ["key", "label", "fields"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "label": { "type": "string" },
+        "pluralLabel": { "type": "string" },
+        "titleField": { "$ref": "#/$defs/key" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/field" } }
+      },
+      "additionalProperties": false
+    },
+    "param": {
+      "type": "object",
+      "required": ["key", "label", "type"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "label": { "type": "string" },
+        "type": { "$ref": "#/$defs/fieldType" },
+        "required": { "type": "boolean" },
+        "options": { "$ref": "#/$defs/field/properties/options" },
+        "entity": { "$ref": "#/$defs/key" },
+        "description": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "required": ["key", "label"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "label": { "type": "string" },
+        "description": { "type": "string" },
+        "category": { "type": "string" },
+        "entity": { "$ref": "#/$defs/key" },
+        "inputs": { "type": "array", "items": { "$ref": "#/$defs/param" } },
+        "outputs": { "type": "array", "items": { "$ref": "#/$defs/param" } }
+      },
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "required": ["key", "label"],
+      "properties": {
+        "key": { "$ref": "#/$defs/key" },
+        "label": { "type": "string" },
+        "entity": { "$ref": "#/$defs/key" },
+        "fields": { "type": "array", "items": { "$ref": "#/$defs/param" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

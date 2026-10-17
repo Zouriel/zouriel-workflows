@@ -1,0 +1,34 @@
+{
+ "name": "a valid automation has no problems",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "s",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "notes",
+      "value": {
+       "const": "x"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [],
+ "registry": "../engine/_registry.json"
+}

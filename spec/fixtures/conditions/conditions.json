@@ -1,0 +1,772 @@
+{
+  "kind": "conditions",
+  "today": "2026-10-11",
+  "cases": [
+    {
+      "name": "text ignores case and spaces",
+      "condition": {
+        "ref": "a",
+        "op": "eq",
+        "value": {
+          "const": "Married"
+        }
+      },
+      "values": {
+        "a": " married "
+      },
+      "expected": true
+    },
+    {
+      "name": "contains ignores case",
+      "condition": {
+        "ref": "a",
+        "op": "contains",
+        "value": {
+          "const": "GMAIL"
+        }
+      },
+      "values": {
+        "a": "x@gmail.com"
+      },
+      "expected": true
+    },
+    {
+      "name": "notContains",
+      "condition": {
+        "ref": "a",
+        "op": "notContains",
+        "value": {
+          "const": "x"
+        }
+      },
+      "values": {
+        "a": "abc"
+      },
+      "expected": true
+    },
+    {
+      "name": "startsWith",
+      "condition": {
+        "ref": "a",
+        "op": "startsWith",
+        "value": {
+          "const": "AB"
+        }
+      },
+      "values": {
+        "a": "abc"
+      },
+      "expected": true
+    },
+    {
+      "name": "endsWith",
+      "condition": {
+        "ref": "a",
+        "op": "endsWith",
+        "value": {
+          "const": "bc "
+        }
+      },
+      "values": {
+        "a": "abc"
+      },
+      "expected": true
+    },
+    {
+      "name": "numbers compare as numbers",
+      "condition": {
+        "ref": "n",
+        "op": "gt",
+        "value": {
+          "const": 9
+        }
+      },
+      "values": {
+        "n": 10
+      },
+      "expected": true
+    },
+    {
+      "name": "numeric strings compare as numbers",
+      "condition": {
+        "ref": "n",
+        "op": "gt",
+        "value": {
+          "const": "9"
+        }
+      },
+      "values": {
+        "n": "10"
+      },
+      "expected": true
+    },
+    {
+      "name": "text compares as text",
+      "condition": {
+        "ref": "n",
+        "op": "gt",
+        "value": {
+          "const": "9"
+        }
+      },
+      "values": {
+        "n": "abc"
+      },
+      "expected": true
+    },
+    {
+      "name": "between is inclusive",
+      "condition": {
+        "ref": "n",
+        "op": "between",
+        "value": {
+          "const": 1
+        },
+        "value2": {
+          "const": 10
+        }
+      },
+      "values": {
+        "n": 10
+      },
+      "expected": true
+    },
+    {
+      "name": "between needs both bounds",
+      "condition": {
+        "ref": "n",
+        "op": "between",
+        "value": {
+          "const": 1
+        }
+      },
+      "values": {
+        "n": 5
+      },
+      "expected": false
+    },
+    {
+      "name": "an unfinished rule never matches",
+      "condition": {
+        "ref": "n",
+        "op": "gt"
+      },
+      "values": {
+        "n": 10
+      },
+      "expected": false
+    },
+    {
+      "name": "an unfinished \"is not\" matches any answer",
+      "condition": {
+        "ref": "n",
+        "op": "neq"
+      },
+      "values": {
+        "n": 10
+      },
+      "expected": true
+    },
+    {
+      "name": "an unfinished \"is not\" on an empty answer",
+      "condition": {
+        "ref": "n",
+        "op": "neq"
+      },
+      "values": {},
+      "expected": false
+    },
+    {
+      "name": "eq on a number and a numeric string",
+      "condition": {
+        "ref": "n",
+        "op": "eq",
+        "value": {
+          "const": "10.0"
+        }
+      },
+      "values": {
+        "n": 10
+      },
+      "expected": true
+    },
+    {
+      "name": "eq with a boolean uses truthiness",
+      "condition": {
+        "ref": "b",
+        "op": "eq",
+        "value": {
+          "const": true
+        }
+      },
+      "values": {
+        "b": "yes"
+      },
+      "expected": true
+    },
+    {
+      "name": "anyOf",
+      "condition": {
+        "ref": "c",
+        "op": "anyOf",
+        "value": {
+          "const": [
+            "uk",
+            "us"
+          ]
+        }
+      },
+      "values": {
+        "c": "us"
+      },
+      "expected": true
+    },
+    {
+      "name": "noneOf",
+      "condition": {
+        "ref": "c",
+        "op": "noneOf",
+        "value": {
+          "const": [
+            "uk",
+            "us"
+          ]
+        }
+      },
+      "values": {
+        "c": "fr"
+      },
+      "expected": true
+    },
+    {
+      "name": "anyOf with an empty list is unfinished",
+      "condition": {
+        "ref": "c",
+        "op": "anyOf",
+        "value": {
+          "const": []
+        }
+      },
+      "values": {
+        "c": "fr"
+      },
+      "expected": false
+    },
+    {
+      "name": "includesAll",
+      "condition": {
+        "ref": "m",
+        "op": "includesAll",
+        "value": {
+          "const": [
+            "a",
+            "b"
+          ]
+        }
+      },
+      "values": {
+        "m": [
+          "b",
+          "a",
+          "c"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "name": "includesAny",
+      "condition": {
+        "ref": "m",
+        "op": "includesAny",
+        "value": {
+          "const": [
+            "x",
+            "c"
+          ]
+        }
+      },
+      "values": {
+        "m": [
+          "b",
+          "a",
+          "c"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "name": "includes on a single answer",
+      "condition": {
+        "ref": "m",
+        "op": "includes",
+        "value": {
+          "const": "a"
+        }
+      },
+      "values": {
+        "m": "a"
+      },
+      "expected": true
+    },
+    {
+      "name": "excludes",
+      "condition": {
+        "ref": "m",
+        "op": "excludes",
+        "value": {
+          "const": "z"
+        }
+      },
+      "values": {
+        "m": [
+          "a"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "name": "countGte",
+      "condition": {
+        "ref": "m",
+        "op": "countGte",
+        "value": {
+          "const": 3
+        }
+      },
+      "values": {
+        "m": [
+          "a",
+          "b"
+        ]
+      },
+      "expected": false
+    },
+    {
+      "name": "countLte",
+      "condition": {
+        "ref": "m",
+        "op": "countLte",
+        "value": {
+          "const": "2"
+        }
+      },
+      "values": {
+        "m": [
+          "a",
+          "b"
+        ]
+      },
+      "expected": true
+    },
+    {
+      "name": "empty treats false as empty",
+      "condition": {
+        "ref": "t",
+        "op": "empty"
+      },
+      "values": {
+        "t": false
+      },
+      "expected": true
+    },
+    {
+      "name": "notEmpty with an empty list",
+      "condition": {
+        "ref": "m",
+        "op": "notEmpty"
+      },
+      "values": {
+        "m": []
+      },
+      "expected": false
+    },
+    {
+      "name": "isTrue only for true",
+      "condition": {
+        "ref": "t",
+        "op": "isTrue"
+      },
+      "values": {
+        "t": "true"
+      },
+      "expected": false
+    },
+    {
+      "name": "isFalse when unanswered",
+      "condition": {
+        "ref": "t",
+        "op": "isFalse"
+      },
+      "values": {},
+      "expected": true
+    },
+    {
+      "name": "dates before today",
+      "condition": {
+        "ref": "d",
+        "op": "before",
+        "value": {
+          "today": 0
+        }
+      },
+      "values": {
+        "d": "2026-10-10"
+      },
+      "expected": true
+    },
+    {
+      "name": "dates after today+30",
+      "condition": {
+        "ref": "d",
+        "op": "after",
+        "value": {
+          "today": 30
+        }
+      },
+      "values": {
+        "d": "2026-10-20"
+      },
+      "expected": false
+    },
+    {
+      "name": "onOrAfter today-11 crosses a month",
+      "condition": {
+        "ref": "d",
+        "op": "onOrAfter",
+        "value": {
+          "today": -11
+        }
+      },
+      "values": {
+        "d": "2026-09-30"
+      },
+      "expected": true
+    },
+    {
+      "name": "onOrBefore",
+      "condition": {
+        "ref": "d",
+        "op": "onOrBefore",
+        "value": {
+          "const": "2026-01-01"
+        }
+      },
+      "values": {
+        "d": "2026-01-01"
+      },
+      "expected": true
+    },
+    {
+      "name": "times compare as text",
+      "condition": {
+        "ref": "t",
+        "op": "between",
+        "value": {
+          "const": "09:00"
+        },
+        "value2": {
+          "const": "17:00"
+        }
+      },
+      "values": {
+        "t": "12:30"
+      },
+      "expected": true
+    },
+    {
+      "name": "compare one answer with another",
+      "condition": {
+        "ref": "end",
+        "op": "after",
+        "value": {
+          "ref": "start"
+        }
+      },
+      "values": {
+        "start": "2026-01-01",
+        "end": "2026-02-01"
+      },
+      "expected": true
+    },
+    {
+      "name": "all",
+      "condition": {
+        "match": "all",
+        "conditions": [
+          {
+            "ref": "a",
+            "op": "eq",
+            "value": {
+              "const": 1
+            }
+          },
+          {
+            "ref": "b",
+            "op": "eq",
+            "value": {
+              "const": 9
+            }
+          }
+        ]
+      },
+      "values": {
+        "a": 1,
+        "b": 2
+      },
+      "expected": false
+    },
+    {
+      "name": "any",
+      "condition": {
+        "match": "any",
+        "conditions": [
+          {
+            "ref": "a",
+            "op": "eq",
+            "value": {
+              "const": 1
+            }
+          },
+          {
+            "ref": "b",
+            "op": "eq",
+            "value": {
+              "const": 9
+            }
+          }
+        ]
+      },
+      "values": {
+        "a": 1,
+        "b": 2
+      },
+      "expected": true
+    },
+    {
+      "name": "none",
+      "condition": {
+        "match": "none",
+        "conditions": [
+          {
+            "ref": "b",
+            "op": "eq",
+            "value": {
+              "const": 9
+            }
+          }
+        ]
+      },
+      "values": {
+        "a": 1,
+        "b": 2
+      },
+      "expected": true
+    },
+    {
+      "name": "an empty group holds",
+      "condition": {
+        "match": "all",
+        "conditions": []
+      },
+      "values": {},
+      "expected": true
+    },
+    {
+      "name": "no condition holds",
+      "condition": null,
+      "values": {},
+      "expected": true
+    },
+    {
+      "name": "visible asks the context",
+      "condition": {
+        "ref": "x",
+        "op": "visible"
+      },
+      "values": {},
+      "expected": false,
+      "visible": {
+        "x": false
+      }
+    },
+    {
+      "name": "incomplete asks the context",
+      "condition": {
+        "ref": "g",
+        "op": "incomplete"
+      },
+      "values": {},
+      "expected": true,
+      "complete": {
+        "g": false
+      }
+    },
+    {
+      "name": "rowsGte",
+      "condition": {
+        "ref": "g",
+        "op": "rowsGte",
+        "value": {
+          "const": 2
+        }
+      },
+      "values": {},
+      "expected": true,
+      "rows": {
+        "g": 2
+      }
+    },
+    {
+      "name": "rowsLte without a count never holds",
+      "condition": {
+        "ref": "g",
+        "op": "rowsLte"
+      },
+      "values": {},
+      "expected": false,
+      "rows": {
+        "g": 2
+      }
+    },
+    {
+      "name": "rowsGte on something that is not a repeat counts 0",
+      "condition": {
+        "ref": "g",
+        "op": "rowsGte",
+        "value": {
+          "const": 0
+        }
+      },
+      "values": {},
+      "expected": true,
+      "rows": {
+        "g": null
+      }
+    },
+    {
+      "name": "a sourced answer compares by value",
+      "condition": {
+        "ref": "p",
+        "op": "eq",
+        "value": {
+          "const": "S100"
+        }
+      },
+      "values": {
+        "p": {
+          "value": "S100",
+          "label": "Person 1"
+        }
+      },
+      "expected": true
+    },
+    {
+      "name": "a rule holding a choice compares by value",
+      "condition": {
+        "ref": "p",
+        "op": "eq",
+        "value": {
+          "const": {
+            "value": "S100",
+            "label": "Person 1"
+          }
+        }
+      },
+      "values": {
+        "p": {
+          "value": "S100",
+          "label": "Person 1"
+        }
+      },
+      "expected": true
+    },
+    {
+      "name": "anyOf with choices",
+      "condition": {
+        "ref": "p",
+        "op": "anyOf",
+        "value": {
+          "const": [
+            {
+              "value": "S9",
+              "label": "x"
+            },
+            {
+              "value": "S100",
+              "label": "Person 1"
+            }
+          ]
+        }
+      },
+      "values": {
+        "p": {
+          "value": "S100",
+          "label": "Person 1"
+        }
+      },
+      "expected": true
+    },
+    {
+      "name": "includes a choice",
+      "condition": {
+        "ref": "p",
+        "op": "includes",
+        "value": {
+          "const": {
+            "value": "S100",
+            "label": "Person 1"
+          }
+        }
+      },
+      "values": {
+        "p": [
+          {
+            "value": "S100",
+            "label": "Person 1"
+          },
+          {
+            "value": "S101",
+            "label": "Person 2"
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "name": "excludes a plain value",
+      "condition": {
+        "ref": "p",
+        "op": "excludes",
+        "value": {
+          "const": "S102"
+        }
+      },
+      "values": {
+        "p": [
+          {
+            "value": "S100",
+            "label": "Person 1"
+          }
+        ]
+      },
+      "expected": true
+    },
+    {
+      "name": "neq on a sourced answer",
+      "condition": {
+        "ref": "p",
+        "op": "neq",
+        "value": {
+          "const": "S100"
+        }
+      },
+      "values": {
+        "p": {
+          "value": "S100",
+          "label": "Person 1"
+        }
+      },
+      "expected": false
+    }
+  ]
+}

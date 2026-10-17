@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/Zouriel.Workflows.Sample/Zouriel.Workflows.Sample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Zouriel.Workflows.AspNetCore/Zouriel.Workflows.AspNetCore.csproj" />
+    <Project Path="src/Zouriel.Workflows.EntityFrameworkCore/Zouriel.Workflows.EntityFrameworkCore.csproj" />
+    <Project Path="src/Zouriel.Workflows.Testing/Zouriel.Workflows.Testing.csproj" />
+    <Project Path="src/Zouriel.Workflows/Zouriel.Workflows.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Zouriel.Workflows.EntityFrameworkCore.Tests/Zouriel.Workflows.EntityFrameworkCore.Tests.csproj" />
+    <Project Path="tests/Zouriel.Workflows.Tests/Zouriel.Workflows.Tests.csproj" />
+  </Folder>
+</Solution>

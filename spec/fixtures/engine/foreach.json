@@ -1,0 +1,42 @@
+{
+  "name": "forEach runs steps for each related record (filtered, in order); parallel mode waits for every item",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": {
+    "document": [
+      { "id": "d1", "name": "Passport", "kind": "id", "verified": false },
+      { "id": "d2", "name": "Transcript", "kind": "transcript", "verified": false },
+      { "id": "d3", "name": "Old transcript", "kind": "transcript", "verified": true } ],
+    "application": [
+      { "id": "a1", "title": "Seq", "stage": "new", "documents": ["d1", "d2", "d3"] },
+      { "id": "a2", "title": "Par", "stage": "new", "documents": ["d1", "d2"] } ] },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_fe", "key": "verifyDocs", "kind": "automation", "title": "Verify documents", "entity": "application",
+      "variables": [ { "id": "v_names", "key": "names", "label": "Names", "type": "text", "default": "" } ],
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "Seq" } } },
+      "steps": [
+        { "id": "fe", "type": "forEach", "collection": "entity.documents", "max": 10, "when": { "ref": "item.verified", "op": "isFalse" },
+          "steps": [
+            { "id": "mark", "type": "setFields", "target": "self", "values": [ { "field": "notes", "value": { "calc": { "op": "concat", "args": [ { "ref": "vars.names" }, { "ref": "item.name" } ] } } } ] },
+            { "id": "keep", "type": "setVariables", "values": [ { "variable": "v_names", "value": { "ref": "entity.notes" } } ] } ] },
+        { "id": "after", "type": "setFields", "values": [ { "field": "score", "value": { "ref": "steps.fe.count" } } ] } ] },
+    { "specVersion": 1, "id": "wf_fp", "key": "parallelDocs", "kind": "automation", "title": "Ask about each document", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "Par" } } },
+      "steps": [
+        { "id": "fe", "type": "forEach", "collection": "entity.documents", "max": 10, "mode": "parallel", "concurrency": 1,
+          "steps": [ { "id": "ask", "type": "task", "assignees": [ { "user": "rev1" } ], "due": "P1D", "instructions": ["Check ", { "ref": "item.name" }],
+                       "outcomes": [ { "id": "o", "key": "ok", "label": "OK", "steps": [] } ], "onTimeout": { "id": "x", "steps": [] } } ] },
+        { "id": "after", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "done" } } ] } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": { "record": { "entity": "application", "id": "a1", "values": { "notes": "Passport Transcript", "score": 2 } },
+        "vars": { "verifyDocs": { "names": "Passport Transcript" } }, "instances": [ { "definition": "verifyDocs", "status": "completed" } ] } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } },
+      "expect": { "tasks": [ { "step": "ask", "instructions": "Check Passport", "status": "open" } ] } },
+    { "decide": { "step": "ask", "user": "rev1", "outcome": "ok" },
+      "expect": { "tasks": [ { "status": "completed" }, { "instructions": "Check Transcript", "status": "open" } ],
+        "record": { "entity": "application", "id": "a2", "values": { "stage": "checked" } } } },
+    { "decide": { "step": "ask", "user": "rev1", "outcome": "ok" },
+      "expect": { "record": { "entity": "application", "id": "a2", "values": { "stage": "done" } }, "outputs": { "parallelDocs": { "fe": { "count": 2 } } } } }
+  ]
+}

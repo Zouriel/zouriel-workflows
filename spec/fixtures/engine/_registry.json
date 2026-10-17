@@ -1,0 +1,61 @@
+{
+  "specVersion": 1,
+  "entities": [
+    {
+      "key": "application", "label": "Application", "pluralLabel": "Applications", "titleField": "title",
+      "fields": [
+        { "key": "title", "label": "Title", "type": "text", "watchable": true },
+        { "key": "status", "label": "Status", "type": "enum", "watchable": true, "lifecycle": true,
+          "options": [
+            { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" },
+            { "value": "underReview", "label": "Under review" }, { "value": "approved", "label": "Approved" },
+            { "value": "rejected", "label": "Rejected" }, { "value": "withdrawn", "label": "Withdrawn" }
+          ] },
+        { "key": "stage", "label": "Stage", "type": "enum", "watchable": true, "settable": true,
+          "options": [ { "value": "new", "label": "New" }, { "value": "checked", "label": "Checked" }, { "value": "done", "label": "Done" } ] },
+        { "key": "priority", "label": "Priority", "type": "enum", "watchable": true, "settable": true,
+          "options": [ { "value": "low", "label": "Low" }, { "value": "normal", "label": "Normal" }, { "value": "high", "label": "High" } ] },
+        { "key": "amount", "label": "Amount", "type": "currency", "watchable": true, "settable": true },
+        { "key": "score", "label": "Score", "type": "number", "watchable": true, "settable": true },
+        { "key": "applicant", "label": "Applicant", "type": "user" },
+        { "key": "reviewer", "label": "Reviewer", "type": "user", "settable": true, "watchable": true },
+        { "key": "applicantEmail", "label": "Applicant email", "type": "email", "sensitive": true },
+        { "key": "deadline", "label": "Deadline", "type": "date", "watchable": true, "settable": true },
+        { "key": "decidedAt", "label": "Decided at", "type": "dateTime", "settable": true },
+        { "key": "notes", "label": "Notes", "type": "longText", "settable": true },
+        { "key": "paid", "label": "Paid", "type": "boolean", "watchable": true, "settable": true },
+        { "key": "programme", "label": "Programme", "type": "relation", "entity": "programme" },
+        { "key": "documents", "label": "Documents", "type": "collection", "entity": "document" }
+      ]
+    },
+    {
+      "key": "document", "label": "Document", "titleField": "name",
+      "fields": [
+        { "key": "name", "label": "Name", "type": "text" },
+        { "key": "verified", "label": "Verified", "type": "boolean", "settable": true, "watchable": true },
+        { "key": "kind", "label": "Kind", "type": "enum", "options": [ { "value": "id", "label": "ID" }, { "value": "transcript", "label": "Transcript" } ] }
+      ]
+    },
+    {
+      "key": "programme", "label": "Programme", "titleField": "name",
+      "fields": [
+        { "key": "name", "label": "Name", "type": "text" },
+        { "key": "coordinator", "label": "Coordinator", "type": "user" },
+        { "key": "budget", "label": "Budget", "type": "currency", "settable": true }
+      ]
+    }
+  ],
+  "actions": [
+    { "key": "finance.createInvoice", "label": "Create invoice", "category": "Finance", "entity": "application",
+      "inputs": [ { "key": "amount", "label": "Amount", "type": "currency", "required": true }, { "key": "memo", "label": "Memo", "type": "text" } ],
+      "outputs": [ { "key": "invoiceNo", "label": "Invoice number", "type": "text" } ] },
+    { "key": "crm.ping", "label": "Ping CRM", "category": "CRM", "inputs": [], "outputs": [ { "key": "ok", "label": "OK", "type": "boolean" } ] }
+  ],
+  "signals": [
+    { "key": "payment.received", "label": "Payment received", "entity": "application", "fields": [ { "key": "amount", "label": "Amount", "type": "currency" } ] },
+    { "key": "nightly", "label": "Nightly import finished" }
+  ],
+  "channels": [ { "key": "email", "label": "Email" }, { "key": "inApp", "label": "In-app" } ],
+  "roles": [ { "key": "reviewer", "label": "Reviewer" }, { "key": "finance", "label": "Finance" }, { "key": "admin", "label": "Admin" } ],
+  "groups": [ { "key": "panel", "label": "Review panel" } ]
+}

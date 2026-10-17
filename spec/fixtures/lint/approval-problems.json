@@ -1,0 +1,89 @@
+{
+ "name": "approval problems: no people, bad due time, empty timeout path, unknown role",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "a",
+    "type": "approval",
+    "assignees": [],
+    "rule": {
+     "type": "count"
+    },
+    "due": "soon",
+    "outcomes": {
+     "approved": [],
+     "rejected": [],
+     "timedOut": []
+    }
+   },
+   {
+    "id": "b",
+    "type": "approval",
+    "assignees": [
+     {
+      "role": "wizard"
+     }
+    ],
+    "rule": {
+     "type": "any"
+    },
+    "due": "P1D",
+    "reminders": [
+     "P2D"
+    ],
+    "outcomes": {
+     "approved": [],
+     "rejected": [],
+     "timedOut": []
+    }
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "noAssignees",
+   "node": "a"
+  },
+  {
+   "code": "badDuration",
+   "node": "a"
+  },
+  {
+   "code": "badRule",
+   "node": "a"
+  },
+  {
+   "code": "emptyTimeoutPath",
+   "node": "a",
+   "severity": "warning"
+  },
+  {
+   "code": "unknownRole",
+   "node": "b"
+  },
+  {
+   "code": "lateReminder",
+   "node": "b",
+   "severity": "warning"
+  },
+  {
+   "code": "emptyTimeoutPath",
+   "node": "b",
+   "severity": "warning"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

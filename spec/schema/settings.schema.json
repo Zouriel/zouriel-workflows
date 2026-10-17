@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zouriel.com/workflows/spec/v1/settings.schema.json",
+  "title": "Zouriel workflow global settings",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": { "const": 1 },
+    "timeZone": { "type": "string", "minLength": 1 },
+    "calendar": {
+      "type": "object",
+      "properties": {
+        "days": { "type": "array", "items": { "enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] }, "uniqueItems": true },
+        "hours": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "holidays": { "type": "array", "items": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" } }
+      },
+      "additionalProperties": false
+    },
+    "defaults": {
+      "type": "object",
+      "properties": {
+        "retry": { "$ref": "definition.schema.json#/$defs/retry" },
+        "taskDue": { "$ref": "definition.schema.json#/$defs/duration" },
+        "reminders": { "type": "array", "items": { "$ref": "definition.schema.json#/$defs/duration" } },
+        "concurrency": { "enum": ["perRecordSerial", "parallel", "skipIfRunning"] },
+        "maxChainDepth": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "forEachMax": { "type": "integer", "minimum": 1, "maximum": 500 }
+      },
+      "additionalProperties": false
+    },
+    "people": {
+      "type": "object",
+      "properties": {
+        "delegation": { "type": "boolean" },
+        "escalationDefault": { "$ref": "definition.schema.json#/$defs/assignees" }
+      },
+      "additionalProperties": false
+    },
+    "channels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "sender": { "type": "string" },
+          "footer": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "webhooks": {
+      "type": "object",
+      "properties": {
+        "allowedOrigins": { "type": "array", "items": { "type": "string", "pattern": "^https?://[^/]+$" } },
+        "connections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "label", "baseUrl"],
+            "properties": {
+              "key": { "$ref": "definition.schema.json#/$defs/key" },
+              "label": { "type": "string" },
+              "baseUrl": { "type": "string", "pattern": "^https?://" },
+              "auth": { "enum": ["none", "secret"] },
+              "secretName": { "type": "string" },
+              "header": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "retentionDays": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "maskedFields": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "paused": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["entity"],
+        "properties": { "entity": { "type": "string" } },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

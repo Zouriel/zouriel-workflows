@@ -1,0 +1,93 @@
+{
+ "name": "a field can have only one lifecycle",
+ "others": [
+  {
+   "specVersion": 1,
+   "id": "lc_other",
+   "key": "other",
+   "kind": "lifecycle",
+   "title": "Other",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "a",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "b",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "a"
+      ],
+      "to": "b",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "definition": {
+  "specVersion": 1,
+  "id": "lc2",
+  "key": "lc2",
+  "kind": "lifecycle",
+  "title": "Second",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "b",
+     "key": "approved",
+     "label": "Done",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t",
+     "key": "finish",
+     "label": "Finish",
+     "from": [
+      "a"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "admin"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "expected": [
+  {
+   "code": "lifecycleConflict"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

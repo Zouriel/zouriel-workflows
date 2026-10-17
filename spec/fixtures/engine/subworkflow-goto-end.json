@@ -1,0 +1,32 @@
+{
+  "name": "A sub-workflow's variables come back as outputs; go back repeats up to its limit; end can fail the run",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "Main", "stage": "new", "score": 0 }, { "id": "a2", "title": "Loop", "stage": "new", "score": 0 } ] },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_child", "key": "scoreIt", "kind": "automation", "title": "Score it", "entity": "application",
+      "variables": [ { "id": "v_s", "key": "result", "label": "Result", "type": "number" } ],
+      "trigger": { "type": "manual", "label": "Score" },
+      "steps": [ { "id": "c1", "type": "setVariables", "values": [ { "variable": "v_s", "value": { "calc": { "op": "multiply", "args": [ { "ref": "input.base" }, { "const": 10 } ] } } } ] },
+                 { "id": "c2", "type": "approval", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P1D", "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] },
+    { "specVersion": 1, "id": "wf_main", "key": "parent", "kind": "automation", "title": "Parent", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "Main" } } },
+      "steps": [ { "id": "sub", "type": "subWorkflow", "workflow": "scoreIt", "wait": true, "input": { "base": { "const": 4 } } },
+                 { "id": "use", "type": "setFields", "values": [ { "field": "score", "value": { "ref": "steps.sub.outputs.result" } } ] },
+                 { "id": "fin", "type": "end", "result": "failed", "reason": ["Scored ", { "ref": "entity.score" }] },
+                 { "id": "never", "type": "setFields", "values": [ { "field": "notes", "value": { "const": "unreachable" } } ] } ] },
+    { "specVersion": 1, "id": "wf_loop", "key": "looper", "kind": "automation", "title": "Looper", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "Loop" } } },
+      "steps": [ { "id": "inc", "type": "setFields", "values": [ { "field": "score", "value": { "calc": { "op": "sum", "args": [ { "ref": "entity.score" }, { "const": 1 } ] } } } ] },
+                 { "id": "again", "type": "goTo", "target": "inc", "maxTimes": 3 } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": { "instances": [ { "definition": "parent", "status": "waiting" }, { "definition": "scoreIt", "status": "waiting" } ] } },
+    { "decide": { "step": "c2", "user": "rev1", "outcome": "approved" },
+      "expect": { "instances": [ { "definition": "parent", "status": "failed", "error": "Scored 40" }, { "definition": "scoreIt", "status": "completed" } ],
+        "record": { "entity": "application", "id": "a1", "values": { "score": 40, "notes": null } },
+        "outputs": { "parent": { "sub": { "status": "completed", "outputs": { "result": 40 } } } } } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } },
+      "expect": { "record": { "entity": "application", "id": "a2", "values": { "score": 4 } }, "outputs": { "looper": { "again": { "count": 3 } } } } }
+  ]
+}

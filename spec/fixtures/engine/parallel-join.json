@@ -1,0 +1,35 @@
+{
+  "name": "Parallel paths: 'all' waits for every path; 'any' continues at the first and cancels the rest (and their tasks)",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "P", "stage": "new" }, { "id": "a2", "title": "Q", "stage": "new" } ] },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_all", "key": "both", "kind": "automation", "title": "Both sign", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "P" } } },
+      "steps": [
+        { "id": "par", "type": "parallel", "join": { "type": "all" }, "paths": [
+          { "id": "p1", "label": "Finance", "steps": [ { "id": "t1", "type": "approval", "assignees": [ { "user": "fin1" } ], "rule": { "type": "any" }, "due": "P1D", "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] },
+          { "id": "p2", "label": "Review", "steps": [ { "id": "t2", "type": "approval", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P1D", "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] } ] },
+        { "id": "done", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "done" } } ] } ] },
+    { "specVersion": 1, "id": "wf_any", "key": "either", "kind": "automation", "title": "Either signs", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "Q" } } },
+      "steps": [
+        { "id": "par", "type": "parallel", "join": { "type": "any" }, "paths": [
+          { "id": "p1", "label": "Finance", "steps": [ { "id": "t1", "type": "approval", "assignees": [ { "user": "fin1" } ], "rule": { "type": "any" }, "due": "P1D", "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] },
+          { "id": "p2", "label": "Review", "steps": [ { "id": "t2", "type": "approval", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P1D", "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] } ] },
+        { "id": "done", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "done" } } ] } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } }, "expect": { "tasks": [ { "step": "t1" }, { "step": "t2" } ] } },
+    { "decide": { "step": "t2", "user": "rev1", "outcome": "approved" },
+      "expect": { "instances": [ { "definition": "both", "status": "waiting" } ], "record": { "entity": "application", "id": "a1", "values": { "stage": "checked" } } } },
+    { "decide": { "step": "t1", "user": "fin1", "outcome": "rejected" },
+      "expect": { "instances": [ { "definition": "both", "status": "completed" } ], "record": { "entity": "application", "id": "a1", "values": { "stage": "done" } },
+        "outputs": { "both": { "par": { "completed": ["p2", "p1"] } } } } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } } },
+    { "decide": { "step": "t1", "user": "fin1", "outcome": "approved" },
+      "expect": {
+        "instances": [ { "definition": "both", "status": "completed" }, { "definition": "either", "status": "completed" } ],
+        "tasks": [ {}, {}, { "step": "t1", "status": "completed" }, { "step": "t2", "status": "cancelled" } ],
+        "record": { "entity": "application", "id": "a2", "values": { "stage": "done" } }, "bookmarks": 0 } }
+  ]
+}

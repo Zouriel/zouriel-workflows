@@ -1,0 +1,18 @@
+{
+  "name": "An admin can skip a failed step (giving its outputs) or cancel the instance",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "S", "stage": "new", "amount": 5 }, { "id": "a2", "title": "C", "stage": "new", "amount": 5 } ] },
+  "actions": { "finance.createInvoice": { "failTimes": 100 } },
+  "definitions": [ { "specVersion": 1, "id": "wf_inv", "key": "invoice", "kind": "automation", "title": "Invoice", "entity": "application",
+      "settings": { "concurrency": "parallel" },
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+      "steps": [ { "id": "act", "type": "action", "action": "finance.createInvoice", "input": { "amount": { "ref": "entity.amount" } } },
+                 { "id": "save", "type": "setFields", "values": [ { "field": "notes", "value": { "ref": "steps.act.invoiceNo" } } ] } ] } ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } }, "expect": { "instances": [ { "status": "incident" } ] } },
+    { "skip": { "definition": "invoice", "outputs": { "invoiceNo": "MANUAL-1" } },
+      "expect": { "instances": [ { "status": "completed" } ], "record": { "entity": "application", "id": "a1", "values": { "notes": "MANUAL-1" } } } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } }, "expect": { "instances": [ {}, { "status": "incident" } ] } },
+    { "cancel": { "definition": "invoice" }, "expect": { "instances": [ {}, { "status": "cancelled" } ], "bookmarks": 0, "auditChainValid": true } }
+  ]
+}

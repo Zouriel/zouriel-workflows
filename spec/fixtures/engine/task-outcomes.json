@@ -1,0 +1,30 @@
+{
+  "name": "A task with its own buttons runs the chosen outcome's steps; a form on the task is validated",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "Thesis", "stage": "new" } ] },
+  "definitions": [ {
+    "specVersion": 1, "id": "wf_task", "key": "triage", "kind": "automation", "title": "Triage", "entity": "application",
+    "trigger": { "type": "created" },
+    "steps": [
+      { "id": "tk", "type": "task", "title": "Triage it", "assignees": [ { "user": "rev1" } ], "due": "P1D",
+        "form": { "schemaVersion": 1, "id": "f", "title": "F", "pages": [ { "id": "p", "elements": [
+          { "kind": "field", "id": "f_score", "key": "score", "type": "number", "label": "Score", "required": true,
+            "validators": [ { "id": "v", "type": "max", "params": { "max": 10 } } ] } ] } ] },
+        "outcomes": [
+          { "id": "o1", "key": "fastTrack", "label": "Fast track", "tone": "success", "steps": [
+            { "id": "s1", "type": "setFields", "values": [ { "field": "score", "value": { "ref": "steps.tk.data.score" } }, { "field": "priority", "value": { "const": "high" } } ] } ] },
+          { "id": "o2", "key": "normal", "label": "Normal", "steps": [] } ],
+        "onTimeout": { "id": "to", "steps": [] } }
+    ]
+  } ],
+  "steps": [
+    { "create": { "entity": "application", "id": "a2", "values": { "title": "New one", "stage": "new" } },
+      "expect": { "tasks": [ { "step": "tk", "assignees": ["rev1"], "status": "open" } ] } },
+    { "decide": { "step": "tk", "user": "rev1", "outcome": "fastTrack", "data": {} }, "expectError": "invalidInput" },
+    { "decide": { "step": "tk", "user": "rev1", "outcome": "fastTrack", "data": { "score": 12 } }, "expectError": "invalidInput" },
+    { "decide": { "step": "tk", "user": "rev1", "outcome": "fastTrack", "data": { "score": 7 } },
+      "expect": { "record": { "entity": "application", "id": "a2", "values": { "score": 7, "priority": "high" } },
+        "outputs": { "triage": { "tk": { "outcome": "fastTrack", "data": { "score": 7 } } } },
+        "instances": [ { "definition": "triage", "status": "completed", "record": "a2" } ] } }
+  ]
+}

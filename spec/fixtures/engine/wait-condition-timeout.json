@@ -1,0 +1,15 @@
+{
+  "name": "A condition wait that times out runs its timeout steps and continues",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "T", "stage": "new" } ] },
+  "definitions": [ { "specVersion": 1, "id": "wf_c", "key": "waitPaid", "kind": "automation", "title": "Wait until paid", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+      "steps": [ { "id": "w", "type": "wait", "until": { "type": "condition", "when": { "ref": "entity.paid", "op": "isTrue" }, "timeout": "P2D",
+                   "onTimeout": { "id": "late", "steps": [ { "id": "lt", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "low" } } ] } ] } } },
+                 { "id": "s", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "done" } } ] } ] } ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } }, "expect": { "bookmarks": 2 } },
+    { "advance": "P2D", "expect": { "record": { "entity": "application", "id": "a1", "values": { "priority": "low", "stage": "done" } },
+        "outputs": { "waitPaid": { "w": { "timedOut": true } } }, "bookmarks": 0 } }
+  ]
+}

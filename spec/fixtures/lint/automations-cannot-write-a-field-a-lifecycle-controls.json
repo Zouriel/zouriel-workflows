@@ -1,0 +1,86 @@
+{
+ "name": "automations cannot write a field a lifecycle controls",
+ "others": [
+  {
+   "specVersion": 1,
+   "id": "lc_other",
+   "key": "other",
+   "kind": "lifecycle",
+   "title": "Other",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "a",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "b",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "a"
+      ],
+      "to": "b",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "s",
+    "type": "setFields",
+    "values": [
+     {
+      "field": "status",
+      "value": {
+       "const": "approved"
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "fieldNotSettable",
+   "node": "s"
+  },
+  {
+   "code": "ownedField",
+   "node": "s"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

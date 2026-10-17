@@ -1,0 +1,33 @@
+{
+  "name": "Schedules (per matching record), date triggers that follow their field, and manual starts with a form and permissions",
+  "now": "2026-10-19T07:30:00Z",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [
+    { "id": "a1", "title": "Overdue", "stage": "new", "paid": false, "deadline": "2026-10-21" },
+    { "id": "a2", "title": "Paid", "stage": "new", "paid": true } ] },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_sched", "key": "dailyChase", "kind": "automation", "title": "Daily chase", "entity": "application",
+      "trigger": { "type": "schedule", "cron": "0 8 * * 1-5", "forEach": { "limit": 50, "when": { "ref": "entity.paid", "op": "isFalse" } } },
+      "steps": [ { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "fin1" } ], "body": ["Chase ", { "ref": "entity.title" }] } ] },
+    { "specVersion": 1, "id": "wf_date", "key": "deadlineSoon", "kind": "automation", "title": "Deadline tomorrow", "entity": "application",
+      "trigger": { "type": "dateReached", "field": "deadline", "offset": "-P1D", "at": "09:00" },
+      "steps": [ { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "rev1" } ], "body": ["Due tomorrow: ", { "ref": "entity.title" }] } ] },
+    { "specVersion": 1, "id": "wf_man", "key": "reopen", "kind": "automation", "title": "Reopen", "entity": "application",
+      "trigger": { "type": "manual", "label": "Reopen", "who": [ { "role": "admin" } ],
+        "form": { "schemaVersion": 1, "id": "f", "title": "Why", "pages": [ { "id": "p", "elements": [ { "kind": "field", "id": "f_why", "key": "why", "type": "text", "label": "Reason", "required": true } ] } ] } },
+      "steps": [ { "id": "s", "type": "setFields", "values": [ { "field": "notes", "value": { "ref": "input.why" } }, { "field": "stage", "value": { "const": "new" } } ] } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a2", "values": { "deadline": "2026-10-20" } } },
+    { "advance": "PT1H", "expect": { "notifications": [ { "to": ["fin1"], "body": "Chase Overdue" } ] } },
+    { "advance": "PT1H", "expect": { "notifications": [ {}, { "to": ["rev1"], "body": "Due tomorrow: Paid" } ] } },
+    { "change": { "entity": "application", "id": "a1", "values": { "deadline": "2026-10-23" } } },
+    { "advance": "P1D", "expect": { "notifications": [ {}, {}, { "body": "Chase Overdue" } ] } },
+    { "advance": "P1D", "expect": { "notifications": [ {}, {}, {}, { "body": "Chase Overdue" } ] } },
+    { "advance": "P1D", "expect": { "notifications": [ {}, {}, {}, {}, { "body": "Chase Overdue" }, { "body": "Due tomorrow: Overdue" } ] } },
+    { "manual": { "workflow": "reopen", "entity": "application", "id": "a1", "actor": "rev1", "input": { "why": "x" } }, "expectError": "notAllowed" },
+    { "manual": { "workflow": "reopen", "entity": "application", "id": "a1", "actor": "head", "input": {} }, "expectError": "invalidInput" },
+    { "manual": { "workflow": "reopen", "entity": "application", "id": "a1", "actor": "head", "input": { "why": "Wrong amount" } },
+      "expect": { "record": { "entity": "application", "id": "a1", "values": { "notes": "Wrong amount" } } } }
+  ]
+}

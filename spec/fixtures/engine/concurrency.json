@@ -1,0 +1,25 @@
+{
+  "name": "Per-record serial runs queue behind a running instance; skipIfRunning drops the new start",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "Q", "stage": "new", "priority": "low" } ] },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_q", "key": "serial", "kind": "automation", "title": "Serial", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage" },
+      "steps": [ { "id": "w", "type": "wait", "until": { "type": "duration", "duration": "PT1H" } } ] },
+    { "specVersion": 1, "id": "wf_s", "key": "skipper", "kind": "automation", "title": "Skipper", "entity": "application",
+      "settings": { "concurrency": "skipIfRunning" },
+      "trigger": { "type": "fieldChanged", "field": "priority" },
+      "steps": [ { "id": "w", "type": "wait", "until": { "type": "duration", "duration": "PT1H" } } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } } },
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "done" } },
+      "expect": { "instances": [ { "definition": "serial", "status": "waiting" }, { "definition": "serial", "status": "queued" } ] } },
+    { "change": { "entity": "application", "id": "a1", "values": { "priority": "high" } } },
+    { "change": { "entity": "application", "id": "a1", "values": { "priority": "normal" } },
+      "expect": { "instances": [ {}, {}, { "definition": "skipper", "status": "waiting" } ], "audit": [ { "is": "trigger.skipped", "data": { "reason": "alreadyRunning" } } ] } },
+    { "advance": "PT1H",
+      "expect": { "instances": [ { "definition": "serial", "status": "completed" }, { "definition": "serial", "status": "waiting" }, { "definition": "skipper", "status": "completed" } ] } },
+    { "advance": "PT1H", "expect": { "instances": [ { "status": "completed" }, { "status": "completed" }, { "status": "completed" } ] } }
+  ]
+}

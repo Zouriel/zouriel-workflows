@@ -1,0 +1,36 @@
+{
+  "name": "Failing actions retry with backoff, then stop in an incident an admin can retry or skip; onError continue/steps",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "Inv", "stage": "new", "amount": 99 }, { "id": "a2", "title": "Cont", "stage": "new" } ] },
+  "actions": { "finance.createInvoice": { "output": { "invoiceNo": "INV-7" }, "failTimes": 3, "failMessage": "Finance system down" }, "crm.ping": { "failTimes": 100 } },
+  "definitions": [
+    { "specVersion": 1, "id": "wf_inv", "key": "invoice", "kind": "automation", "title": "Invoice", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "Inv" } } },
+      "steps": [
+        { "id": "act", "type": "action", "action": "finance.createInvoice", "input": { "amount": { "ref": "entity.amount" }, "memo": { "const": "grant" } },
+          "retry": { "max": 2, "backoff": "exponential", "initial": "PT1M" } },
+        { "id": "save", "type": "setFields", "values": [ { "field": "notes", "value": { "ref": "steps.act.invoiceNo" } } ] } ] },
+    { "specVersion": 1, "id": "wf_cont", "key": "tolerant", "kind": "automation", "title": "Tolerant", "entity": "application",
+      "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"], "when": { "ref": "entity.title", "op": "eq", "value": { "const": "Cont" } } },
+      "steps": [
+        { "id": "p1", "type": "action", "action": "crm.ping", "onError": "continue" },
+        { "id": "p2", "type": "action", "action": "crm.ping", "onError": { "steps": [ { "id": "fix", "type": "setFields", "values": [ { "field": "notes", "value": { "ref": "steps.p2.error" } } ] } ] } },
+        { "id": "end", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "high" } } ] } ] }
+  ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": { "instances": [ { "definition": "invoice", "status": "waiting" } ], "actionsCalled": [ { "key": "finance.createInvoice", "input": { "amount": 99, "memo": "grant" }, "attempt": 1 } ] } },
+    { "advance": "PT1M", "expect": { "actionsCalled": [ {}, { "attempt": 2 } ] } },
+    { "advance": "PT1M", "expect": { "actionsCalled": [ {}, {} ] } },
+    { "advance": "PT1M",
+      "expect": { "actionsCalled": [ {}, {}, { "attempt": 3 } ],
+        "instances": [ { "definition": "invoice", "status": "incident", "error": "InvalidOperationException: Finance system down" } ],
+        "audit": [ "step.failed", "step.retryScheduled", "step.failed", "step.retryScheduled", "step.failed", "instance.incident" ] } },
+    { "retry": { "definition": "invoice" },
+      "expect": { "instances": [ { "status": "completed", "error": null } ], "record": { "entity": "application", "id": "a1", "values": { "notes": "INV-7" } },
+        "audit": [ { "is": "instance.retried", "actor": "admin" }, "instance.completed" ] } },
+    { "change": { "entity": "application", "id": "a2", "values": { "stage": "checked" } },
+      "expect": { "record": { "entity": "application", "id": "a2", "values": { "priority": "high", "notes": "InvalidOperationException: The action failed." } },
+        "outputs": { "tolerant": { "p1": { "error": "InvalidOperationException: The action failed." } } } } }
+  ]
+}

@@ -1,0 +1,732 @@
+{
+ "name": "Versions: running instances stay on the version they started; new starts use the newest; records move to a new version only when migrated",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": [
+   {
+    "id": "a1",
+    "title": "One",
+    "stage": "new",
+    "applicant": "ali"
+   },
+   {
+    "id": "a2",
+    "title": "Two",
+    "stage": "new",
+    "applicant": "ali"
+   }
+  ]
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "wf_v",
+   "key": "versioned",
+   "kind": "automation",
+   "title": "Versioned",
+   "entity": "application",
+   "trigger": {
+    "type": "fieldChanged",
+    "field": "stage",
+    "to": [
+     "checked"
+    ]
+   },
+   "steps": [
+    {
+     "id": "w",
+     "type": "wait",
+     "until": {
+      "type": "duration",
+      "duration": "PT1H"
+     }
+    },
+    {
+     "id": "s",
+     "type": "setFields",
+     "values": [
+      {
+       "field": "notes",
+       "value": {
+        "const": "v1"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "specVersion": 1,
+   "id": "lc_app",
+   "key": "applicationReview",
+   "kind": "lifecycle",
+   "title": "Application review",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "enforce",
+    "states": [
+     {
+      "id": "st_draft",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "st_sub",
+      "key": "submitted",
+      "label": "Submitted",
+      "category": "active",
+      "tone": "info"
+     },
+     {
+      "id": "st_rev",
+      "key": "underReview",
+      "label": "Under review",
+      "category": "active",
+      "tone": "warning",
+      "sla": {
+       "within": "P2D",
+       "steps": [
+        {
+         "id": "sla_n",
+         "type": "notify",
+         "channel": "email",
+         "to": [
+          {
+           "managerOf": "entity.reviewer"
+          }
+         ],
+         "body": [
+          "Review of ",
+          {
+           "ref": "entity.title"
+          },
+          " is overdue"
+         ]
+        }
+       ]
+      }
+     },
+     {
+      "id": "st_ok",
+      "key": "approved",
+      "label": "Approved",
+      "category": "terminal",
+      "tone": "success",
+      "onEnter": [
+       {
+        "id": "ok_n",
+        "type": "notify",
+        "channel": "email",
+        "to": [
+         {
+          "field": "entity.applicant"
+         }
+        ],
+        "subject": "Approved",
+        "body": [
+         "Approved with note: ",
+         {
+          "ref": "trigger.transition"
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "st_no",
+      "key": "rejected",
+      "label": "Rejected",
+      "category": "terminal",
+      "tone": "danger"
+     },
+     {
+      "id": "st_wd",
+      "key": "withdrawn",
+      "label": "Withdrawn",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "tr_submit",
+      "key": "submit",
+      "label": "Submit",
+      "from": [
+       "st_draft"
+      ],
+      "to": "st_sub",
+      "who": [
+       {
+        "field": "entity.applicant"
+       }
+      ],
+      "steps": [
+       {
+        "id": "sub_s",
+        "type": "setFields",
+        "values": [
+         {
+          "field": "stage",
+          "value": {
+           "const": "checked"
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "tr_review",
+      "key": "startReview",
+      "label": "Start review",
+      "from": [
+       "st_sub"
+      ],
+      "to": "st_rev",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ],
+      "auto": {
+       "when": {
+        "ref": "entity.reviewer",
+        "op": "notEmpty"
+       }
+      }
+     },
+     {
+      "id": "tr_ok",
+      "key": "approve",
+      "label": "Approve",
+      "from": [
+       "st_rev"
+      ],
+      "to": "st_ok",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ],
+      "tone": "success",
+      "when": {
+       "ref": "entity.amount",
+       "op": "lte",
+       "value": {
+        "const": 10000
+       }
+      },
+      "input": {
+       "form": {
+        "schemaVersion": 1,
+        "id": "f_ok",
+        "title": "Approve",
+        "pages": [
+         {
+          "id": "p",
+          "elements": [
+           {
+            "kind": "field",
+            "id": "f_comment",
+            "key": "comment",
+            "type": "textarea",
+            "label": "Comment",
+            "required": true
+           }
+          ]
+         }
+        ]
+       }
+      },
+      "steps": [
+       {
+        "id": "ok_s",
+        "type": "setFields",
+        "values": [
+         {
+          "field": "notes",
+          "value": {
+           "ref": "input.comment"
+          }
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "id": "tr_no",
+      "key": "reject",
+      "label": "Reject",
+      "from": [
+       "st_rev"
+      ],
+      "to": "st_no",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ],
+      "tone": "danger"
+     },
+     {
+      "id": "tr_wd",
+      "key": "withdraw",
+      "label": "Withdraw",
+      "from": "*",
+      "to": "st_wd",
+      "who": [
+       {
+        "field": "entity.applicant"
+       }
+      ]
+     },
+     {
+      "id": "tr_exp",
+      "key": "expire",
+      "label": "Expire",
+      "from": [
+       "st_draft"
+      ],
+      "to": "st_wd",
+      "auto": {
+       "after": "P30D"
+      },
+      "hidden": true
+     }
+    ],
+    "layout": {
+     "st_draft": [
+      0,
+      0
+     ]
+    }
+   }
+  }
+ ],
+ "steps": [
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "stage": "checked"
+    }
+   }
+  },
+  {
+   "publish": {
+    "specVersion": 1,
+    "id": "wf_v",
+    "key": "versioned",
+    "kind": "automation",
+    "title": "Versioned",
+    "entity": "application",
+    "trigger": {
+     "type": "fieldChanged",
+     "field": "stage",
+     "to": [
+      "checked"
+     ]
+    },
+    "steps": [
+     {
+      "id": "w",
+      "type": "wait",
+      "until": {
+       "type": "duration",
+       "duration": "PT1H"
+      }
+     },
+     {
+      "id": "s",
+      "type": "setFields",
+      "values": [
+       {
+        "field": "notes",
+        "value": {
+         "const": "v2"
+        }
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a2",
+    "values": {
+     "stage": "checked"
+    }
+   }
+  },
+  {
+   "advance": "PT1H",
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "notes": "v1"
+     }
+    },
+    "instanceKinds": [
+     "automation"
+    ],
+    "instances": [
+     {
+      "record": "a1",
+      "version": 1,
+      "status": "completed"
+     },
+     {
+      "record": "a2",
+      "version": 2,
+      "status": "completed"
+     }
+    ]
+   }
+  },
+  {
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a2",
+     "values": {
+      "notes": "v2"
+     }
+    }
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "submit",
+    "actor": "ali"
+   }
+  },
+  {
+   "publish": {
+    "specVersion": 1,
+    "id": "lc_app",
+    "key": "applicationReview",
+    "kind": "lifecycle",
+    "title": "Application review",
+    "entity": "application",
+    "lifecycle": {
+     "field": "status",
+     "mode": "enforce",
+     "states": [
+      {
+       "id": "st_draft",
+       "key": "draft",
+       "label": "Draft",
+       "category": "initial"
+      },
+      {
+       "id": "st_sub",
+       "key": "submitted",
+       "label": "Submitted",
+       "category": "active",
+       "tone": "info"
+      },
+      {
+       "id": "st_rev",
+       "key": "underReview",
+       "label": "Under review",
+       "category": "active",
+       "tone": "warning",
+       "sla": {
+        "within": "P2D",
+        "steps": [
+         {
+          "id": "sla_n",
+          "type": "notify",
+          "channel": "email",
+          "to": [
+           {
+            "managerOf": "entity.reviewer"
+           }
+          ],
+          "body": [
+           "Review of ",
+           {
+            "ref": "entity.title"
+           },
+           " is overdue"
+          ]
+         }
+        ]
+       }
+      },
+      {
+       "id": "st_ok",
+       "key": "approved",
+       "label": "Approved",
+       "category": "terminal",
+       "tone": "success",
+       "onEnter": [
+        {
+         "id": "ok_n",
+         "type": "notify",
+         "channel": "email",
+         "to": [
+          {
+           "field": "entity.applicant"
+          }
+         ],
+         "subject": "Approved",
+         "body": [
+          "Approved with note: ",
+          {
+           "ref": "trigger.transition"
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "st_no",
+       "key": "rejected",
+       "label": "Rejected",
+       "category": "terminal",
+       "tone": "danger"
+      },
+      {
+       "id": "st_hold",
+       "key": "withdrawn",
+       "label": "On hold",
+       "category": "active"
+      }
+     ],
+     "transitions": [
+      {
+       "id": "tr_submit",
+       "key": "submit",
+       "label": "Submit",
+       "from": [
+        "st_draft"
+       ],
+       "to": "st_sub",
+       "who": [
+        {
+         "field": "entity.applicant"
+        }
+       ],
+       "steps": [
+        {
+         "id": "sub_s",
+         "type": "setFields",
+         "values": [
+          {
+           "field": "stage",
+           "value": {
+            "const": "checked"
+           }
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "tr_review",
+       "key": "startReview",
+       "label": "Start review",
+       "from": [
+        "st_sub"
+       ],
+       "to": "st_rev",
+       "who": [
+        {
+         "role": "reviewer"
+        }
+       ],
+       "auto": {
+        "when": {
+         "ref": "entity.reviewer",
+         "op": "notEmpty"
+        }
+       }
+      },
+      {
+       "id": "tr_ok",
+       "key": "approve",
+       "label": "Approve",
+       "from": [
+        "st_rev"
+       ],
+       "to": "st_ok",
+       "who": [
+        {
+         "role": "reviewer"
+        }
+       ],
+       "tone": "success",
+       "when": {
+        "ref": "entity.amount",
+        "op": "lte",
+        "value": {
+         "const": 10000
+        }
+       },
+       "input": {
+        "form": {
+         "schemaVersion": 1,
+         "id": "f_ok",
+         "title": "Approve",
+         "pages": [
+          {
+           "id": "p",
+           "elements": [
+            {
+             "kind": "field",
+             "id": "f_comment",
+             "key": "comment",
+             "type": "textarea",
+             "label": "Comment",
+             "required": true
+            }
+           ]
+          }
+         ]
+        }
+       },
+       "steps": [
+        {
+         "id": "ok_s",
+         "type": "setFields",
+         "values": [
+          {
+           "field": "notes",
+           "value": {
+            "ref": "input.comment"
+           }
+          }
+         ]
+        }
+       ]
+      },
+      {
+       "id": "tr_no",
+       "key": "reject",
+       "label": "Reject",
+       "from": [
+        "st_rev"
+       ],
+       "to": "st_no",
+       "who": [
+        {
+         "role": "reviewer"
+        }
+       ],
+       "tone": "danger"
+      },
+      {
+       "id": "tr_hold",
+       "key": "hold",
+       "label": "Put on hold",
+       "from": [
+        "st_sub"
+       ],
+       "to": "st_hold",
+       "who": [
+        {
+         "role": "admin"
+        }
+       ]
+      },
+      {
+       "id": "tr_unhold",
+       "key": "resume",
+       "label": "Resume",
+       "from": [
+        "st_hold"
+       ],
+       "to": "st_sub",
+       "who": [
+        {
+         "role": "admin"
+        }
+       ]
+      }
+     ],
+     "layout": {
+      "st_draft": [
+       0,
+       0
+      ]
+     }
+    }
+   }
+  },
+  {
+   "expect": {
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "ali",
+     "transitions": [
+      "withdraw"
+     ]
+    }
+   }
+  },
+  {
+   "migrate": {
+    "definition": "applicationReview",
+    "id": "a1",
+    "version": 2
+   },
+   "expect": {
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "head",
+     "transitions": [
+      "hold"
+     ],
+     "state": "submitted"
+    },
+    "audit": [
+     {
+      "is": "instance.migrated",
+      "actor": "admin"
+     }
+    ]
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "hold",
+    "actor": "head"
+   },
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "withdrawn"
+     }
+    },
+    "instanceKinds": [
+     "record"
+    ],
+    "instances": [
+     {
+      "record": "a1",
+      "version": 2,
+      "state": "withdrawn",
+      "status": "active"
+     }
+    ]
+   }
+  }
+ ]
+}

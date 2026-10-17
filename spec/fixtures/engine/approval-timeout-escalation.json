@@ -1,0 +1,30 @@
+{
+  "name": "Reminders, escalation to the manager, and the timed-out path when nobody decides in time",
+  "registry": "_registry.json", "users": "_users.json",
+  "records": { "application": [ { "id": "a1", "title": "Trip", "stage": "new", "reviewer": "rev1" } ] },
+  "definitions": [ {
+    "specVersion": 1, "id": "wf_esc", "key": "escalate", "kind": "automation", "title": "Escalating approval", "entity": "application",
+    "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+    "steps": [
+      { "id": "ap", "type": "approval", "title": "Approve trip", "assignees": [ { "field": "entity.reviewer" } ], "rule": { "type": "any" }, "due": "P3D",
+        "reminders": ["P1D"], "escalation": { "after": "P2D", "assignees": [ { "managerOf": "assignees" } ] },
+        "outcomes": { "approved": [], "rejected": [], "timedOut": [ { "id": "t", "type": "setFields", "values": [ { "field": "priority", "value": { "const": "low" } } ] } ] } },
+      { "id": "n", "type": "notify", "channel": "email", "to": [ { "user": "admin" } ], "body": ["Result: ", { "ref": "steps.ap.outcome" }] }
+    ]
+  } ],
+  "steps": [
+    { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+      "expect": { "tasks": [ { "assignees": ["rev1"], "due": "2026-10-22T09:00:00.000Z" } ], "bookmarks": 3, "notificationCount": 1 } },
+    { "advance": "P1D", "expect": { "notifications": [ { "to": ["rev1"] }, { "to": ["rev1"], "subject": "Reminder: Approve trip (Trip)" } ] } },
+    { "advance": "P1D",
+      "expect": { "tasks": [ { "status": "open", "assignees": ["rev1", "head"], "escalationLevel": 1 } ],
+        "notifications": [ {}, {}, { "to": ["head"], "subject": "Escalated to you: Approve trip (Trip)" } ] } },
+    { "advance": "P1D",
+      "expect": { "tasks": [ { "status": "timedOut", "outcome": "timedOut" } ],
+        "instances": [ { "definition": "escalate", "status": "completed" } ],
+        "record": { "entity": "application", "id": "a1", "values": { "priority": "low" } },
+        "notifications": [ {}, {}, {}, { "to": ["admin"], "body": "Result: timedOut" } ],
+        "bookmarks": 0,
+        "audit": [ "task.created", "task.reminded", "task.escalated", "task.timedOut", "instance.completed" ] } }
+  ]
+}
