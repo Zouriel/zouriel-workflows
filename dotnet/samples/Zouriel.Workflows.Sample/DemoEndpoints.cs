@@ -6,6 +6,10 @@ using Zouriel.Workflows.Time;
 
 namespace Zouriel.Workflows.Sample;
 
+/// <summary>Body of <c>POST /api/demo/bank</c>.</summary>
+/// <param name="Down">Whether the bank refuses calls.</param>
+public sealed record BankSwitch(bool Down);
+
 /// <summary>Body of <c>POST /api/demo/applications</c>.</summary>
 /// <param name="Title">The application's title.</param>
 /// <param name="Amount">The amount asked for.</param>
@@ -108,6 +112,10 @@ public static class DemoEndpoints
 
         g.MapPost("/applications/{id:int}/payment", async (int id, WorkflowEngine engine, HttpContext http) =>
             Results.Ok(new { resumed = await engine.SignalAsync("payment.received", "application", id.ToString(System.Globalization.CultureInfo.InvariantCulture), new() { ["amount"] = 1 }, WorkflowApi.Actor(http)) }));
+
+        // The demo's bank: switch it off to see a payment workflow stop, and put it right from the panel.
+        g.MapGet("/bank", (DemoBank bank) => new { down = bank.Down });
+        g.MapPost("/bank", (BankSwitch body, DemoBank bank) => { bank.Down = body.Down; return new { down = bank.Down }; });
 
         g.MapGet("/inbox", (string? user, DemoInbox inbox) => inbox.For(user).Take(100).Select(n => new
         {

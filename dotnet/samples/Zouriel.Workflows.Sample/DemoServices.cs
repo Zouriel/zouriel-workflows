@@ -44,6 +44,16 @@ public sealed class DemoIdentity : IWorkflowIdentity
             .Take(limit).ToList());
 }
 
+/// <summary>
+/// The demo's bank: a switch the playground flips to show a workflow that stops because a system it
+/// calls is down (Create invoice fails while it is), and how people put it right from the panel.
+/// </summary>
+public sealed class DemoBank
+{
+    /// <summary>Whether the bank refuses calls.</summary>
+    public bool Down { get; set; }
+}
+
 /// <summary>Keeps sent notifications so the demo can show each person's inbox. A real app sends email/push here.</summary>
 public sealed class DemoInbox : INotificationSender
 {

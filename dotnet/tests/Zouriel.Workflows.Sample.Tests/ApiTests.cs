@@ -178,6 +178,28 @@ public sealed class ApiTests : IClassFixture<ApiTests.App>
         Assert.Equal(expected, CreateInvoice.WithoutInvoice(notes, "INV-00042"));
 
     [Fact]
+    public async Task While_the_demo_bank_is_down_creating_an_invoice_fails_and_works_again_once_it_is_back()
+    {
+        var bank = new DemoBank();
+        var invoice = new CreateInvoice(null!, bank);
+        var context = new WorkflowActionContext
+        {
+            ActionKey = "finance.createInvoice", Input = new Dictionary<string, object?> { ["amount"] = 900m }, InstanceId = "r1", IdempotencyKey = "r1:s_invoice", Attempt = 1,
+        };
+        Assert.False((await Json(await As("hana").GetAsync("/api/demo/bank")))["down"]!.GetValue<bool>());
+        Assert.True((await Json(await As("hana").PostAsJsonAsync("/api/demo/bank", new { down = true })))["down"]!.GetValue<bool>());
+        await Json(await As("hana").PostAsJsonAsync("/api/demo/bank", new { down = false }));
+
+        bank.Down = true;
+        var refused = await Assert.ThrowsAsync<InvalidOperationException>(() => invoice.ExecuteAsync(context, default));
+        Assert.Equal("Bank API: 503 Service Unavailable", refused.Message);
+        // A test run never calls the bank, so it never fails because of it.
+        Assert.NotNull((await invoice.ExecuteAsync(new WorkflowActionContext { ActionKey = context.ActionKey, Input = context.Input, InstanceId = "r1", IdempotencyKey = "x", Attempt = 1, Simulation = true }, default))["invoiceNo"]);
+        bank.Down = false;
+        Assert.StartsWith("INV-", (string)(await invoice.ExecuteAsync(context, default))["invoiceNo"]!);
+    }
+
+    [Fact]
     public async Task Nothing_is_paid_when_the_sign_off_runs_out_of_time()
     {
         var def = JsonNode.Parse((await (await As("hana").GetAsync("/api/workflows/definitions/wf_finance")).Content.ReadAsStringAsync()))!["draft"]!;

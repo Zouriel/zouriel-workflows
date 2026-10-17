@@ -10,10 +10,12 @@ namespace Zouriel.Workflows.Sample;
 
 /// <summary>An app action: workflows call it with "Run action → Create invoice".</summary>
 /// <param name="db">The app's database (the same unit of work as the workflow).</param>
-public sealed class CreateInvoice(SampleDb db) : IUndoableWorkflowAction
+/// <param name="bank">The demo's bank; while it is down the action fails, as a real call to a payment system would.</param>
+public sealed class CreateInvoice(SampleDb db, DemoBank bank) : IUndoableWorkflowAction
 {
     public async Task<IReadOnlyDictionary<string, object?>> ExecuteAsync(WorkflowActionContext context, CancellationToken ct)
     {
+        if (bank.Down && !context.Simulation) throw new InvalidOperationException("Bank API: 503 Service Unavailable");
         // The idempotency key makes retries safe: the same run asking twice gets the same invoice.
         var number = "INV-" + Math.Abs(context.IdempotencyKey.GetHashCode() % 100000).ToString("D5", System.Globalization.CultureInfo.InvariantCulture);
         if (!context.Simulation && context.EntityId is not null && int.TryParse(context.EntityId, out var id))
@@ -128,6 +130,7 @@ public static class SampleSetup
                 .Output("invoiceNo", "Invoice number"))
             .Signal("payment.received", s => s.Label("Payment received").For("application").Field("amount", "Amount", "currency")));
         services.AddSingleton<DemoInbox>();
+        services.AddSingleton<DemoBank>();
     }
 
     /// <summary>Creates the tables and fills them with demo records and published workflows.</summary>
