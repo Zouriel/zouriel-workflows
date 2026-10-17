@@ -65,6 +65,7 @@ A token path is a dot path read at the moment it is evaluated:
 | `entity.<field>` | The current value of a field on the workflow's record (read fresh each time). |
 | `entity.<relation>.<field>` | A field of a related record (any depth the registry allows; `null` when the relation is empty). |
 | `trigger.field`, `trigger.from`, `trigger.to`, `trigger.actor`, `trigger.at` | What started the instance (§5). `trigger.data.<key>` for signal and manual-input data. |
+| `trigger.comment` | The remarks given with the lifecycle move or reset that started the run (§6), or `null`. |
 | `input.<key>` | The answers of the form collected by the transition being applied, or the manual trigger's form. |
 | `steps.<stepId>.<output>` | An output of an earlier step (§7 lists them per step type). |
 | `item.<field>` | Inside `forEach`, the current item (a record of the collection's entity). `item.index` is the 0-based position. |
@@ -157,7 +158,7 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   and an `sla: { within: <duration>, calendar?, steps: [...] }` (run once when the record has been
   in the state longer than `within`).
 - **Transitions** `{ id, key, label, from: [stateId…] | "*", to: stateId, who, when, input, steps,
-  auto, confirm, tone, hidden }`.
+  auto, confirm, tone, hidden, comment }`.
   - `from: "*"` means every non-terminal state other than `to`.
   - `who`: assignees allowed to apply it (§8). Empty or missing = nobody by hand (automatic/system
     only). Hosts may additionally require the `workflows.transition` permission.
@@ -171,15 +172,26 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
     change to the record). Auto transitions ignore `who` but respect `when` (guard).
   - `hidden: true` keeps it off the record panel; people can never apply it, only automations and
     the system.
+  - `comment`: the **remarks** people give when they apply it: `"none"` (not asked; remarks sent
+    are ignored), `"optional"` or `"required"`. Absent: `optional` when `tone` is `danger`, otherwise
+    `none`. The request carries them as `comment` (a string): they are trimmed, empty means none, and
+    a person may give at most 2000 characters (`invalidInput`). When the setting is `required` a
+    person must give them (`commentRequired`, 400); automatic moves, the system and workflow steps
+    never need them (an `applyTransition` step can pass its own, §7). Remarks are kept in the
+    `lifecycle.transitioned` audit data as `comment` (only when given) and read as `trigger.comment`
+    by the transition's `steps`, the `onExit`/`onEnter` runs of that move and the
+    `stateEntered`/`transitionApplied` automations it starts.
 - **Applying a transition** (by a person, by `applyTransition`, or automatically) is one atomic
   operation: check the record is in a `from` state → check `who` and `hidden` (people only; the API
   only accepts a signed-in person, never an anonymous or system caller) → check the guard →
-  validate the input → run the current state's `onExit` (synchronous part) → write the field →
+  validate the input → check the remarks (people only) → run the current state's `onExit` (synchronous part) → write the field →
   record the transition → run the transition's `steps`, then `onEnter` of the new state (skipped if
   those steps already moved the record on) → commit. Steps
   run until they first wait; the rest continues in the background. If any check fails nothing
   changes and the API returns the error code (`notInFromState`, `notAllowed`, `guardFailed`,
-  `invalidInput`, `staleState`).
+  `invalidInput`, `commentRequired`, `staleState`). The record view lists each transition the
+  viewer may apply as `{ key, label, to, toLabel, tone, confirm, form, comment }`, with `comment` the
+  resolved remarks setting (never `null`).
 - **Record instance.** A lifecycle has one long-lived instance per record (`status: active` until
   the record reaches a terminal state, then `completed`). It is created when the record is created
   (state = the record's value, or the initial state when empty, which also writes the field) or,
@@ -204,22 +216,33 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
 - **Force state.** Admins with `workflows.intervene` may move a record to any state with a reason
   (`POST /records/{entity}/{id}/force-state`). No guards or inputs are checked; `onExit`/`onEnter`
   run unless `skipSteps: true`. Audited as `lifecycle.forced`.
-- **Reset.** `reset?: { label?, to?, who, confirm?, input?: { form }, runExitEnter?, cancelAutomations?,
-  steps? }` lets people start a record's workflow over (`POST /records/{entity}/{id}/reset` with
-  `{ input? }`). Without `reset` a lifecycle cannot be reset. Applying it, in one atomic operation:
+- **Reset.** `reset?: { label?, to?, who, confirm?, input?: { form }, comment?, states?, runExitEnter?,
+  cancelAutomations?, steps? }` lets people start a record's workflow over (`POST /records/{entity}/{id}/reset` with
+  `{ input?, comment?, undo? }`). Without `reset` a lifecycle cannot be reset. `comment` is the
+  remarks setting, as for transitions but defaulting to `optional`. `states` lists the state ids the
+  reset is offered in; absent = every state. Editors may offer choices such as "from a state onwards"
+  (that state and every state reachable from it without passing through the reset's `to`), but they
+  store the resulting list: the engine only checks that the record's current state is in it. An
+  unknown state id is a lint error (`unknownState`); an empty list a warning (`resetNeverOffered`).
+  Applying it, in one atomic operation:
   check the caller is a signed-in person among `who` (empty = nobody; `notAllowed`) → refuse when the
+  record's current state is not in `states` (`notAllowed`, "“Start over” isn't offered in “Draft”.")
+  → refuse when the
   record is already in `to` (default: the initial state) and in sync with nothing running
-  (`nothingToReset`) → validate the input form (`invalidInput`) → cancel the record instance's
+  (`nothingToReset`) → validate the input form (`invalidInput`) → check the remarks (`commentRequired`
+  when required and empty; trimmed, at most 2000 characters, ignored when `none`) → cancel the record instance's
   unfinished child runs, and the unfinished automation instances about the record unless
   `cancelAutomations: false` (their open tasks are cancelled with them) → drop the instance's timers
   → run the current state's `onExit` only when `runExitEnter: true` → write the field to `to` → audit
-  `lifecycle.reset` (before/after state, data: label, input masked) → run `steps` as a child run
-  (list id `reset`, reason `reset`; `input.*` reads the answers, `trigger.type` is `reset`) → run
+  `lifecycle.reset` (before/after state, data: label, input masked, `comment` when given) → run `steps`
+  as a child run (list id `reset`, reason `reset`; `input.*` reads the answers, `trigger.type` is
+  `reset`, `trigger.comment` the remarks) → run
   `to`'s `onEnter` only when `runExitEnter: true`, otherwise plan its timers. The steps can change
   the record and other records: `setFields` with `target: <relation path>` changes a related record,
   and `forEach` over a collection with `setFields` `target: "item"` changes each of its items.
-  The record view offers `reset: { label, to, toLabel, confirm, form }` to people among `who` when a
-  reset would change something, and `null` otherwise. Like any move into a state, a reset fires
+  The record view offers `reset: { label, to, toLabel, confirm, form, comment }` (`comment`: the
+  resolved remarks setting) to people among `who` when the record's state is in `states` and a reset
+  would change something, and `null` otherwise. Like any move into a state, a reset fires
   `stateEntered` triggers.
 - **Taking back what the workflow did.** Every completed step writes an undo record: `setFields`
   keeps each field's value before and after, `createRecord` the record it made, `action` its input
@@ -278,13 +301,21 @@ value cannot add path segments, a query or another host; webhooks do not follow 
 | `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
 | `createRecord` | `entity: <registry entity>`, `values: [{ field, value: operand }]` (fields must be `settable`; not a field a lifecycle owns, which starts at its initial state). Needs a gateway that can create records (`notSupported` otherwise). One committed create, like `setFields`. | `id` |
 | `setVariables` | `values: [{ variable: <variable id>, value: operand }]` | — |
-| `applyTransition` | `target?: "self"|<relation path>`, `lifecycle: <definition key>`, `transition: <key>`, `input?: { <key>: operand }`, `ifNotAllowed: "fail"|"skip"` | `applied` (bool) |
+| `applyTransition` | `target?: "self"|<relation path>`, `lifecycle: <definition key>`, `transition: <key>`, `input?: { <key>: operand }`, `comment?: template` (remarks recorded with the move and read as `trigger.comment`; the transition's `required` check does not apply to a workflow), `ifNotAllowed: "fail"|"skip"` | `applied` (bool) |
 | `notify` | `channel`, `to: recipients`, `subject?: template`, `body: template`, `link?: "record"|template` | `sent` (count) |
 | `webhook` | `connection?` (named in settings) or `url` (must match an allowed origin), `method`, `path?: template`, `headers?: {name: template}`, `body?: json-with-operands`, `expect?: [status…]` | `status`, `body` |
 | `action` | `action: <registry key>`, `input: { <key>: operand }`. A handler that can also undo (`undo(input, output)`) makes the action undoable by a reset. | the action's declared outputs |
 | `subWorkflow` | `workflow: <automation key>`, `target?`, `wait: bool`, `input?` | `instanceId`, `status`, `outputs` (the child's `vars`) |
 | `goTo` | `target: <step id>`, `maxTimes` (1–50). Jumps back to an earlier step in the same list or an enclosing list on the current path (never into or out of a `parallel` path or `forEach`). When the count is reached the step is skipped. | `count` |
 | `end` | `result: "completed"|"failed"`, `reason?: template` | — |
+
+**Remarks on decisions.** `requireComment` on an `approval` or a `task`: `never` (default; a comment
+is always allowed), `always` (every decision needs one), or `reject`: a comment is needed for an
+approval's `rejected` outcome, and for any task outcome whose `tone` is `danger` (an outcome keyed
+`rejected` counts too). A missing or blank comment fails the decision with `commentRequired` (400).
+The task view lists the outcomes with their `tone`, so clients can tell which ones need a comment. A
+task with `requireComment: "reject"` and no `danger` (or `rejected`) outcome never asks; lint warns
+(`noNegativeOutcome`).
 
 **Assignee rules for `approval`.** Each assignee decides once. `any`: first approve → approved; all
 reject → rejected. `all`: any reject → rejected; all approve → approved. `count`/`percent`: approved
@@ -344,10 +375,12 @@ Categories and actions:
   could not be processed; data: purpose, error).
 - `step`: `started`, `completed` (data: outputs, masked), `failed` (data: error, attempt),
   `retryScheduled`, `skipped`, `branchTaken` (data: path), `waiting`.
-- `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked),
+- `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked, `comment`
+  when remarks were given),
   `autoTransitioned`, `autoSkipped` (an automatic transition's time came but its guard failed or the
   record had left the state), `slaBreached` (data: state, within), `forced` (data: reason),
-  `reset` (before/after state, data: label, input masked), `writeRefused`, `writeObserved`, `outOfSync`.
+  `reset` (before/after state, data: label, input masked, `comment` when given, `undone`), `writeRefused`,
+  `writeObserved`, `outOfSync`.
 - `task`: `created`, `assigned`, `reminded`, `escalated`, `delegated`, `reassigned`, `decided`
   (data: outcome, comment, answers masked), `cancelled`, `timedOut`.
 - `trigger`: `suppressed`, `skipped`, `paused`, `resumed`, `failed` (data: eventId, error).
