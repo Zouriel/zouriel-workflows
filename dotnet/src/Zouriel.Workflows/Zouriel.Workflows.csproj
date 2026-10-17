@@ -1,7 +1,21 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    
+    <Description>A workflow engine that runs JSON workflow definitions made with the @zouriel/ui workflow builder: automations started by record changes, lifecycles (states and transitions), approvals, timers and a hash-chained audit log.</Description>
+    <PackageTags>workflow;bpm;approval;state-machine;lifecycle;audit</PackageTags>
   </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Zouriel.Workflows.EntityFrameworkCore" />
+    <InternalsVisibleTo Include="Zouriel.Workflows.AspNetCore" />
+    <InternalsVisibleTo Include="Zouriel.Workflows.Tests" />
+  </ItemGroup>
 
 </Project>

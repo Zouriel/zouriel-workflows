@@ -1,11 +1,12 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Test helpers for Zouriel Workflows: an in-memory engine host with a manual clock and recording fakes, and the spec conformance fixture runner.</Description>
+    <PackageTags>workflow;testing</PackageTags>
+  </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Zouriel.Workflows\Zouriel.Workflows.csproj" />
   </ItemGroup>
-
-  <PropertyGroup>
-    
-  </PropertyGroup>
 
 </Project>

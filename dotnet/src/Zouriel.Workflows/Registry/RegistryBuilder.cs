@@ -150,7 +150,7 @@ public sealed class EntityBuilder<T> where T : class
         configure?.Invoke(fb);
         var getter = member.Compile();
         var setter = BuildSetter(member);
-        _fields.Add(fb.Build(o => Values.Normalize(getter((T)o)), setter, path));
+        _fields.Add(fb.Build(o => Values.Normalize(SafeGet(getter, (T)o)), setter, path));
         return this;
     }
 
@@ -161,7 +161,7 @@ public sealed class EntityBuilder<T> where T : class
         var fb = new FieldBuilder(key, RegistryBuilder.Humanize(path.Split('.').Last()), FieldTypes.Relation);
         configure?.Invoke(fb);
         var getter = navigation.Compile();
-        _fields.Add(fb.Build(o => getter((T)o), null, path, EntityKeyOf(typeof(TOther))));
+        _fields.Add(fb.Build(o => SafeGet(getter, (T)o), null, path, EntityKeyOf(typeof(TOther))));
         return this;
     }
 
@@ -178,6 +178,19 @@ public sealed class EntityBuilder<T> where T : class
 
     // Entity builders run inside RegistryBuilder.Build(), after every Entity<T>() call has
     // recorded its key, so related entity keys are known here.
+    /// <summary>Nested paths (<c>x => x.Programme.Name</c>) read as null when a relation on the way is empty.</summary>
+    private static TProp? SafeGet<TProp>(Func<T, TProp> getter, T o)
+    {
+        try
+        {
+            return getter(o);
+        }
+        catch (NullReferenceException)
+        {
+            return default;
+        }
+    }
+
     private string EntityKeyOf(Type t) =>
         _root.EntityKeys.TryGetValue(t, out var k) ? k : throw new InvalidOperationException($"{typeof(T).Name} refers to {t.Name}, which is not a registered workflow entity.");
 

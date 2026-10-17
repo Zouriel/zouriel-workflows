@@ -88,6 +88,7 @@ public sealed partial class WorkflowEngine
     /// <summary>Runs one unit of work, retrying when a concurrent writer changed the same rows.</summary>
     internal async Task<T> RunAsync<T>(Func<Uow, Task<T>> work, CancellationToken ct)
     {
+        await RefreshOwnershipAsync(ct);
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -139,26 +140,38 @@ public sealed partial class WorkflowEngine
 
     internal sealed class OwnershipMap(IReadOnlyList<OwnedField> fields, DateTimeOffset loadedAt)
     {
+        public IReadOnlyList<OwnedField> Fields { get; } = fields;
         public DateTimeOffset LoadedAt { get; } = loadedAt;
-        public OwnedField? Find(string entity, string field) => fields.FirstOrDefault(f => f.Entity == entity && f.Field == field);
-        public IEnumerable<OwnedField> ForEntity(string entity) => fields.Where(f => f.Entity == entity);
+        public OwnedField? Find(string entity, string field) => Fields.FirstOrDefault(f => f.Entity == entity && f.Field == field);
+        public IEnumerable<OwnedField> ForEntity(string entity) => Fields.Where(f => f.Entity == entity);
     }
 
     /// <summary>How long the change hook trusts its cached list of lifecycle-owned fields (other nodes may publish).</summary>
     public TimeSpan OwnershipRefreshInterval { get; set; } = TimeSpan.FromSeconds(30);
 
+    /// <summary>
+    /// The lifecycle-owned fields, as last loaded. Every unit of work refreshes a stale copy before it
+    /// opens its session (see <see cref="RefreshOwnershipAsync"/>); only the very first use loads it here,
+    /// synchronously, because the change hook can run inside a synchronous SaveChanges.
+    /// </summary>
     internal OwnershipMap Ownership
     {
         get
         {
             var m = _ownership;
-            if (m is not null && Now - m.LoadedAt < OwnershipRefreshInterval) return m;
-            // The change hook can run inside a synchronous SaveChanges, so this load is synchronous
-            // on purpose; it happens at most once per refresh interval.
-            m = LoadOwnershipAsync(CancellationToken.None).GetAwaiter().GetResult();
+            if (m is not null) return m;
+            m = Task.Run(() => LoadOwnershipAsync(CancellationToken.None)).GetAwaiter().GetResult();
             _ownership = m;
             return m;
         }
+    }
+
+    /// <summary>Reloads the lifecycle-owned fields when the cached copy is older than <see cref="OwnershipRefreshInterval"/>.</summary>
+    public async Task RefreshOwnershipAsync(CancellationToken ct = default)
+    {
+        var m = _ownership;
+        if (m is not null && Now - m.LoadedAt < OwnershipRefreshInterval && Now >= m.LoadedAt) return;
+        _ownership = await LoadOwnershipAsync(ct);
     }
 
     internal async Task<OwnershipMap> LoadOwnershipAsync(CancellationToken ct)
@@ -174,20 +187,34 @@ public sealed partial class WorkflowEngine
         return new OwnershipMap(list, Now);
     }
 
-    /// <summary>Forces the lifecycle ownership cache to reload (called after publishing).</summary>
-    public void InvalidateOwnership() => _ownership = null;
+    /// <summary>Marks the lifecycle ownership cache stale; the next unit of work reloads it.</summary>
+    public void InvalidateOwnership()
+    {
+        if (_ownership is { } m) _ownership = new OwnershipMap(m.Fields, DateTimeOffset.MinValue);
+    }
 
     internal WorkflowActor? CurrentActor() => Options.ActorAccessor?.Current;
+
+    private readonly System.Collections.Concurrent.ConcurrentBag<Task> _backgroundWrites = [];
+
+    /// <summary>Waits for audit entries written in the background (refused writes). Tests and shutdown use it.</summary>
+    public async Task FlushBackgroundAsync()
+    {
+        while (_backgroundWrites.TryTake(out var t)) await t;
+    }
 
     /// <summary>Audits a refused write to a lifecycle-owned field, in its own unit of work (the refused write rolls back).</summary>
     internal void RecordRefusedWrite(string entity, string id, string field, string definitionId, object? from, object? to, Changes.WorkflowWriteScope? scope)
     {
         var actor = scope?.Actor ?? CurrentActor() ?? WorkflowActor.System;
-        Task.Run(() => RunAsync(async u => await u.AuditAsync(new AuditEntry
+        // Written in its own unit after the refused write rolls back; not awaited, so a database that
+        // locks on writes (SQLite) is not asked to wait on itself.
+        var pending = Task.Run(() => RunAsync(async u => await u.AuditAsync(new AuditEntry
         {
             Category = "lifecycle", Action = "writeRefused", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id, DefinitionId = definitionId,
             Actor = actor, Before = new Dictionary<string, object?> { [field] = from }, After = new Dictionary<string, object?> { [field] = to },
-        }, CancellationToken.None), CancellationToken.None)).GetAwaiter().GetResult();
+        }, CancellationToken.None), CancellationToken.None));
+        _backgroundWrites.Add(pending);
     }
 
     // ── Settings ──────────────────────────────────────────────────────────

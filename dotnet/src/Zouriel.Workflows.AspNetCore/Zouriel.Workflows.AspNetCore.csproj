@@ -1,11 +1,16 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>ASP.NET Core hosting for Zouriel Workflows: AddWorkflows() registration, background workers for the outbox and timers, and MapWorkflowApi() with the REST API the @zouriel/ui workflow components use.</Description>
+    <PackageTags>workflow;aspnetcore;api</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Zouriel.Workflows\Zouriel.Workflows.csproj" />
   </ItemGroup>
-
-  <PropertyGroup>
-    
-  </PropertyGroup>
 
 </Project>

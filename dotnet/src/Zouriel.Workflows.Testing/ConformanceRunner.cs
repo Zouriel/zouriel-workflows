@@ -92,6 +92,7 @@ public static class ConformanceRunner
         catch (WorkflowException e) when (expectError is not null)
         {
             if (e.Code != expectError) throw new ConformanceException($"expected error '{expectError}' but got '{e.Code}': {e.Message}");
+            await host.SettleAsync(ct);
         }
         catch (WorkflowException e)
         {

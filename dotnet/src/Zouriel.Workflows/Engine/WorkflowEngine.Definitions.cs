@@ -164,7 +164,15 @@ public sealed partial class WorkflowEngine
     internal static string Hash(string json) => AuditWriter.Sha256Hex(Values.Canonical(Values.FromJson(json)));
 
     /// <summary>Publishes the draft as a new immutable version. Lint errors block publishing.</summary>
-    public Task<DefinitionSummary> PublishAsync(string id, string? note, WorkflowActor actor, CancellationToken ct = default) =>
+    public async Task<DefinitionSummary> PublishAsync(string id, string? note, WorkflowActor actor, CancellationToken ct = default)
+    {
+        var result = await PublishCoreAsync(id, note, actor, ct);
+        // Record writes right after publishing must already see a new lifecycle's field ownership.
+        await RefreshOwnershipAsync(ct);
+        return result;
+    }
+
+    private Task<DefinitionSummary> PublishCoreAsync(string id, string? note, WorkflowActor actor, CancellationToken ct) =>
         RunAsync(async u =>
         {
             var rec = await RequireDefinitionAsync(u, id, ct);
@@ -244,7 +252,14 @@ public sealed partial class WorkflowEngine
     public Task<DefinitionSummary> RestoreAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
         SetStatusAsync(id, null, "restored", actor, ct);
 
-    private Task<DefinitionSummary> SetStatusAsync(string id, string? status, string action, WorkflowActor actor, CancellationToken ct) =>
+    private async Task<DefinitionSummary> SetStatusAsync(string id, string? status, string action, WorkflowActor actor, CancellationToken ct)
+    {
+        var result = await SetStatusCoreAsync(id, status, action, actor, ct);
+        await RefreshOwnershipAsync(ct);
+        return result;
+    }
+
+    private Task<DefinitionSummary> SetStatusCoreAsync(string id, string? status, string action, WorkflowActor actor, CancellationToken ct) =>
         RunAsync(async u =>
         {
             var rec = await RequireDefinitionAsync(u, id, ct);

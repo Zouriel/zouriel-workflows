@@ -41,6 +41,7 @@ public sealed class WorkflowTestHost
     /// <summary>Runs the background work (outbox, notifications, due timers) until nothing is left, like the hosted workers do.</summary>
     public async Task SettleAsync(CancellationToken ct = default)
     {
+        await Engine.FlushBackgroundAsync();
         for (var i = 0; i < 100; i++)
         {
             var n = await Engine.ProcessOutboxAsync(500, ct);
