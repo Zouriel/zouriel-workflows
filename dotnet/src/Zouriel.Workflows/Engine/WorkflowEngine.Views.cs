@@ -3,6 +3,7 @@ using Zouriel.Workflows.Audit;
 using Zouriel.Workflows.Json;
 using Zouriel.Workflows.Model;
 using Zouriel.Workflows.Storage;
+using Zouriel.Workflows.Time;
 using TaskStatus = Zouriel.Workflows.Storage.TaskStatus;
 
 namespace Zouriel.Workflows.Engine;
@@ -521,30 +522,46 @@ public sealed partial class WorkflowEngine
             foreach (var t in await u.S.ListTriggersAsync(ct))
             {
                 var c = await CompiledAsync(u, t.DefinitionId, t.Version, ct);
-                list.Add(new TriggerOverview(t.DefinitionId, t.DefinitionKey, c.Definition.Title, c.Definition.Kind, t.Type, t.Entity, t.Field, Describe(c.Definition, t), t.Version));
+                // Lifecycle triggers name the lifecycle's states and transitions, so read its published version.
+                CompiledDefinition? lc = null;
+                if (t.Lifecycle is { } key && await u.S.GetDefinitionByKeyAsync(key, ct) is { Version: > 0 } rec)
+                    lc = await CompiledAsync(u, rec.Id, rec.Version, ct);
+                list.Add(new TriggerOverview(t.DefinitionId, t.DefinitionKey, c.Definition.Title, c.Definition.Kind, t.Type, t.Entity, t.Field, Describe(c.Definition, t, lc), t.Version));
             }
             return list;
         }, ct);
 
-    private string Describe(WorkflowDefinition d, TriggerRecord t)
+    private string Describe(WorkflowDefinition d, TriggerRecord t, CompiledDefinition? lifecycle)
     {
         var entity = Registry.Entity(t.Entity);
         var field = entity?.Field(t.Field);
         var tr = d.Trigger;
         string Values(List<JsonNode?>? v) => v is { Count: > 0 } ? string.Join(" or ", v.Select(x => field?.OptionLabel(Json.Values.FromJson(x)) ?? x?.ToString())) : "anything";
+        static string A(string? word) => $"{(word is { Length: > 0 } && "aeiouAEIOU".Contains(word[0]) ? "an" : "a")} {word}";
+        string LifecycleName() => lifecycle?.Definition.Title ?? t.Lifecycle ?? "a lifecycle";
         return t.Type switch
         {
             "lifecycle" => $"Controls {entity?.Label ?? t.Entity} {field?.Label ?? t.Field}",
-            "created" => $"When a {entity?.Label ?? t.Entity} is created",
-            "deleted" => $"When a {entity?.Label ?? t.Entity} is deleted",
+            "created" => $"When {A(entity?.Label ?? t.Entity)} is created",
+            "deleted" => $"When {A(entity?.Label ?? t.Entity)} is deleted",
             "fieldChanged" => $"When {entity?.Label} {field?.Label ?? t.Field} changes" + (tr?.From is { Count: > 0 } ? $" from {Values(tr.From)}" : "") + (tr?.To is { Count: > 0 } ? $" to {Values(tr.To)}" : ""),
-            "stateEntered" => $"When {t.Lifecycle} enters {string.Join(" or ", tr?.States ?? [])}",
-            "transitionApplied" => $"After {t.Lifecycle}: {string.Join(" or ", tr?.Transitions ?? [])}",
-            "dateReached" => $"{tr?.Offset} from {entity?.Label} {field?.Label ?? t.Field}",
+            "stateEntered" => $"When {LifecycleName()} enters {string.Join(" or ", (tr?.States ?? []).Select(k => lifecycle?.StateByKey(k)?.Label ?? k))}",
+            "transitionApplied" => $"After “{string.Join("” or “", (tr?.Transitions ?? []).Select(k => lifecycle?.TransitionByKey(k)?.Label ?? k))}” in {LifecycleName()}",
+            "dateReached" => $"{Offset(tr?.Offset)} {entity?.Label} {field?.Label ?? t.Field}",
             "schedule" => $"On schedule {tr?.Cron}",
             "manual" => $"Button “{tr?.Label}” on {entity?.Label ?? "nothing"}",
             "signal" => $"When the app sends {t.Signal}",
             _ => t.Type,
         };
+    }
+
+    /// <summary>"2 days before", "3 hours after", "On" for no offset: a date trigger's offset in words.</summary>
+    private static string Offset(string? iso)
+    {
+        if (string.IsNullOrEmpty(iso) || !IsoDuration.TryParse(iso, out var d) || d.IsZero) return "On";
+        var parts = new List<string>();
+        void Add(int n, string unit) { if (n != 0) parts.Add($"{n} {unit}{(n == 1 ? "" : "s")}"); }
+        Add(d.Years, "year"); Add(d.Months, "month"); Add(d.Weeks, "week"); Add(d.Days, "day"); Add(d.Hours, "hour"); Add(d.Minutes, "minute");
+        return $"{string.Join(" ", parts)} {(d.Negative ? "before" : "after")}";
     }
 }

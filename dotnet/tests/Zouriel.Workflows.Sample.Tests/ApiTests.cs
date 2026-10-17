@@ -54,6 +54,15 @@ public sealed class ApiTests : IClassFixture<ApiTests.App>
     }
 
     [Fact]
+    public async Task Watching_summaries_use_names_not_keys()
+    {
+        var triggers = (await Json(await As("hana").GetAsync("/api/workflows/triggers"))).AsArray().Select(t => t!["summary"]!.GetValue<string>()).ToList();
+        Assert.Contains(triggers, s => s.StartsWith("When Scholarship review enters Submitted", StringComparison.Ordinal));
+        Assert.Contains(triggers, s => s.StartsWith("2 days before Application Deadline", StringComparison.Ordinal));
+        Assert.DoesNotContain(triggers, s => s.Contains("scholarshipReview", StringComparison.Ordinal) || s.Contains("-P", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Me_says_what_the_caller_may_do()
     {
         var hana = await Json(await As("hana").GetAsync("/api/workflows/me"));
