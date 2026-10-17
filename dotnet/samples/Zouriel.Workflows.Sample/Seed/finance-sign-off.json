@@ -10,18 +10,21 @@
           "reminders": ["P1D"], "escalation": { "after": "P2D", "assignees": [ { "managerOf": "assignees" } ] },
           "instructions": ["Approve paying ", { "ref": "entity.amount" }, " for “", { "ref": "entity.title" }, "”."], "requireComment": "reject",
           "outcomes": { "approved": [], "rejected": [ { "id": "s_fin_no", "type": "end", "title": "Stop", "result": "failed", "reason": "Finance did not sign off." } ],
-                        "timedOut": [ { "id": "s_fin_late", "type": "notify", "title": "Chase finance", "channel": "inApp", "to": [ { "role": "head" } ], "body": "Finance has not signed off in time." } ] } } ] },
+                        "timedOut": [ { "id": "s_fin_late", "type": "notify", "title": "Tell the head", "channel": "inApp", "to": [ { "role": "head" } ], "link": "record",
+                                       "body": ["Finance did not sign off paying “", { "ref": "entity.title" }, "” in time, so nothing was paid. Start the payment again once finance is ready."] },
+                                     { "id": "s_fin_stop", "type": "end", "title": "Stop: no sign-off", "result": "failed", "reason": "Finance did not sign off in time." } ] } } ] },
       { "id": "p_head", "label": "Head (large amounts)", "steps": [
         { "id": "s_big", "type": "branch", "title": "Over 10,000?", "paths": [
           { "id": "p_big", "label": "Over 10,000", "when": { "ref": "entity.amount", "op": "gt", "value": { "const": 10000 } },
             "steps": [ { "id": "s_head", "type": "approval", "title": "Head sign-off", "assignees": [ { "role": "head" } ], "rule": { "type": "any" }, "due": "P3D",
-              "outcomes": { "approved": [], "rejected": [ { "id": "s_head_no", "type": "end", "result": "failed", "reason": "The head did not sign off." } ], "timedOut": [] } } ] } ] } ] } ] },
+              "outcomes": { "approved": [], "rejected": [ { "id": "s_head_no", "type": "end", "result": "failed", "reason": "The head did not sign off." } ], "timedOut": [ { "id": "s_head_late", "type": "end", "title": "Stop: no sign-off", "result": "failed", "reason": "The head did not sign off in time." } ] } } ] } ] } ] } ] },
     { "id": "s_invoice", "type": "action", "title": "Create the invoice", "action": "finance.createInvoice",
       "input": { "amount": { "ref": "entity.amount" }, "memo": { "ref": "entity.title" } }, "retry": { "max": 3, "backoff": "exponential", "initial": "PT1M" } },
     { "id": "s_tell", "type": "notify", "title": "Tell the applicant", "channel": "email", "to": [ { "field": "entity.applicant" }, { "email": [ { "ref": "entity.applicantEmail" } ] } ],
       "subject": "Your scholarship is approved", "body": ["Congratulations! Invoice ", { "ref": "steps.s_invoice.invoiceNo" }, " has been raised for ", { "ref": "entity.amount" }, "."] },
     { "id": "s_pay", "type": "wait", "title": "Wait for the payment", "until": { "type": "signal", "signal": "payment.received", "timeout": "P14D",
-      "onTimeout": { "id": "l_late", "steps": [ { "id": "s_unpaid", "type": "notify", "channel": "inApp", "to": [ { "role": "finance" } ], "body": ["Payment for “", { "ref": "entity.title" }, "” has not arrived."] } ] } } },
+      "onTimeout": { "id": "l_late", "steps": [ { "id": "s_unpaid", "type": "notify", "channel": "inApp", "to": [ { "role": "finance" } ], "body": ["Payment for “", { "ref": "entity.title" }, "” has not arrived after two weeks. Check with the bank, then record the payment by hand."] },
+        { "id": "s_unpaid_stop", "type": "end", "title": "Stop: not paid", "result": "failed", "reason": "The payment did not arrive within 14 days." } ] } } },
     { "id": "s_paid", "type": "setFields", "title": "Mark as paid", "values": [ { "field": "paid", "value": { "const": true } } ] }
   ]
 }

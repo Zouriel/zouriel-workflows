@@ -20,7 +20,7 @@
     ],
     "transitions": [
       { "id": "tr_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_submitted", "who": [ { "field": "entity.applicant" } ], "tone": "primary",
-        "confirm": "Submit your application? You can't change it afterwards." },
+        "confirm": "Submit your application for review? You can only change it again if a reviewer sends it back for changes." },
       { "id": "tr_take", "key": "startReview", "label": "Start review", "from": ["st_submitted"], "to": "st_review", "who": [ { "role": "reviewer" } ],
         "auto": { "when": { "ref": "entity.reviewer", "op": "notEmpty" } },
         "steps": [ { "id": "s_assign", "type": "branch", "title": "Assign a reviewer if none", "paths": [
