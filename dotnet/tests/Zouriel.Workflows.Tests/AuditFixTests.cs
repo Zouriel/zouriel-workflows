@@ -749,6 +749,42 @@ public sealed class BusinessLogicAuditTests
     }
 }
 
+/// <summary>Spec items the engine never produced, from the final audit.</summary>
+public sealed class SpecGapAuditTests
+{
+    private const string Lc = """
+    { "specVersion": 1, "id": "lc_r", "key": "lcr", "kind": "lifecycle", "title": "LC", "entity": "application",
+      "lifecycle": { "field": "status",
+        "states": [ { "id": "d", "key": "draft", "label": "Draft", "category": "initial" },
+                    { "id": "s", "key": "submitted", "label": "Sub", "category": "active" },
+                    { "id": "o", "key": "approved", "label": "OK", "category": "terminal" } ],
+        "transitions": [ { "id": "t1", "key": "submit", "label": "Submit", "from": ["d"], "to": "s", "who": [ { "role": "reviewer" } ] },
+                         { "id": "t2", "key": "approve", "label": "OK", "from": ["s"], "to": "o", "who": [ { "role": "reviewer" } ] } ] } }
+    """;
+
+    [Fact]
+    public async Task Renaming_a_state_or_transition_key_in_use_is_a_renamedInUse_warning()
+    {
+        var h = await AuditFixTests.HostAsync();
+        await h.PublishAsync(Lc);
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_m", "key": "mover", "kind": "automation", "title": "Mover", "entity": "application", "trigger": { "type": "manual", "label": "Go" },
+          "steps": [ { "id": "a", "type": "applyTransition", "lifecycle": "lcr", "transition": "approve", "ifNotAllowed": "skip" } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        // Nothing is in "submitted" yet: renaming it is fine.
+        var renamed = Lc.Replace("\"key\": \"submitted\"", "\"key\": \"underReview\"");
+        Assert.DoesNotContain(await h.Engine.ValidateAsync(renamed), p => p.Code == "renamedInUse");
+        await h.Engine.ApplyTransitionAsync("application", "a1", "submit", null, WorkflowActor.User("rev1", "Rana", ["reviewer"]));
+        await h.SettleAsync();
+        var problems = await h.Engine.ValidateAsync(renamed.Replace("\"key\": \"approve\"", "\"key\": \"accept\""));
+        Assert.Contains(problems, p => p is { Code: "renamedInUse", Severity: "warning", Node: "s" } && p.Message.Contains("1 record(s)"));
+        Assert.Contains(problems, p => p is { Code: "renamedInUse", Severity: "warning", Node: "t2" });
+        Assert.DoesNotContain(problems, p => p.Node == "t1");
+    }
+}
+
 /// <summary>Webhook client hardening from the final audit.</summary>
 public sealed class WebhookClientAuditTests
 {

@@ -381,8 +381,11 @@ public sealed class WebhookStep : Step
     public string? Connection { get; set; }
     /// <summary>An absolute URL whose origin must be allowed in settings.</summary>
     public string? Url { get; set; }
-    /// <summary>The HTTP method (default <c>POST</c>).</summary>
+    /// <summary>The HTTP method (default <c>POST</c>), one of <see cref="Methods"/>.</summary>
     public string Method { get; set; } = "POST";
+
+    /// <summary>The HTTP methods a webhook may use, in capitals as sent.</summary>
+    public static readonly IReadOnlyList<string> Methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
     /// <summary>Appended to the connection or URL; values it inserts are URL-encoded.</summary>
     public Template? Path { get; set; }
     /// <summary>Extra request headers.</summary>

@@ -82,7 +82,52 @@ public sealed partial class WorkflowEngine
             if (d.Id == def.Id || d.Version == 0 || d.Status == DefinitionStatus.Archived) continue;
             others.Add((await CompiledAsync(u, d.Id, d.Version, ct)).Definition);
         }
-        return Linter.Lint(def, new LintContext(Registry, u.Settings, others));
+        var problems = Linter.Lint(def, new LintContext(Registry, u.Settings, others)).ToList();
+        problems.AddRange(await RenamedInUseAsync(u, def, others, ct));
+        return problems;
+    }
+
+    /// <summary>
+    /// <c>renamedInUse</c> warnings (spec §1): a lifecycle state or transition whose key differs from the published
+    /// version's while it is in use: records are in the state (their field still holds the old key), or other published
+    /// workflows name the state or transition by its old key (stateEntered/transitionApplied triggers, applyTransition steps).
+    /// </summary>
+    private async Task<List<LintProblem>> RenamedInUseAsync(Uow u, WorkflowDefinition def, List<WorkflowDefinition> others, CancellationToken ct)
+    {
+        var found = new List<LintProblem>();
+        if (!def.IsLifecycle || def.Lifecycle is not { } lc || await u.S.GetDefinitionAsync(def.Id, ct) is not { Version: > 0 } rec) return found;
+        if ((await CompiledAsync(u, def.Id, rec.Version, ct)).Definition.Lifecycle is not { } published) return found;
+        var renamedStates = lc.States.Select(s => (New: s, Old: published.States.FirstOrDefault(o => o.Id == s.Id))).Where(p => p.Old is not null && p.Old.Key != p.New.Key).ToList();
+        var renamedTransitions = lc.Transitions.Select(t => (New: t, Old: published.Transitions.FirstOrDefault(o => o.Id == t.Id))).Where(p => p.Old is not null && p.Old.Key != p.New.Key).ToList();
+        if (renamedStates.Count == 0 && renamedTransitions.Count == 0) return found;
+        var inState = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (renamedStates.Count > 0)
+            for (var skip = 0; ; skip += 1000)
+            {
+                var page = await u.S.QueryInstancesAsync(new InstanceQuery
+                {
+                    DefinitionId = def.Id, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.OutOfSync, InstanceStatus.Completed], Skip = skip, Take = 1000,
+                }, ct);
+                foreach (var i in page) if (i.State is not null) inState[i.State] = inState.GetValueOrDefault(i.State) + 1;
+                if (page.Count < 1000) break;
+            }
+        var steps = others.SelectMany(o => new CompiledDefinition(o, o.Id, 0).Lists.Values.SelectMany(l => l)).OfType<ApplyTransitionStep>().Where(s => s.Lifecycle == def.Key).ToList();
+        var triggers = others.Select(o => o.Trigger).Where(t => t?.Lifecycle == def.Key).ToList();
+        foreach (var (s, old) in renamedStates)
+        {
+            var records = inState.GetValueOrDefault(s.Id);
+            var usedBy = triggers.Count(t => t!.Type == TriggerTypes.StateEntered && t.States?.Contains(old!.Key) == true);
+            if (records > 0 || usedBy > 0)
+                found.Add(new LintProblem("renamedInUse", "warning", s.Id,
+                    $"The state '{old!.Key}' is renamed to '{s.Key}' while {(records > 0 ? $"{records} record(s) are in it (their field still holds '{old.Key}'; migrate them after publishing)" : "")}{(records > 0 && usedBy > 0 ? " and " : "")}{(usedBy > 0 ? $"{usedBy} other workflow(s) start when it is entered" : "")}."));
+        }
+        foreach (var (t, old) in renamedTransitions)
+        {
+            var usedBy = triggers.Count(x => x!.Type == TriggerTypes.TransitionApplied && x.Transitions?.Contains(old!.Key) == true) + steps.Count(x => x.Transition == old!.Key);
+            if (usedBy > 0)
+                found.Add(new LintProblem("renamedInUse", "warning", t.Id, $"The transition '{old!.Key}' is renamed to '{t.Key}' while {usedBy} other workflow step(s) or trigger(s) use the old key."));
+        }
+        return found;
     }
 
     /// <summary>All definitions, by title, with their running instance counts.</summary>

@@ -671,6 +671,8 @@ public static class Linter
 
         private void LintWebhook(WebhookStep wh, Env env)
         {
+            if (!WebhookStep.Methods.Contains(wh.Method))
+                Error("badMethod", wh.Id, $"'{wh.Method}' is not an HTTP method a webhook can use ({string.Join(", ", WebhookStep.Methods)}, in capitals).");
             if (wh.Connection is not null)
             {
                 if (ctx.Settings.Webhooks?.Connections?.Any(c => c.Key == wh.Connection) != true)

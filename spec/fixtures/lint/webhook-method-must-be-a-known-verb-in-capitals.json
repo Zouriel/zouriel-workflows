@@ -1,0 +1,16 @@
+{
+ "name": "a webhook's method must be a known HTTP verb in capitals",
+ "registry": "../engine/_registry.json",
+ "settings": { "version": 1, "webhooks": { "allowedOrigins": ["https://hooks.example.com"] } },
+ "definition": {
+  "specVersion": 1, "id": "wf", "key": "wf", "kind": "automation", "title": "W", "entity": "application",
+  "trigger": { "type": "created" },
+  "steps": [
+   { "id": "a", "type": "webhook", "url": "https://hooks.example.com/a", "method": "post" },
+   { "id": "b", "type": "webhook", "url": "https://hooks.example.com/b", "method": "FETCH" },
+   { "id": "c", "type": "webhook", "url": "https://hooks.example.com/c", "method": "PATCH" },
+   { "id": "d", "type": "webhook", "url": "https://hooks.example.com/d" }
+  ]
+ },
+ "expected": [ { "code": "badMethod", "node": "a" }, { "code": "badMethod", "node": "b" } ]
+}

@@ -367,6 +367,7 @@ public sealed partial class WorkflowEngine
 
     /// <summary>Audit writes still running in the background; each removes itself when done, so the set stays small.</summary>
     private readonly ConcurrentDictionary<Task, byte> _backgroundWrites = new();
+    private readonly SemaphoreSlim _backgroundGate = new(1, 1);
 
     /// <summary>How many background audit writes are still running.</summary>
     internal int PendingBackgroundWrites => _backgroundWrites.Count;
@@ -388,11 +389,23 @@ public sealed partial class WorkflowEngine
         var actor = scope?.Actor ?? CurrentActor() ?? WorkflowActor.System;
         // Written in its own unit after the refused write rolls back; not awaited, so a database that
         // locks on writes (SQLite) is not asked to wait on itself.
-        var pending = Task.Run(() => RunAsync(async u => await u.AuditAsync(new AuditEntry
+        // One at a time: many refused writes at once would otherwise race each other for the audit chain head.
+        var pending = Task.Run(async () =>
         {
-            Category = "lifecycle", Action = "writeRefused", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id, DefinitionId = definitionId,
-            Actor = actor, Before = new Dictionary<string, object?> { [field] = from }, After = new Dictionary<string, object?> { [field] = to },
-        }, CancellationToken.None), CancellationToken.None));
+            await _backgroundGate.WaitAsync();
+            try
+            {
+                await RunAsync(async u => await u.AuditAsync(new AuditEntry
+                {
+                    Category = "lifecycle", Action = "writeRefused", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id, DefinitionId = definitionId,
+                    Actor = actor, Before = new Dictionary<string, object?> { [field] = from }, After = new Dictionary<string, object?> { [field] = to },
+                }, CancellationToken.None), CancellationToken.None);
+            }
+            finally
+            {
+                _backgroundGate.Release();
+            }
+        });
         _backgroundWrites.TryAdd(pending, 0);
         pending.ContinueWith(t =>
         {

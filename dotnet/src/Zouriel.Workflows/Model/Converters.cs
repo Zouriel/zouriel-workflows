@@ -33,8 +33,6 @@ public static class Definitions
     /// <summary>Writes a definition as JSON.</summary>
     /// <param name="d">The definition.</param>
     public static string Serialize(WorkflowDefinition d) => JsonSerializer.Serialize(d, JsonOptions);
-
-    internal static object? ReadValue(ref Utf8JsonReader reader) => Values.FromJson(JsonNode.Parse(ref reader));
 }
 
 internal sealed class StepConverter : JsonConverter<Step>

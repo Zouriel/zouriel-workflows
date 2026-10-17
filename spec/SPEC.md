@@ -10,8 +10,11 @@ fixture wins and this text is fixed.
 - Every state, transition, step, branch path, case, outcome and variable has an immutable `id`
   (generated, `[A-Za-z0-9_-]{1,64}`, unique within the definition). Editors never show ids.
 - Many also have an editable `key` (`[a-z][a-zA-Z0-9_]*`). Keys are what people and APIs use
-  (transition keys, state keys, outcome keys). Renaming a key in a draft is allowed; publishing a
-  renamed state or transition key while instances use it is a lint *warning* (`renamedInUse`).
+  (transition keys, state keys, outcome keys). Renaming a key in a draft is allowed; a state or
+  transition key that differs from the published version's while it is in use is a lint *warning*
+  (`renamedInUse`, on the state or transition): records are in the state (their field still holds the
+  old key), or other published workflows name it by the old key (`stateEntered`/`transitionApplied`
+  triggers, `applyTransition` steps).
 - Every reference inside a definition points at an `id`, except **token paths** (below), which point
   at registry keys and step ids.
 
@@ -223,7 +226,7 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
   those steps already moved the record on) → commit. Steps
   run until they first wait; the rest continues in the background. If any check fails nothing
   changes and the API returns the error code (`notInFromState`, `notAllowed`, `guardFailed`,
-  `invalidInput`, `commentRequired`, `staleState`, `wrongLifecycle`). The record view lists each transition the
+  `invalidInput`, `commentRequired`, `wrongLifecycle`). The record view lists each transition the
   viewer may apply as `{ key, label, to, toLabel, tone, confirm, form, comment }`, with `comment` the
   resolved remarks setting (never `null`).
 - **Record instance.** A lifecycle has one long-lived instance per record (`status: active` until
@@ -525,7 +528,10 @@ engine from working or the settings from being fixed.
   publish (`lintErrors`, e.g. a second fallback lifecycle published meanwhile: `lifecycleConflict`), then
   re-indexes its triggers with its original first-publish time.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
-  produce the same codes for the same definition.
+  produce the same codes for the same definition. Among them: a webhook `method` must be one of `GET`,
+  `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS` in capitals (`badMethod`, also refused at run
+  time); `subWorkflowCycle` (§5); `renamedInUse` (§1) needs the engine's records, so only engines
+  report it.
 - **Test runs** (`POST /simulate`) report the definition's lint problems with the result. A lifecycle
   tested on a record that would not get it (pinned to another lifecycle for the field, not meeting
   `appliesWhen` with the test values on top, or another lifecycle comes first in publish order) still

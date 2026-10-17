@@ -541,6 +541,7 @@ public sealed partial class WorkflowEngine
     private async Task<(string Url, Dictionary<string, string> Headers, string? Body)> BuildWebhookAsync(Exec x, Token t, WebhookStep wh, CancellationToken ct)
     {
         var scope = x.Scope(t);
+        if (!WebhookStep.Methods.Contains(wh.Method)) throw new WorkflowException("badMethod", $"'{wh.Method}' is not an HTTP method a webhook can use.");
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var path = wh.Path is null ? "" : await RenderAsync(scope, wh.Path, ct, Uri.EscapeDataString);
         // "." and ".." segments (also percent-encoded) would climb out of the connection's base path once resolved.
@@ -814,7 +815,7 @@ public sealed partial class WorkflowEngine
         x.U.Log?.Add("step", "failed", step.Id, message);
 
         var retry = step.Retry ?? (step is ActionStep or WebhookStep or NotifyStep or SubWorkflowStep ? x.U.Settings.Defaults?.Retry : null);
-        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" or "badHeader" or "unknownValue" };
+        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" or "badHeader" or "unknownValue" or "badMethod" };
         if (retry is { Max: > 0 } && attempt <= retry.Max && retryable)
         {
             var initial = retry.Initial is null ? TimeSpan.FromMinutes(1) : IsoDuration.Parse(retry.Initial).Approximate;
