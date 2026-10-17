@@ -27,8 +27,11 @@ public static class DemoEndpoints
     /// <summary>Where a playground visitor gets a session id (it needs no session itself).</summary>
     public const string SessionPath = "/api/playground/session";
 
-    /// <summary>The rate-limit policy for new playground sessions.</summary>
+    /// <summary>The rate-limit policy for new playground sessions (resets count too: each one issues a new session).</summary>
     public const string SessionRateLimit = "playground-session";
+
+    /// <summary>The authorization policy for recording payments.</summary>
+    public const string PaymentsPolicy = "demo.payments";
 
     /// <summary>Maps the demo app's CRUD endpoints. Everything except the list of demo users needs a signed-in user.</summary>
     public static void MapDemoEndpoints(this IEndpointRouteBuilder app)
@@ -110,8 +113,10 @@ public static class DemoEndpoints
             return Results.Ok(d);
         });
 
+        // Raising payment.received resumes workflows waiting for the money, so only finance (and admins) may.
         g.MapPost("/applications/{id:int}/payment", async (int id, WorkflowEngine engine, HttpContext http) =>
-            Results.Ok(new { resumed = await engine.SignalAsync("payment.received", "application", id.ToString(System.Globalization.CultureInfo.InvariantCulture), new() { ["amount"] = 1 }, WorkflowApi.Actor(http)) }));
+            Results.Ok(new { resumed = await engine.SignalAsync("payment.received", "application", id.ToString(System.Globalization.CultureInfo.InvariantCulture), new() { ["amount"] = 1 }, WorkflowApi.Actor(http)) }))
+            .RequireAuthorization(PaymentsPolicy);
 
         // The demo's bank: switch it off to see a payment workflow stop, and put it right from the panel.
         g.MapGet("/bank", (DemoBank bank) => new { down = bank.Down });
@@ -153,11 +158,11 @@ public static class DemoEndpoints
             await boxes.RunBackgroundAsync((Sandbox)http.Items["sandbox"]!, http.RequestAborted);
             return Results.Ok();
         });
-        g.MapPost("/reset", async (HttpContext http, SandboxManager boxes) =>
-        {
-            await boxes.ResetAsync(((Sandbox)http.Items["sandbox"]!).Id);
-            return Results.Ok();
-        });
+        // Starting over issues a new session (the old id stops working) and counts against the session rate limit,
+        // so resets cannot be used to make sandboxes faster than new sessions allow.
+        g.MapPost("/reset", (HttpContext http, SandboxManager boxes) =>
+            Results.Ok(new { session = boxes.Reset(((Sandbox)http.Items["sandbox"]!).Id) }))
+            .RequireRateLimiting(SessionRateLimit);
     }
 
     /// <summary>Body of <c>POST /api/playground/advance</c>.</summary>

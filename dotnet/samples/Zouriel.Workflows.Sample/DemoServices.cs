@@ -96,7 +96,8 @@ public sealed class DemoAuthHandler(IOptionsMonitor<AuthenticationSchemeOptions>
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
-        var id = Request.Headers["X-Demo-User"].FirstOrDefault() ?? Request.Query["as"].FirstOrDefault();
+        // Header only: an identity in the query string would end up in logs, history and Referer headers.
+        var id = Request.Headers["X-Demo-User"].FirstOrDefault();
         var user = DemoUsers.Find(id);
         if (user is null) return Task.FromResult(AuthenticateResult.NoResult());
         var claims = new List<Claim> { new("sub", user.Id), new("name", user.Name) };
