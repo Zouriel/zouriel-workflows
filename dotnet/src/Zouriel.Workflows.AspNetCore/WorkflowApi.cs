@@ -74,6 +74,16 @@ public sealed record MePermissions(bool Edit, bool Publish, bool Settings, bool 
 /// <param name="Note">What changed, shown in the version list.</param>
 public sealed record PublishBody(string? Note);
 
+/// <summary>One permission change: who may do a node of a workflow.</summary>
+/// <param name="Node">A transition id, <c>reset</c>, <c>trigger</c> (a manual start) or an approval/task step id.</param>
+/// <param name="Who">The assignees (roles, groups, users, fields) who may do it; empty = nobody.</param>
+public sealed record PermissionChange(string Node, JsonArray Who);
+
+/// <summary>Body of <c>POST /definitions/{id}/permissions</c>.</summary>
+/// <param name="Changes">The changes to apply.</param>
+/// <param name="Note">What changed, shown in the version list (default "Permissions changed").</param>
+public sealed record PermissionsBody(List<PermissionChange> Changes, string? Note);
+
 /// <summary>Body of <c>POST /definitions/{id}/rollback</c>.</summary>
 /// <param name="Version">The version to publish again.</param>
 public sealed record RollbackBody(int Version);
@@ -247,6 +257,9 @@ public static class WorkflowApi
         }), o.PublishPolicy);
         Secure(g.MapPost("/definitions/{id}/publish", async (string id, PublishBody? body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.PublishAsync(id, body?.Note, Actor(http), ct))), o.PublishPolicy);
+        // Changing who may do steps publishes straight away (only those changes; drafts keep their edits).
+        Secure(g.MapPost("/definitions/{id}/permissions", async (string id, PermissionsBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
+            Results.Ok(await e.UpdatePermissionsAsync(id, (body.Changes ?? []).Select(c => (c.Node, c.Who ?? [])).ToList(), body.Note, Actor(http), ct))), o.PublishPolicy);
         Secure(g.MapPost("/definitions/{id}/archive", async (string id, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.ArchiveAsync(id, Actor(http), ct))), o.PublishPolicy);
         Secure(g.MapPost("/definitions/{id}/restore", async (string id, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
@@ -521,7 +534,7 @@ public static class WorkflowApi
         {
             "notAllowed" => 403,
             "notFound" or "noRecord" or "definitionNotFound" => 404,
-            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" => 409,
+            "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" => 409,
             "tooLarge" => 413,
             _ => 400,
         };

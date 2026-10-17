@@ -268,6 +268,38 @@
         }
       }
     },
+    "/api/workflows/definitions/{id}/permissions": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/workflows/definitions/{id}/archive": {
       "post": {
         "tags": [
@@ -1871,6 +1903,9 @@
         },
         "description": "Body of transition and manual-start requests."
       },
+      "JsonArray": {
+        "type": "array"
+      },
       "JsonNode": {},
       "LintProblem": {
         "required": [
@@ -1931,6 +1966,48 @@
           }
         },
         "description": "Body of `POST /instances/{id}/migrate`."
+      },
+      "PermissionChange": {
+        "required": [
+          "node",
+          "who"
+        ],
+        "type": "object",
+        "properties": {
+          "node": {
+            "type": "string",
+            "description": "A transition id, `reset`, `trigger` (a manual start) or an approval/task step id."
+          },
+          "who": {
+            "description": "The assignees (roles, groups, users, fields) who may do it; empty = nobody.",
+            "$ref": "#/components/schemas/JsonArray"
+          }
+        },
+        "description": "One permission change: who may do a node of a workflow."
+      },
+      "PermissionsBody": {
+        "required": [
+          "changes",
+          "note"
+        ],
+        "type": "object",
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionChange"
+            },
+            "description": "The changes to apply."
+          },
+          "note": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "What changed, shown in the version list (default \"Permissions changed\")."
+          }
+        },
+        "description": "Body of `POST /definitions/{id}/permissions`."
       },
       "PublishBody": {
         "required": [

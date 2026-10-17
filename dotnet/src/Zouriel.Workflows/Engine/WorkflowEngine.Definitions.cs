@@ -237,6 +237,107 @@ public sealed partial class WorkflowEngine
         return await SummaryAsync(u, rec, ct);
     }
 
+    // ── Permissions ───────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Changes who may do steps of a published workflow and publishes it straight away (spec §13
+    /// permissions): the new version is the current published version plus only these changes, so
+    /// unpublished draft edits are neither published nor lost (the same changes are applied to the draft
+    /// too). A node is a transition id (its <c>who</c>), <c>reset</c> (the lifecycle reset's <c>who</c>),
+    /// <c>trigger</c> (a manual trigger's <c>who</c>) or an approval/task step id (its <c>assignees</c>).
+    /// Audited as <c>definition.permissionsChanged</c>.
+    /// </summary>
+    public async Task<DefinitionSummary> UpdatePermissionsAsync(string id, IReadOnlyList<(string Node, JsonArray Who)> changes, string? note, WorkflowActor actor,
+        CancellationToken ct = default)
+    {
+        if (changes.Count == 0) throw new WorkflowException("invalidInput", "Say which permissions change.");
+        var result = await RunAsync(async u =>
+        {
+            var rec = await RequireDefinitionAsync(u, id, ct);
+            if (rec.Version == 0 || rec.Status == DefinitionStatus.Archived)
+                throw new WorkflowException("notPublished", "Only a published workflow's permissions can be changed here.");
+            var published = JsonNode.Parse((await u.S.GetVersionAsync(id, rec.Version, ct))!.Json)!.AsObject();
+            foreach (var (node, who) in changes) ApplyPermission(published, node, who);
+            var hadDraft = rec.HasDraftChanges;
+            var draft = JsonNode.Parse(rec.DraftJson)!.AsObject();
+            // The draft gets the same changes where its nodes still exist (it may have removed some).
+            foreach (var (node, who) in changes)
+            {
+                try { ApplyPermission(draft, node, who); }
+                catch (WorkflowException) { }
+            }
+            rec.DraftJson = published.ToJsonString();
+            await u.S.UpdateDefinitionAsync(rec, ct);
+            var summary = await PublishInUnitAsync(u, id, note ?? "Permissions changed", actor, ct);
+            if (hadDraft)
+            {
+                rec = await RequireDefinitionAsync(u, id, ct);
+                draft["revision"] = rec.Version;
+                rec.DraftJson = Normalize(draft.ToJsonString());
+                var pub = await u.S.GetVersionAsync(id, rec.Version, ct);
+                rec.HasDraftChanges = pub is null || Hash(rec.DraftJson) != pub.Hash;
+                await u.S.UpdateDefinitionAsync(rec, ct);
+                summary = await SummaryAsync(u, rec, ct);
+            }
+            await u.AuditAsync(new AuditEntry
+            {
+                Category = "definition", Action = "permissionsChanged", SubjectType = "definition", SubjectId = id, DefinitionId = id, Actor = actor,
+                Data = new Dictionary<string, object?>
+                {
+                    ["version"] = (double)rec.Version,
+                    ["changes"] = changes.Select(c => (object?)new Dictionary<string, object?> { ["node"] = c.Node, ["who"] = Values.FromJson(c.Who.ToJsonString()) }).ToList(),
+                },
+            }, ct);
+            return summary;
+        }, ct);
+        await RefreshOwnershipAsync(ct);
+        return result;
+    }
+
+    /// <summary>Sets who may do one node of a definition (see <see cref="UpdatePermissionsAsync"/>).</summary>
+    private static void ApplyPermission(JsonObject def, string node, JsonArray who)
+    {
+        JsonNode Copy() => who.DeepClone();
+        if (node == "trigger")
+        {
+            if (def["trigger"] is JsonObject trig && trig["type"]?.GetValue<string>() == TriggerTypes.Manual) { trig["who"] = Copy(); return; }
+            throw new WorkflowException("unknownNode", "This workflow has no manual start whose people could change.");
+        }
+        if (node == "reset")
+        {
+            if (def["lifecycle"]?["reset"] is JsonObject reset) { reset["who"] = Copy(); return; }
+            throw new WorkflowException("unknownNode", "This workflow cannot be reset.");
+        }
+        if (def["lifecycle"]?["transitions"] is JsonArray transitions)
+            foreach (var t in transitions)
+                if (t is JsonObject to && to["id"]?.GetValue<string>() == node) { to["who"] = Copy(); return; }
+        if (FindStep(def, node) is { } step)
+        {
+            var type = step["type"]?.GetValue<string>();
+            if (type is not ("approval" or "task")) throw new WorkflowException("unknownNode", $"Step '{node}' is not an approval or a task.");
+            step["assignees"] = Copy();
+            return;
+        }
+        throw new WorkflowException("unknownNode", $"'{node}' is not a transition, the reset, the manual start or a step of this workflow.");
+    }
+
+    /// <summary>The step object with this id, anywhere in a definition's JSON.</summary>
+    private static JsonObject? FindStep(JsonNode? node, string id)
+    {
+        switch (node)
+        {
+            case JsonObject o:
+                if (o["type"] is JsonValue && o["id"]?.GetValue<string>() == id) return o;
+                foreach (var (_, v) in o) if (FindStep(v, id) is { } found) return found;
+                return null;
+            case JsonArray a:
+                foreach (var v in a) if (FindStep(v, id) is { } found) return found;
+                return null;
+            default:
+                return null;
+        }
+    }
+
     /// <summary>The trigger index rows of a definition version: one per lifecycle (its owned field) or automation trigger.</summary>
     internal static List<TriggerRecord> TriggerRows(WorkflowDefinition def, string definitionId, string definitionKey, int version, DateTimeOffset publishedAt)
     {

@@ -352,3 +352,10 @@ settings; a connection names a secret the host resolves.
   don't), increments `version`, stores an immutable copy, re-indexes triggers, and records a diff.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
   produce the same codes for the same definition.
+- **Permissions.** `POST /definitions/{id}/permissions` with `{ changes: [{ node, who }], note? }`
+  changes who may do parts of a published workflow and publishes straight away (publish permission).
+  A `node` is a transition id (its `who`), `reset` (`lifecycle.reset.who`), `trigger` (a manual
+  trigger's `who`) or an approval/task step id (its `assignees`). The new version is the current
+  published version plus only these changes (linted as usual), so unpublished draft edits are neither
+  published nor lost; the draft gets the same changes where its nodes still exist. Errors:
+  `unknownNode`, `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged`.
