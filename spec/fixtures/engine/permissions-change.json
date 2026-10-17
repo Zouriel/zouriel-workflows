@@ -1,0 +1,249 @@
+{
+ "name": "Permissions: a change publishes a version that existing records move to (so revoked people stop acting on them), the audit names the new version, a change that alters nothing publishes nothing, and a step is found by its id even when a form field shares it",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": []
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_r",
+   "key": "review",
+   "kind": "lifecycle",
+   "title": "Review",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "a",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "b",
+      "key": "approved",
+      "label": "Approved",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "approve",
+      "label": "Approve",
+      "from": [
+       "a"
+      ],
+      "to": "b",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "specVersion": 1,
+   "id": "wf_a",
+   "key": "signOff",
+   "kind": "automation",
+   "title": "Sign-off",
+   "entity": "application",
+   "trigger": {
+    "type": "manual",
+    "label": "Sign off",
+    "form": {
+     "schemaVersion": 1,
+     "id": "f",
+     "title": "Why",
+     "pages": [
+      {
+       "id": "p",
+       "elements": [
+        {
+         "kind": "field",
+         "id": "rev",
+         "key": "why",
+         "type": "text",
+         "label": "Reason"
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "steps": [
+    {
+     "id": "rev",
+     "type": "approval",
+     "title": "Sign-off",
+     "assignees": [
+      {
+       "role": "reviewer"
+      }
+     ],
+     "rule": {
+      "type": "any"
+     },
+     "due": "P2D",
+     "outcomes": {
+      "approved": [],
+      "rejected": [],
+      "timedOut": []
+     }
+    }
+   ]
+  }
+ ],
+ "steps": [
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "x"
+    }
+   },
+   "expect": {
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev1",
+     "transitions": [
+      "approve"
+     ]
+    }
+   }
+  },
+  {
+   "permissions": {
+    "workflow": "review",
+    "changes": [
+     {
+      "node": "t",
+      "who": [
+       {
+        "role": "finance"
+       }
+      ]
+     }
+    ]
+   },
+   "expect": {
+    "instanceKinds": [
+     "record"
+    ],
+    "instances": [
+     {
+      "definition": "review",
+      "record": "a1",
+      "version": 2,
+      "state": "draft"
+     }
+    ],
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev1",
+     "transitions": []
+    },
+    "audit": [
+     {
+      "is": "definition.published",
+      "data": {
+       "version": 2
+      }
+     },
+     {
+      "is": "instance.migrated",
+      "data": {
+       "reason": "permissions"
+      }
+     },
+     {
+      "is": "definition.permissionsChanged",
+      "data": {
+       "version": 2,
+       "recordsMoved": 1,
+       "draftSkipped": []
+      }
+     }
+    ]
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "approve",
+    "actor": "rev1"
+   },
+   "expectError": "notAllowed"
+  },
+  {
+   "permissions": {
+    "workflow": "review",
+    "changes": [
+     {
+      "node": "t",
+      "who": [
+       {
+        "role": "finance"
+       }
+      ]
+     }
+    ]
+   },
+   "expect": {
+    "auditCount": {
+     "definition.published": 3,
+     "definition.permissionsChanged": 1
+    }
+   }
+  },
+  {
+   "permissions": {
+    "workflow": "signOff",
+    "changes": [
+     {
+      "node": "rev",
+      "who": [
+       {
+        "role": "finance"
+       }
+      ]
+     }
+    ]
+   },
+   "expect": {
+    "auditCount": {
+     "definition.permissionsChanged": 2
+    }
+   }
+  },
+  {
+   "manual": {
+    "workflow": "signOff",
+    "entity": "application",
+    "id": "a1",
+    "actor": "admin"
+   },
+   "expect": {
+    "tasks": [
+     {
+      "step": "rev",
+      "status": "open",
+      "assignees": [
+       "fin1"
+      ]
+     }
+    ]
+   }
+  }
+ ]
+}

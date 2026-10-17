@@ -295,7 +295,34 @@
         },
         "responses": {
           "200": {
-            "description": "OK"
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PermissionsSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowError"
+                }
+              }
+            }
           }
         }
       }
@@ -2014,7 +2041,7 @@
             "description": "A transition id, `reset`, `trigger` (a manual start) or an approval/task step id."
           },
           "who": {
-            "description": "The assignees (roles, groups, users, fields) who may do it; empty = nobody.",
+            "description": "The assignees (roles, groups, users, person fields of the record) who may do it. What empty means depends on\nthe node: a transition or the reset, nobody by hand; a manual start (`trigger`), anyone who can see the\nrecord; an approval or task, refused (it needs someone, `lintErrors`).",
             "$ref": "#/components/schemas/JsonArray"
           }
         },
@@ -2022,8 +2049,7 @@
       },
       "PermissionsBody": {
         "required": [
-          "changes",
-          "note"
+          "changes"
         ],
         "type": "object",
         "properties": {
@@ -2043,6 +2069,109 @@
           }
         },
         "description": "Body of `POST /definitions/{id}/permissions`."
+      },
+      "PermissionsSummary": {
+        "required": [
+          "changed",
+          "draftSkipped",
+          "recordsMoved",
+          "id",
+          "key",
+          "kind",
+          "title",
+          "entity",
+          "status",
+          "version",
+          "hasDraftChanges",
+          "updatedAt",
+          "updatedBy",
+          "runningInstances"
+        ],
+        "type": "object",
+        "properties": {
+          "changed": {
+            "type": "boolean",
+            "description": "False when the changes left everything as it was (no version was published)."
+          },
+          "draftSkipped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The nodes the draft no longer has, so the draft did not get their change."
+          },
+          "recordsMoved": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Lifecycles: how many record instances moved from earlier versions to the new one.",
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "description": "The definition id."
+          },
+          "key": {
+            "type": "string",
+            "description": "Its key (unique; other workflows and the API use it)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`automation` or `lifecycle`."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type it is about, if any."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `published` or `archived` (spec \u00a713)."
+          },
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The latest published version (0 when never published).",
+            "format": "int32"
+          },
+          "hasDraftChanges": {
+            "type": "boolean",
+            "description": "True when the draft differs from the latest published version."
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "When the draft or status last changed.",
+            "format": "date-time"
+          },
+          "updatedBy": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Who changed it."
+          },
+          "runningInstances": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Unfinished automation and record instances of any version.",
+            "format": "int32"
+          }
+        },
+        "description": "What `POST /definitions/{id}/permissions` did: the definition's summary plus the outcome of the change."
       },
       "PublishBody": {
         "required": [
@@ -2287,6 +2416,36 @@
           }
         },
         "description": "One active trigger or lifecycle, for the \"Watching\" section of global settings."
+      },
+      "WorkflowError": {
+        "required": [
+          "code",
+          "message",
+          "details"
+        ],
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The error code, e.g. `notAllowed`, `lintErrors`, `wrongLifecycle`."
+          },
+          "message": {
+            "type": "string",
+            "description": "What went wrong, for people."
+          },
+          "details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "Extra data: lint problems for `lintErrors`, field errors for `invalidInput`.",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          }
+        },
+        "description": "The body of every error response: a stable code (spec), a message for people, and details (lint problems, form errors\u2026)."
       }
     }
   },

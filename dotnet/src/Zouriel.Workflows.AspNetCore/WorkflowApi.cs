@@ -82,13 +82,23 @@ public sealed record ResetBody(Dictionary<string, JsonNode?>? Input, string? Lif
 
 /// <summary>One permission change: who may do a node of a workflow.</summary>
 /// <param name="Node">A transition id, <c>reset</c>, <c>trigger</c> (a manual start) or an approval/task step id.</param>
-/// <param name="Who">The assignees (roles, groups, users, fields) who may do it; empty = nobody.</param>
+/// <param name="Who">
+/// The assignees (roles, groups, users, person fields of the record) who may do it. What empty means depends on
+/// the node: a transition or the reset, nobody by hand; a manual start (<c>trigger</c>), anyone who can see the
+/// record; an approval or task, refused (it needs someone, <c>lintErrors</c>).
+/// </param>
 public sealed record PermissionChange(string Node, JsonArray Who);
 
 /// <summary>Body of <c>POST /definitions/{id}/permissions</c>.</summary>
 /// <param name="Changes">The changes to apply.</param>
 /// <param name="Note">What changed, shown in the version list (default "Permissions changed").</param>
-public sealed record PermissionsBody(List<PermissionChange> Changes, string? Note);
+public sealed record PermissionsBody(List<PermissionChange> Changes, string? Note = null);
+
+/// <summary>The body of every error response: a stable code (spec), a message for people, and details (lint problems, form errors…).</summary>
+/// <param name="Code">The error code, e.g. <c>notAllowed</c>, <c>lintErrors</c>, <c>wrongLifecycle</c>.</param>
+/// <param name="Message">What went wrong, for people.</param>
+/// <param name="Details">Extra data: lint problems for <c>lintErrors</c>, field errors for <c>invalidInput</c>.</param>
+public sealed record WorkflowError(string Code, string Message, JsonNode? Details);
 
 /// <summary>Body of <c>POST /definitions/{id}/rollback</c>.</summary>
 /// <param name="Version">The version to publish again.</param>
@@ -265,7 +275,10 @@ public static class WorkflowApi
             Results.Ok(await e.PublishAsync(id, body?.Note, Actor(http), ct))), o.PublishPolicy);
         // Changing who may do steps publishes straight away (only those changes; drafts keep their edits).
         Secure(g.MapPost("/definitions/{id}/permissions", async (string id, PermissionsBody body, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
-            Results.Ok(await e.UpdatePermissionsAsync(id, (body.Changes ?? []).Select(c => (c.Node, c.Who ?? [])).ToList(), body.Note, Actor(http), ct))), o.PublishPolicy);
+                Results.Ok(await e.UpdatePermissionsAsync(id, (body.Changes ?? []).Select(c => (c.Node, c.Who ?? [])).ToList(), body.Note, Actor(http), ct)))
+            .Produces<PermissionsSummary>()
+            .Produces<WorkflowError>(StatusCodes.Status400BadRequest)
+            .Produces<WorkflowError>(StatusCodes.Status409Conflict), o.PublishPolicy);
         Secure(g.MapPost("/definitions/{id}/archive", async (string id, WorkflowEngine e, HttpContext http, CancellationToken ct) =>
             Results.Ok(await e.ArchiveAsync(id, Actor(http), ct))), o.PublishPolicy);
         Secure(g.MapPost("/definitions/{id}/restore", async (string id, WorkflowEngine e, HttpContext http, CancellationToken ct) =>

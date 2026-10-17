@@ -356,9 +356,11 @@ tenant (or global without tenancy). `fixtures/audit/` checks byte-exact hashes.
 Categories and actions:
 
 - `definition`: `created`, `draftSaved`, `published` (data: `version`, `note`, `diff`), `archived`,
-  `restored`, `rolledBack`, `deleted`.
+  `restored`, `rolledBack`, `deleted`, `permissionsChanged` (data: `version`, `changes`, `draftSkipped`,
+  `recordsMoved`).
 - `instance`: `started` (data: trigger), `queued`, `completed`, `failed`, `cancelled` (actor: who
-  cancelled it, data: reason), `migrated`, `retried`, `skipped`, `incident`, `timerFailed` (a timer
+  cancelled it, data: reason), `migrated` (before/after `version`; data: `stateMap`, or `reason:
+  "permissions"` when a permissions change moved it), `retried`, `skipped`, `incident`, `timerFailed` (a timer
   could not be processed; data: purpose, error).
 - `step`: `started`, `completed` (data: outputs, masked), `failed` (data: error, attempt),
   `retryScheduled`, `skipped`, `branchTaken` (data: path), `waiting`.
@@ -410,5 +412,17 @@ settings; a connection names a secret the host resolves.
   A `node` is a transition id (its `who`), `reset` (`lifecycle.reset.who`), `trigger` (a manual
   trigger's `who`) or an approval/task step id (its `assignees`). The new version is the current
   published version plus only these changes (linted as usual), so unpublished draft edits are neither
-  published nor lost; the draft gets the same changes where its nodes still exist. Errors:
-  `unknownNode`, `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged`.
+  published nor lost; the draft gets the same changes where its nodes still exist, and the nodes it no
+  longer has are returned (`draftSkipped`). What an empty `who` means depends on the node: a
+  transition or the reset, nobody by hand; a manual start (`trigger`), anyone who can see the record
+  (as when the builder leaves it empty); an approval or task needs someone, so it is refused
+  (`lintErrors`, `noAssignees`). A `who` field must be a person field of the record (lint). A change
+  that alters nothing publishes nothing (`changed: false`). After publishing, a lifecycle's record
+  instances (not cancelled) move from earlier versions to the new one (states and transitions are
+  unchanged, so they map 1:1; their state, timers and runs stay as they are), each audited as
+  `instance.migrated` with `reason: "permissions"`, so people whose permission was revoked stop acting
+  on existing records at once (`recordsMoved`). Automation runs already in progress, and a record's
+  child runs, keep their version: their open tasks keep their assignees. The response is the
+  definition summary plus `changed`, `draftSkipped` and `recordsMoved`. Errors: `unknownNode`,
+  `notPublished` (409), `lintErrors`. Audited as `definition.permissionsChanged` (data: the new
+  `version`, `changes`, `draftSkipped`, `recordsMoved`).
