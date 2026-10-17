@@ -45,6 +45,8 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy(DemoEndpoints.SessionRateLimit, ctx =>
         RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions { PermitLimit = 20, Window = TimeSpan.FromHours(1) }));
 });
+// The REST API's description, served at /openapi/v1.json (spec/api/openapi.json is exported from it).
+builder.Services.AddOpenApi();
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = 2 * 1024 * 1024);
 
 var app = builder.Build();
@@ -60,6 +62,7 @@ else await SampleSetup.SeedAsync(app.Services);
 
 app.UseAuthorization();
 
+app.MapOpenApi();
 app.MapGet("/api/health", () => Results.Ok(new { ok = true }));
 app.MapWorkflowApi("/api/workflows", o =>
 {

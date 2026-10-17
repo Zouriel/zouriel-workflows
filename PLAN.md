@@ -415,7 +415,7 @@ form data, due, escalation level) · `wf_incidents` · `wf_outbox` · `wf_inbox`
 Layout: `/home/zouriel/personal/zouriel-workflows/spec`.
 - `schema/definition.schema.json`, `settings.schema.json`, `registry.schema.json` (JSON Schema
   2020-12).
-- `api/openapi.yaml`: the REST API all engines serve.
+- `api/openapi.json`: the REST API all engines serve (exported from the .NET sample; a test fails when the two drift).
 - `fixtures/engine/*`: each is `definition.json`, `registry.json`, `events.json` (changes, transitions,
   task decisions, signals, clock ticks) and `expected.json` (instance status and state, steps in order,
   outputs, tasks, bookmarks, **audit entries**, outbox messages).

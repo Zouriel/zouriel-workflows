@@ -144,7 +144,7 @@ public static class WorkflowApi
     private const int MaxExportRows = 1_000_000;
 
     /// <summary>
-    /// Maps the workflow REST API (spec <c>api/openapi.yaml</c>) under <paramref name="prefix"/>. Every
+    /// Maps the workflow REST API (spec <c>api/openapi.json</c>) under <paramref name="prefix"/>. Every
     /// endpoint requires a signed-in user (unless <see cref="WorkflowApiOptions.AllowAnonymous"/>) plus the
     /// per-operation policies set in <paramref name="configure"/>; record, instance and task reads are
     /// also checked against <see cref="IWorkflowAccessPolicy"/>.

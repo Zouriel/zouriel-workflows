@@ -1,0 +1,2111 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Zouriel Workflows REST API",
+    "version": "1",
+    "description": "The API every engine serves under its mount point (MapWorkflowApi in .NET). Exported from the .NET sample app (GET /openapi/v1.json); paths are shown mounted at /api/workflows. Request and response bodies for definitions, registries and settings follow spec/schema/*.json."
+  },
+  "paths": {
+    "/api/workflows/schema": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/settings": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/triggers": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TriggerOverview"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/directory/users": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/directory/users/{id}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/me": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DefinitionSummary"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions/{id}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefinitionDetail"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions/{id}/publish": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/PublishBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions/{id}/archive": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions/{id}/restore": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions/{id}/rollback": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions/{id}/versions/{version}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonNode"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/definitions/{id}/diff": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/validate": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/simulate": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/instances": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "definitionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "definitionKey",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "parentId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/instances/{id}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/instances/{id}/definition": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/instances/{id}/audit": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditRecord"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/instances/{id}/cancel": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ReasonBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/instances/{id}/retry": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RetryBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/instances/{id}/skip": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SkipBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/instances/{id}/migrate": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/tasks": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/tasks/{id}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/tasks/{id}/decide": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/tasks/{id}/delegate": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DelegateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/tasks/{id}/reassign": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReassignBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/records/{entity}/{id}": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/records/{entity}/{id}/history": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/records/{entity}/{id}/transitions/{key}": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/InputBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/records/{entity}/{id}/force-state": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForceStateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/records/{entity}/{id}/manual/{workflow}": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "entity",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workflow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/InputBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/manual/{workflow}": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "workflow",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/InputBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/signals/{key}": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SignalBody"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/audit": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "instanceId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "definitionId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "actorId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "take",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditRecord"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workflows/audit/export": {
+      "get": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "entityId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/audit/verify": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "parameters": [
+          {
+            "name": "fromSeq",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/workflows/audit/purge": {
+      "post": {
+        "tags": [
+          "Workflows"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AuditRecord": {
+        "type": "object",
+        "properties": {
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Position in the tenant's chain (1, 2, \u2026).",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string",
+            "description": "Entry id."
+          },
+          "at": {
+            "type": "string",
+            "description": "When it happened (UTC, millisecond precision).",
+            "format": "date-time"
+          },
+          "tenant": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The chain it belongs to, or null without tenancy."
+          },
+          "actorType": {
+            "type": "string"
+          },
+          "actorId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The user id, or the instance id for workflows."
+          },
+          "actorName": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The actor's display name (workflow key for workflows)."
+          },
+          "category": {
+            "type": "string",
+            "description": "The audit category (`definition`, `instance`, `step`, \u2026)."
+          },
+          "action": {
+            "type": "string",
+            "description": "The action within the category (`started`, `decided`, \u2026)."
+          },
+          "subjectType": {
+            "type": "string",
+            "description": "What the entry is about (`instance`, `task`, `record`, \u2026)."
+          },
+          "subjectId": {
+            "type": "string",
+            "description": "That subject's id."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's entity, when it concerns a record."
+          },
+          "entityId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's id."
+          },
+          "instanceId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The instance concerned, if any."
+          },
+          "definitionId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The definition concerned, if any."
+          },
+          "before": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Masked JSON of the state before."
+          },
+          "after": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Masked JSON of the state after."
+          },
+          "data": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Masked JSON of the details."
+          },
+          "correlationId": {
+            "type": "string",
+            "description": "Groups entries of one chain of work."
+          },
+          "causationId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The instance or entry that caused this one, if known."
+          },
+          "prevHash": {
+            "type": "string",
+            "description": "The previous entry's hash (64 zeros for the first)."
+          },
+          "hash": {
+            "type": "string"
+          }
+        },
+        "description": "One hash-chained audit entry (spec \u00a711)."
+      },
+      "DefinitionDetail": {
+        "required": [
+          "summary",
+          "draft",
+          "published",
+          "versions",
+          "problems"
+        ],
+        "type": "object",
+        "properties": {
+          "summary": {
+            "description": "The list summary.",
+            "$ref": "#/components/schemas/DefinitionSummary"
+          },
+          "draft": {
+            "description": "The draft JSON.",
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "published": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "description": "The latest published version's JSON, or null.",
+                "$ref": "#/components/schemas/JsonNode"
+              }
+            ]
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DefinitionVersionInfo"
+            },
+            "description": "Published versions, newest first, with instance counts."
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LintProblem"
+            },
+            "description": "Lint problems of the draft (spec \u00a713)."
+          }
+        },
+        "description": "A definition with its draft, latest published version, version history and the draft's lint problems."
+      },
+      "DefinitionSummary": {
+        "required": [
+          "id",
+          "key",
+          "kind",
+          "title",
+          "entity",
+          "status",
+          "version",
+          "hasDraftChanges",
+          "updatedAt",
+          "updatedBy",
+          "runningInstances"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The definition id."
+          },
+          "key": {
+            "type": "string",
+            "description": "Its key (unique; other workflows and the API use it)."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`automation` or `lifecycle`."
+          },
+          "title": {
+            "type": "string",
+            "description": "Its title."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type it is about, if any."
+          },
+          "status": {
+            "type": "string",
+            "description": "`draft`, `published` or `archived` (spec \u00a713)."
+          },
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The latest published version (0 when never published).",
+            "format": "int32"
+          },
+          "hasDraftChanges": {
+            "type": "boolean",
+            "description": "True when the draft differs from the latest published version."
+          },
+          "updatedAt": {
+            "type": "string",
+            "description": "When the draft or status last changed.",
+            "format": "date-time"
+          },
+          "updatedBy": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Who changed it."
+          },
+          "runningInstances": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "Unfinished automation and record instances of any version.",
+            "format": "int32"
+          }
+        },
+        "description": "A workflow definition in lists (builder home page, API)."
+      },
+      "DefinitionVersionInfo": {
+        "required": [
+          "version",
+          "note",
+          "publishedAt",
+          "publishedBy",
+          "instances"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The version number.",
+            "format": "int32"
+          },
+          "note": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The publish note."
+          },
+          "publishedAt": {
+            "type": "string",
+            "description": "When it was published.",
+            "format": "date-time"
+          },
+          "publishedBy": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Who published it."
+          },
+          "instances": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "How many automation and record instances are pinned to it.",
+            "format": "int32"
+          }
+        },
+        "description": "One published version of a definition."
+      },
+      "DelegateBody": {
+        "required": [
+          "to",
+          "note"
+        ],
+        "type": "object",
+        "properties": {
+          "to": {
+            "type": "string",
+            "description": "The user id to hand the task to."
+          },
+          "note": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "A note for them."
+          }
+        },
+        "description": "Body of `POST /tasks/{id}/delegate`."
+      },
+      "ForceStateBody": {
+        "required": [
+          "state",
+          "reason",
+          "skipSteps",
+          "lifecycle"
+        ],
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "description": "The state key to move to."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why (required, audited)."
+          },
+          "skipSteps": {
+            "type": "boolean",
+            "description": "Skip the onExit/onEnter steps."
+          },
+          "lifecycle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Which lifecycle, when the entity has more than one."
+          }
+        },
+        "description": "Body of `POST /records/{entity}/{id}/force-state`."
+      },
+      "InputBody": {
+        "required": [
+          "input",
+          "lifecycle"
+        ],
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "The form's answers."
+          },
+          "lifecycle": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Which lifecycle, when the entity has more than one."
+          }
+        },
+        "description": "Body of transition and manual-start requests."
+      },
+      "JsonNode": {},
+      "LintProblem": {
+        "required": [
+          "code",
+          "severity",
+          "node",
+          "message"
+        ],
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable problem code, the same in every engine and editor (`spec/fixtures/lint`)."
+          },
+          "severity": {
+            "type": "string",
+            "description": "`error` (blocks publishing) or `warning`."
+          },
+          "node": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The id of the step, state or transition the problem is on; null for the whole definition."
+          },
+          "message": {
+            "type": "string",
+            "description": "What is wrong, in plain words."
+          }
+        },
+        "description": "One problem in a definition. `Node` is the id of the step, state or transition it is on."
+      },
+      "MigrateBody": {
+        "required": [
+          "version",
+          "stateMap"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The version to move to.",
+            "format": "int32"
+          },
+          "stateMap": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Old state key \u2192 new state key, where keys differ."
+          }
+        },
+        "description": "Body of `POST /instances/{id}/migrate`."
+      },
+      "PublishBody": {
+        "required": [
+          "note"
+        ],
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "What changed, shown in the version list."
+          }
+        },
+        "description": "Body of `POST /definitions/{id}/publish`."
+      },
+      "ReasonBody": {
+        "required": [
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Why, in plain words."
+          }
+        },
+        "description": "A body carrying only a reason (e.g. cancelling an instance)."
+      },
+      "ReassignBody": {
+        "required": [
+          "assignees",
+          "reason"
+        ],
+        "type": "object",
+        "properties": {
+          "assignees": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The new assignees' user ids."
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Why."
+          }
+        },
+        "description": "Body of `POST /tasks/{id}/reassign`."
+      },
+      "RetryBody": {
+        "required": [
+          "target"
+        ],
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Which incident, by token id or failed step id, when several paths stopped (default: the first)."
+          }
+        },
+        "description": "Body of `POST /instances/{id}/retry`."
+      },
+      "RollbackBody": {
+        "required": [
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The version to publish again.",
+            "format": "int32"
+          }
+        },
+        "description": "Body of `POST /definitions/{id}/rollback`."
+      },
+      "SignalBody": {
+        "required": [
+          "entity",
+          "entityId",
+          "data"
+        ],
+        "type": "object",
+        "properties": {
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's entity, if the signal is about one."
+          },
+          "entityId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record's id."
+          },
+          "data": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "The signal's data."
+          }
+        },
+        "description": "Body of `POST /signals/{key}`."
+      },
+      "SkipBody": {
+        "required": [
+          "outputs"
+        ],
+        "type": "object",
+        "properties": {
+          "outputs": {
+            "type": [
+              "null",
+              "object"
+            ],
+            "description": "Outputs to give the skipped step."
+          },
+          "target": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Which incident, by token id or failed step id, when several paths stopped (default: the first)."
+          }
+        },
+        "description": "Body of `POST /instances/{id}/skip`."
+      },
+      "TriggerOverview": {
+        "required": [
+          "definitionId",
+          "definitionKey",
+          "title",
+          "kind",
+          "type",
+          "entity",
+          "field",
+          "summary",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "definitionId": {
+            "type": "string",
+            "description": "The definition it belongs to."
+          },
+          "definitionKey": {
+            "type": "string",
+            "description": "That definition's key."
+          },
+          "title": {
+            "type": "string",
+            "description": "That definition's title."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`automation` or `lifecycle`."
+          },
+          "type": {
+            "type": "string",
+            "description": "The trigger type (spec \u00a75), or `lifecycle` for an owned field."
+          },
+          "entity": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The record type it watches, if any."
+          },
+          "field": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The field it watches or owns, if any."
+          },
+          "summary": {
+            "type": "string",
+            "description": "A plain-English description (\"When Application Stage changes to Done\")."
+          },
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "description": "The published version the trigger comes from.",
+            "format": "int32"
+          }
+        },
+        "description": "One active trigger or lifecycle, for the \"Watching\" section of global settings."
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Zouriel.Workflows.Sample"
+    },
+    {
+      "name": "Demo app"
+    },
+    {
+      "name": "Workflows"
+    }
+  ]
+}
