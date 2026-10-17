@@ -1,0 +1,123 @@
+{
+ "name": "Restoring a lifecycle is linted against what was published meanwhile: a second fallback for the same field is refused (lifecycleConflict) and the lifecycle stays archived",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "records": {
+  "application": []
+ },
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_old",
+   "key": "oldFlow",
+   "kind": "lifecycle",
+   "title": "oldFlow",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "a",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "b",
+      "key": "approved",
+      "label": "Done",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "finish",
+      "label": "Finish",
+      "from": [
+       "a"
+      ],
+      "to": "b",
+      "who": [
+       {
+        "role": "admin"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "archive": "oldFlow"
+  },
+  {
+   "publish": {
+    "specVersion": 1,
+    "id": "lc_new",
+    "key": "newFlow",
+    "kind": "lifecycle",
+    "title": "newFlow",
+    "entity": "application",
+    "lifecycle": {
+     "field": "status",
+     "states": [
+      {
+       "id": "a",
+       "key": "draft",
+       "label": "Draft",
+       "category": "initial"
+      },
+      {
+       "id": "b",
+       "key": "approved",
+       "label": "Done",
+       "category": "terminal"
+      }
+     ],
+     "transitions": [
+      {
+       "id": "t",
+       "key": "finish",
+       "label": "Finish",
+       "from": [
+        "a"
+       ],
+       "to": "b",
+       "who": [
+        {
+         "role": "admin"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "restore": "oldFlow",
+   "expectError": "lintErrors"
+  },
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "x"
+    }
+   },
+   "expect": {
+    "instanceKinds": [
+     "record"
+    ],
+    "instances": [
+     {
+      "definition": "newFlow",
+      "record": "a1"
+     }
+    ]
+   }
+  }
+ ]
+}

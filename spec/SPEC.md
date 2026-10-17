@@ -399,6 +399,10 @@ settings; a connection names a secret the host resolves.
 
 - `status`: `draft` | `published` | `archived`. Publishing validates (all lint errors block; warnings
   don't), increments `version`, stores an immutable copy, re-indexes triggers, and records a diff.
+  Archiving removes the definition's triggers (it starts nothing new; running instances finish on their
+  version). Restoring lints the published version against the other published workflows first, like a
+  publish (`lintErrors`, e.g. a second fallback lifecycle published meanwhile: `lifecycleConflict`), then
+  re-indexes its triggers with its original first-publish time.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
   produce the same codes for the same definition.
 - **Permissions.** `POST /definitions/{id}/permissions` with `{ changes: [{ node, who }], note? }`

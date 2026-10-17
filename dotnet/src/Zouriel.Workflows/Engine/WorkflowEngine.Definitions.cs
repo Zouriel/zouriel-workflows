@@ -393,7 +393,11 @@ public sealed partial class WorkflowEngine
     public Task<DefinitionSummary> ArchiveAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
         SetStatusAsync(id, DefinitionStatus.Archived, "archived", actor, ct);
 
-    /// <summary>Restores an archived definition to published (or draft, if never published) and re-indexes its triggers. Audited as <c>definition.restored</c>.</summary>
+    /// <summary>
+    /// Restores an archived definition to published (or draft, if never published) and re-indexes its triggers.
+    /// The published version is linted against the other published workflows first and lint errors refuse it
+    /// (<c>lintErrors</c>), like publishing. Audited as <c>definition.restored</c>.
+    /// </summary>
     public Task<DefinitionSummary> RestoreAsync(string id, WorkflowActor actor, CancellationToken ct = default) =>
         SetStatusAsync(id, null, "restored", actor, ct);
 
@@ -408,6 +412,13 @@ public sealed partial class WorkflowEngine
         RunAsync(async u =>
         {
             var rec = await RequireDefinitionAsync(u, id, ct);
+            if (status is null && rec.Version > 0 && rec.Status == DefinitionStatus.Archived)
+            {
+                // Coming back must not clash with what was published meanwhile (two fallback lifecycles for one
+                // field, a key another workflow now uses…): the version is linted like a publish.
+                var errors = (await LintAsync(u, (await u.S.GetVersionAsync(id, rec.Version, ct))!.Json, ct)).Where(p => p.Severity == "error").ToList();
+                if (errors.Count > 0) throw new WorkflowException("lintErrors", $"Fix {errors.Count} problem(s) before restoring.", errors);
+            }
             rec.Status = status ?? (rec.Version > 0 ? DefinitionStatus.Published : DefinitionStatus.Draft);
             rec.UpdatedAt = u.Now;
             rec.UpdatedBy = actor.Id;
