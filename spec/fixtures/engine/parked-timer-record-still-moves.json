@@ -1,0 +1,229 @@
+{
+ "name": "A record instance in incident is not frozen: a permissions change still moves it to the new version, and an automatic move whose condition comes true still happens and ends the incident",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "maxTimerAttempts": 2,
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_x",
+   "key": "expiry",
+   "kind": "lifecycle",
+   "title": "Expiry",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "d",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "s",
+      "key": "submitted",
+      "label": "Submitted",
+      "category": "active"
+     },
+     {
+      "id": "w",
+      "key": "withdrawn",
+      "label": "Withdrawn",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t1",
+      "key": "submit",
+      "label": "Submit",
+      "from": [
+       "d"
+      ],
+      "to": "s",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     },
+     {
+      "id": "tx",
+      "key": "expire",
+      "label": "Expire unsent drafts",
+      "from": [
+       "d"
+      ],
+      "to": "w",
+      "auto": {
+       "after": "PT1H"
+      },
+      "hidden": true
+     },
+     {
+      "id": "ta",
+      "key": "fastTrack",
+      "label": "Fast track",
+      "from": [
+       "d"
+      ],
+      "to": "s",
+      "auto": {
+       "when": {
+        "ref": "entity.priority",
+        "op": "eq",
+        "value": {
+         "const": "high"
+        }
+       }
+      },
+      "hidden": true
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "Grant a1"
+    }
+   },
+   "expect": {
+    "bookmarks": 1
+   }
+  },
+  {
+   "refuse": {
+    "writes": [
+     "application.status"
+    ]
+   }
+  },
+  {
+   "advance": "PT1H",
+   "expect": {
+    "instances": [
+     {
+      "definition": "expiry",
+      "kind": "record",
+      "status": "active",
+      "state": "draft"
+     }
+    ],
+    "auditCount": {
+     "instance.timerFailed": 1
+    }
+   }
+  },
+  {
+   "advance": "PT5M",
+   "expect": {
+    "instances": [
+     {
+      "definition": "expiry",
+      "kind": "record",
+      "status": "incident",
+      "state": "draft",
+      "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+     }
+    ],
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev1",
+     "transitions": [
+      "submit"
+     ],
+     "state": "draft",
+     "status": "incident",
+     "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+    },
+    "audit": [
+     {
+      "is": "instance.timerFailed",
+      "data": {
+       "attempt": 2,
+       "parked": true
+      }
+     },
+     "instance.incident"
+    ],
+    "bookmarks": 1
+   }
+  },
+  {
+   "permissions": {
+    "workflow": "expiry",
+    "changes": [
+     {
+      "node": "t1",
+      "who": [
+       {
+        "user": "rev2"
+       }
+      ]
+     }
+    ]
+   },
+   "expect": {
+    "instances": [
+     {
+      "status": "incident",
+      "version": 2,
+      "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+     }
+    ],
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev2",
+     "transitions": [
+      "submit"
+     ],
+     "status": "incident",
+     "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+    }
+   }
+  },
+  {
+   "allow": {
+    "writes": [
+     "application.status"
+    ]
+   }
+  },
+  {
+   "change": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "priority": "high"
+    }
+   },
+   "expect": {
+    "instances": [
+     {
+      "status": "active",
+      "state": "submitted",
+      "error": null
+     }
+    ],
+    "audit": [
+     "instance.incident",
+     {
+      "is": "lifecycle.autoTransitioned",
+      "data": {
+       "transition": "fastTrack"
+      }
+     }
+    ],
+    "bookmarks": 0
+   }
+  }
+ ]
+}

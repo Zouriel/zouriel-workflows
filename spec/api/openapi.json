@@ -727,7 +727,7 @@
         "tags": [
           "Workflows"
         ],
-        "description": "Items the caller may not see (IWorkflowAccessPolicy) are left out of `items` and of `total`, and `skip`/`take` count visible items. With a restrictive policy the server checks at most the first 5000 matches; past that, `total` also counts the unchecked rest.",
+        "description": "Items the caller may not see (IWorkflowAccessPolicy) are left out of `items` and of `total`, and `skip`/`take` count visible items. With a restrictive policy the server checks at most the first 5000 matches; past that, `total` also counts the unchecked rest. Without `kind`, automations and lifecycle record instances are listed; when `status` includes `incident`, the lifecycle child runs (`run`) are listed too, so every stuck instance (a failed step, or a timer that kept failing and was parked: retry or skip it) shows in one list.",
         "parameters": [
           {
             "name": "definitionId",
@@ -3477,7 +3477,7 @@
               "null",
               "string"
             ],
-            "description": "The record instance's status (`active`, `completed`, `outOfSync`\u2026)."
+            "description": "The record instance's status: `active`, `incident` (a timer of its state failed and was parked; see\n`error`; the record can still be moved), `completed` or `outOfSync`."
           },
           "stateEnteredAt": {
             "type": [
@@ -3528,6 +3528,13 @@
                 "$ref": "#/components/schemas/ResetOption"
               }
             ]
+          },
+          "error": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "Why the record instance is in `incident` (masked); null otherwise."
           }
         },
         "description": "Everything a record page shows (the record panel): its lifecycle state, the transitions the viewer may\napply, open tasks, recent runs and manual starts. Reading never creates the lifecycle instance; a\nrecord without one is shown in the state it would get."
@@ -3725,10 +3732,10 @@
               "null",
               "string"
             ],
-            "description": "Which incident, by token id or failed step id, when several paths stopped (default: the first)."
+            "description": "Which problem: a parked timer by bookmark id, purpose or step id, or a stopped path by token id or failed step id.\nDefault: every parked timer, else the first stopped path."
           }
         },
-        "description": "Body of `POST /instances/{id}/retry`."
+        "description": "Body of `POST /instances/{id}/retry`. On an instance held in `incident` by parked timers (spec \u00a710), retry\nre-arms them (due now, attempts reset); otherwise it runs the failed step again. Either way, once nothing else holds\nit the instance returns to `active` (record instances) or `waiting`/`running` (runs) and its error is cleared."
       },
       "RevisionResponse": {
         "required": [
@@ -4208,17 +4215,17 @@
               "null",
               "object"
             ],
-            "description": "Outputs to give the skipped step."
+            "description": "Outputs to give the skipped step (ignored for a parked timer)."
           },
           "target": {
             "type": [
               "null",
               "string"
             ],
-            "description": "Which incident, by token id or failed step id, when several paths stopped (default: the first)."
+            "description": "Which problem: a parked timer by bookmark id, purpose (e.g. `auto:t1`, `reminder`) or step id, or a stopped\npath by token id or failed step id. Default: every parked timer, else the first stopped path."
           }
         },
-        "description": "Body of `POST /instances/{id}/skip`."
+        "description": "Body of `POST /instances/{id}/skip`. On an instance held in `incident` by parked timers (spec \u00a710), skip drops\nthem without running them (a record instance stays in its state with nothing scheduled for them); otherwise it\ncontinues after the failed step."
       },
       "StepDescriptor": {
         "required": [

@@ -29,6 +29,12 @@ public static class ConformanceRunner
         var registry = WorkflowRegistry.FromJson(registryNode!.ToJsonString());
         var now = DateTimeOffset.Parse(fx["now"]?.GetValue<string>() ?? "2026-10-19T09:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
         var host = new WorkflowTestHost(registry, now);
+        // Fixtures about failing timers set how many attempts park one; their failures are then expected, not a fault.
+        if (fx["maxTimerAttempts"] is JsonValue attempts)
+        {
+            host.Engine.MaxTimerAttempts = attempts.GetValue<int>();
+            host.AllowTimerFailures = true;
+        }
         var usersNode = fx["users"] is JsonValue uv ? JsonNode.Parse(await File.ReadAllTextAsync(Path.Combine(dir, uv.GetValue<string>()), ct)) : fx["users"];
         foreach (var u in usersNode as JsonArray ?? [])
         {
@@ -75,6 +81,18 @@ public static class ConformanceRunner
                 throw new ConformanceException($"{Path.GetFileName(fixturePath)} › {label}: {e.Message}");
             }
         }
+    }
+
+    /// <summary>
+    /// <c>refuse</c> / <c>allow</c>: <c>writes</c> lists <c>entity.field</c> the store refuses to write (as a database
+    /// constraint would); <c>userLookups</c> lists user ids whose directory lookup fails.
+    /// </summary>
+    private static void Breakdown(WorkflowTestHost host, JsonObject spec, bool on)
+    {
+        foreach (var w in Strings(spec["writes"]) ?? [])
+            if (on) host.Store.RefusedWrites[w] = true; else host.Store.RefusedWrites.TryRemove(w, out _);
+        foreach (var id in Strings(spec["userLookups"]) ?? [])
+            if (on) host.Identity.Broken[id] = true; else host.Identity.Broken.TryRemove(id, out _);
     }
 
     private static IReadOnlyList<string>? Strings(JsonNode? n) => (n as JsonArray)?.Select(x => x!.GetValue<string>()).ToList();
@@ -193,6 +211,8 @@ public static class ConformanceRunner
             var (_, rev) = await e.GetSettingsAsync(ct);
             await e.SaveSettingsAsync(Settings.GlobalSettings.Parse(st.ToJsonString()), rev, Actor(host, JsonValue.Create("admin")), ct);
         }
+        else if (s["refuse"] is JsonObject rf) Breakdown(host, rf, on: true);
+        else if (s["allow"] is JsonObject al) Breakdown(host, al, on: false);
         else if (s["archive"] is JsonValue ar)
         {
             var def = (await e.ListDefinitionsAsync(ct)).First(d => d.Key == ar.GetValue<string>());
@@ -337,6 +357,9 @@ public static class ConformanceRunner
             // "comments": { transitionKey: "none"|"optional"|"required" } for the offered transitions; "resetComment" for the reset option.
             if (av["comments"] is JsonObject wantC)
                 CompareSubset("available.comments", wantC, view.Transitions.ToDictionary(t => t.Key, t => (object?)t.Comment));
+            // "status" and "error": the record instance's status as the record page shows it, and why it is in incident.
+            if (av["status"] is JsonValue sv && view.Status != sv.GetValue<string>()) throw new ConformanceException($"available.status: expected {sv}, got {view.Status}");
+            if (av.ContainsKey("error")) CompareValue("available.error", Values.FromJson(av["error"]), view.Error);
             if (av["resetComment"] is JsonValue rc && view.Reset?.Comment != rc.GetValue<string>())
                 throw new ConformanceException($"available.resetComment: expected {rc}, got {view.Reset?.Comment ?? "no reset"}");
         }

@@ -191,7 +191,7 @@ public sealed partial class WorkflowEngine
                 // Enforce mode refuses outside writes before commit; anything that still arrives is observed.
                 await ObserveWriteAsync(u, c, change, fc, ct);
             }
-            else if (record is not null && record.Status == InstanceStatus.Active && record.Version > 0)
+            else if (record is not null && record.Status is InstanceStatus.Active or InstanceStatus.Incident && record.Version > 0)
             {
                 await CheckAutoWhenAsync(u, await CompiledAsync(u, record.DefinitionId, record.Version, ct), record, change.Depth, 0, ct);
             }
@@ -412,10 +412,12 @@ public sealed partial class WorkflowEngine
 
     /// <summary>
     /// A timer could not be processed (its unit rolled back, so the bookmark is still there): count the attempt and
-    /// back off 1, 2, 4… minutes up to an hour. After <see cref="MaxTimerAttempts"/> it is parked for an admin and the
-    /// instance shows it: an automation or run token stops in an incident (retry, skip or cancel it as usual); a
-    /// lifecycle record instance (automatic transition or SLA timer), or a task's reminder or escalation (the task stays
-    /// open), gets the error on the instance and an <c>instance.incident</c> entry.
+    /// back off 1, 2, 4… minutes up to an hour. After <see cref="MaxTimerAttempts"/> it is parked for an admin and its
+    /// instance goes to <c>incident</c> with the error: an automation or run token waiting on it stops in an incident
+    /// (retry, skip or cancel it as usual); a lifecycle record instance (automatic transition or SLA timer), or a run
+    /// whose task reminder or escalation keeps failing (the task stays open), keeps the parked timer, which retry re-arms
+    /// and skip drops (<see cref="RetryAsync(string, WorkflowActor, string?, CancellationToken)"/>). An
+    /// <c>instance.incident</c> entry is written either way.
     /// </summary>
     private async Task TimerFailedAsync(Uow u, string bookmarkId, string error, CancellationToken ct)
     {
@@ -443,7 +445,10 @@ public sealed partial class WorkflowEngine
             var record = inst.Kind == InstanceKinds.Record
                 ? u.Records.TryGetValue(inst.Id, out var held) ? held : u.Records[inst.Id] = inst
                 : u.Execs.TryGetValue(inst.Id, out var exec) ? exec.I : inst;
+            // The record is not frozen: people can still move it (a move replans the state's timers and ends the incident).
+            record.Status = InstanceStatus.Incident;
             record.Error = message;
+            record.ErrorStepId = inst.Kind == InstanceKinds.Record ? null : b.NodeId;
             record.UpdatedAt = u.Now;
             await u.S.UpdateInstanceAsync(record, ct);
             await u.AuditAsync(new AuditEntry
@@ -464,6 +469,16 @@ public sealed partial class WorkflowEngine
         await RaiseIncidentAsync(x, t, step, message, ct);
         await SaveAsync(x, ct);
     }
+
+    /// <summary>Whether a timer was parked after failing <see cref="MaxTimerAttempts"/> times (locked "for ever").</summary>
+    internal static bool IsParked(BookmarkRecord b) => b.LockedUntil is { } l && l.UtcDateTime.Year >= 9999;
+
+    /// <summary>An instance's parked timers (oldest first).</summary>
+    internal static async Task<List<BookmarkRecord>> ParkedTimersAsync(Uow u, string instanceId, CancellationToken ct) =>
+        (await u.S.ListBookmarksAsync(instanceId, ct)).Where(IsParked).OrderBy(b => b.CreatedAt).ToList();
+
+    /// <summary>The instance error a parked timer shows.</summary>
+    internal static string ParkedMessage(BookmarkRecord b) => $"A timer ({b.Purpose}) failed {b.Attempts} times and was stopped: {b.Error}";
 
     /// <summary>Fires one due bookmark (it is removed first; reminders and escalations leave the task open).</summary>
     internal async Task FireAsync(Uow u, string bookmarkId, CancellationToken ct)

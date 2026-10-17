@@ -128,7 +128,10 @@ public sealed record ResetOption(string Label, string To, string ToLabel, string
 /// <param name="State">The current state key.</param>
 /// <param name="StateLabel">The current state's label.</param>
 /// <param name="StateTone">The current state's tone.</param>
-/// <param name="Status">The record instance's status (<c>active</c>, <c>completed</c>, <c>outOfSync</c>…).</param>
+/// <param name="Status">
+/// The record instance's status: <c>active</c>, <c>incident</c> (a timer of its state failed and was parked; see
+/// <c>error</c>; the record can still be moved), <c>completed</c> or <c>outOfSync</c>.
+/// </param>
 /// <param name="StateEnteredAt">When the record entered its state, if known.</param>
 /// <param name="Transitions">What the viewer may apply now.</param>
 /// <param name="Tasks">Open tasks about the record.</param>
@@ -136,10 +139,11 @@ public sealed record ResetOption(string Label, string To, string ToLabel, string
 /// <param name="Manual">Manual workflows the viewer may start from the record.</param>
 /// <param name="States">All states of the lifecycle: <c>{ key, label, category, tone }</c>.</param>
 /// <param name="Reset">Starting the workflow over, when the viewer may (null otherwise).</param>
+/// <param name="Error">Why the record instance is in <c>incident</c> (masked); null otherwise.</param>
 public sealed record RecordView(
     string Entity, string Id, string? Title, string? Lifecycle, string? LifecycleTitle, string? State, string? StateLabel, string? StateTone, string? Status,
     string? StateEnteredAt, IReadOnlyList<TransitionOption> Transitions, IReadOnlyList<TaskView> Tasks, IReadOnlyList<InstanceView> Instances,
-    IReadOnlyList<ManualOption> Manual, IReadOnlyList<object?> States, ResetOption? Reset);
+    IReadOnlyList<ManualOption> Manual, IReadOnlyList<object?> States, ResetOption? Reset, string? Error = null);
 
 /// <summary>A manual-trigger workflow the viewer may start from a record (spec §5 <c>manual</c>).</summary>
 /// <param name="Key">The workflow key to start.</param>
@@ -238,6 +242,17 @@ public sealed partial class WorkflowEngine
     public Task<InstanceView> RetryAsync(string id, WorkflowActor admin, string? target, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
+            // A parked timer (spec §10): re-armed, due now, its failures forgotten.
+            if (await ParkedTargetsAsync(u, id, target, ct) is { Count: > 0 } parked)
+            {
+                foreach (var b in parked)
+                {
+                    (b.Attempts, b.Error, b.LockedUntil, b.DueAt) = (0, null, null, u.Now);
+                    await u.S.UpdateBookmarkAsync(b, ct);
+                }
+                await LeaveParkedIncidentAsync(u, id, "retried", admin, parked, ct);
+                return await InstanceViewAsync(u, id, ct);
+            }
             var (x, t) = await IncidentAsync(u, id, target, ct);
             await u.AuditAsync(IncidentAudit(x, "retried", admin, new Dictionary<string, object?> { ["step"] = t.IncidentStepId, ["token"] = t.Id }), ct);
             t.Top.Attempt = 1;
@@ -255,6 +270,13 @@ public sealed partial class WorkflowEngine
     public Task<InstanceView> SkipAsync(string id, Dictionary<string, object?>? outputs, WorkflowActor admin, string? target, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
+            // A parked timer (spec §10): dropped without running; nothing is scheduled in its place.
+            if (await ParkedTargetsAsync(u, id, target, ct) is { Count: > 0 } parked)
+            {
+                foreach (var b in parked) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                await LeaveParkedIncidentAsync(u, id, "skipped", admin, parked, ct);
+                return await InstanceViewAsync(u, id, ct);
+            }
             var (x, t) = await IncidentAsync(u, id, target, ct);
             var stepId = t.IncidentStepId;
             foreach (var (k, v) in outputs ?? []) if (stepId is not null) x.S.SetOutput(stepId, k, v);
@@ -262,6 +284,64 @@ public sealed partial class WorkflowEngine
             await ResumeIncidentAsync(x, t, advance: stepId is not null, ct);
             return await InstanceViewAsync(u, id, ct);
         }, ct);
+
+    /// <summary>
+    /// The parked timers a retry or skip acts on: all of the instance's (<paramref name="target"/> null), or the one whose
+    /// bookmark id, purpose or step id is <paramref name="target"/>. Empty when the instance is not in incident or has none:
+    /// the caller then handles a stopped step instead.
+    /// </summary>
+    private static async Task<List<BookmarkRecord>> ParkedTargetsAsync(Uow u, string id, string? target, CancellationToken ct)
+    {
+        var i = await u.S.GetInstanceAsync(id, ct) ?? throw new WorkflowException("notFound", "That instance does not exist.");
+        if (i.Status != InstanceStatus.Incident) return [];
+        var parked = await ParkedTimersAsync(u, id, ct);
+        return target is null ? parked : parked.Where(b => b.Id == target || b.Purpose == target || b.NodeId == target).ToList();
+    }
+
+    /// <summary>
+    /// After a parked timer was re-armed or dropped: the instance leaves <c>incident</c> when nothing else holds it there
+    /// (another parked timer, a stopped step), back to where it was (a record instance <c>active</c>; a run <c>waiting</c>,
+    /// or <c>running</c> and driven on), and its error is cleared; otherwise it shows the next problem.
+    /// </summary>
+    private async Task LeaveParkedIncidentAsync(Uow u, string id, string action, WorkflowActor admin, List<BookmarkRecord> timers, CancellationToken ct)
+    {
+        var data = new Dictionary<string, object?>
+        {
+            ["timers"] = timers.Select(b => (object?)new Dictionary<string, object?> { ["bookmark"] = b.Id, ["purpose"] = b.Purpose, ["step"] = b.NodeId }).ToList(),
+        };
+        var left = await ParkedTimersAsync(u, id, ct);
+        var inst = await u.S.GetInstanceAsync(id, ct) ?? throw new WorkflowException("notFound", "That instance does not exist.");
+        if (inst.Kind == InstanceKinds.Record)
+        {
+            var record = u.Records.TryGetValue(inst.Id, out var held) ? held : u.Records[inst.Id] = inst;
+            if (left.Count > 0) record.Error = ParkedMessage(left[0]);
+            else (record.Status, record.Error, record.ErrorStepId) = (record.State is null ? InstanceStatus.OutOfSync : InstanceStatus.Active, null, null);
+            record.UpdatedAt = u.Now;
+            await u.S.UpdateInstanceAsync(record, ct);
+            await u.AuditAsync(new AuditEntry
+            {
+                Category = "instance", Action = action, SubjectType = "instance", SubjectId = record.Id, InstanceId = record.Id, DefinitionId = record.DefinitionId,
+                Entity = record.Entity, EntityId = record.EntityId, Actor = admin, CorrelationId = record.CorrelationId, Data = data,
+            }, ct);
+            return;
+        }
+        var x = await LoadExecAsync(u, id, ct);
+        await u.AuditAsync(IncidentAudit(x, action, admin, data), ct);
+        var stopped = x.S.Tokens.FirstOrDefault(o => o.Waiting == "incident");
+        if (stopped is not null) (x.I.Error, x.I.ErrorStepId) = (stopped.IncidentError, stopped.IncidentStepId);
+        else if (left.Count > 0) (x.I.Error, x.I.ErrorStepId) = (ParkedMessage(left[0]), left[0].NodeId);
+        else
+        {
+            (x.I.Error, x.I.ErrorStepId) = (null, null);
+            x.I.Status = x.S.Tokens.Any(o => o.Status == TokenStatus.Active) ? InstanceStatus.Running : InstanceStatus.Waiting;
+            if (x.I.Status == InstanceStatus.Running)
+            {
+                await DriveAsync(x, ct);
+                return;
+            }
+        }
+        await SaveAsync(x, ct);
+    }
 
     private async Task<(Exec X, Token T)> IncidentAsync(Uow u, string id, string? target, CancellationToken ct)
     {
@@ -280,9 +360,11 @@ public sealed partial class WorkflowEngine
         t.IncidentStepId = null;
         if (advance) Advance(t);
         var next = x.S.Tokens.FirstOrDefault(o => o.Waiting == "incident");
-        x.I.Status = next is null ? InstanceStatus.Running : InstanceStatus.Incident;
-        x.I.Error = next?.IncidentError;
-        x.I.ErrorStepId = next?.IncidentStepId;
+        // A parked timer (a task reminder that keeps failing) keeps the instance in incident too.
+        var parked = next is null ? (await ParkedTimersAsync(x.U, x.I.Id, ct)).FirstOrDefault() : null;
+        x.I.Status = next is null && parked is null ? InstanceStatus.Running : InstanceStatus.Incident;
+        x.I.Error = next?.IncidentError ?? (parked is null ? null : ParkedMessage(parked));
+        x.I.ErrorStepId = next?.IncidentStepId ?? parked?.NodeId;
         await DriveAsync(x, ct);
     }
 
@@ -329,7 +411,9 @@ public sealed partial class WorkflowEngine
         foreach (var b in await u.S.ListBookmarksAsync(i.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
         i.State = target?.Id;
         if (target is null) return;
-        i.Status = target.IsTerminal ? InstanceStatus.Completed : i.Status == InstanceStatus.OutOfSync ? InstanceStatus.Active : i.Status;
+        // Its timers were all replanned, so a parked one no longer holds it in incident.
+        if (i.Status == InstanceStatus.Incident) (i.Error, i.ErrorStepId) = (null, null);
+        i.Status = target.IsTerminal ? InstanceStatus.Completed : i.Status is InstanceStatus.OutOfSync or InstanceStatus.Incident ? InstanceStatus.Active : i.Status;
         i.EndedAt = target.IsTerminal ? u.Now : null;
         if (!target.IsTerminal) await PlanStateTimersAsync(u, to, i, target, ct);
     }
@@ -433,7 +517,8 @@ public sealed partial class WorkflowEngine
         }
         var state = rc?.StateById(record?.State);
         return new RecordView(entity, id, title, c?.Definition.Key, c?.Definition.Title, state?.Key, state?.Label, state?.Tone, record?.Status,
-            record?.StateEnteredAt is null ? null : Values.FormatInstant(record.StateEnteredAt.Value), options, tasks, instances, manual, states, reset);
+            record?.StateEnteredAt is null ? null : Values.FormatInstant(record.StateEnteredAt.Value), options, tasks, instances, manual, states, reset,
+            record is { Status: InstanceStatus.Incident, Error: { } error } ? (await u.MaskerAsync(entity, id, ct)).MaskText(error) : null);
     }
 
     // ── Audit ─────────────────────────────────────────────────────────────

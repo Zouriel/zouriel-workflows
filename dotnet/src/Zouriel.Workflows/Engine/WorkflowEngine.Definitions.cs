@@ -106,7 +106,7 @@ public sealed partial class WorkflowEngine
             {
                 var page = await u.S.QueryInstancesAsync(new InstanceQuery
                 {
-                    DefinitionId = def.Id, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.OutOfSync, InstanceStatus.Completed], Skip = skip, Take = 1000,
+                    DefinitionId = def.Id, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.Incident, InstanceStatus.OutOfSync, InstanceStatus.Completed], Skip = skip, Take = 1000,
                 }, ct);
                 foreach (var i in page) if (i.State is not null) inState[i.State] = inState.GetValueOrDefault(i.State) + 1;
                 if (page.Count < 1000) break;
@@ -389,7 +389,7 @@ public sealed partial class WorkflowEngine
         {
             var page = await u.S.QueryInstancesAsync(new InstanceQuery
             {
-                DefinitionId = definitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.OutOfSync, InstanceStatus.Completed],
+                DefinitionId = definitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.Incident, InstanceStatus.OutOfSync, InstanceStatus.Completed],
                 Skip = skip, Take = 500,
             }, ct);
             foreach (var found in page)

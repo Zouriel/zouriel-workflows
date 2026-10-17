@@ -1,0 +1,241 @@
+{
+ "name": "A task reminder that keeps failing is parked: the waiting run goes to incident with the error; deciding the task moves the run on and clears the error",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "maxTimerAttempts": 2,
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_r",
+   "key": "review",
+   "kind": "lifecycle",
+   "title": "Review",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "d",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial",
+      "onEnter": [
+       {
+        "id": "ap",
+        "type": "approval",
+        "title": "Check it",
+        "assignees": [
+         {
+          "user": "rev1"
+         }
+        ],
+        "rule": {
+         "type": "any"
+        },
+        "due": "P5D",
+        "reminders": [
+         "PT1H"
+        ],
+        "outcomes": {
+         "approved": [],
+         "rejected": [],
+         "timedOut": []
+        }
+       },
+       {
+        "id": "cool",
+        "type": "wait",
+        "until": {
+         "type": "duration",
+         "duration": "P1D"
+        }
+       }
+      ]
+     },
+     {
+      "id": "o",
+      "key": "approved",
+      "label": "Approved",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t",
+      "key": "approve",
+      "label": "Approve",
+      "from": [
+       "d"
+      ],
+      "to": "o",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "Bursary"
+    }
+   },
+   "expect": {
+    "instanceKinds": [
+     "record",
+     "run"
+    ],
+    "instances": [
+     {
+      "kind": "record",
+      "status": "active"
+     },
+     {
+      "kind": "run",
+      "status": "waiting",
+      "reason": "onEnter:d"
+     }
+    ]
+   }
+  },
+  {
+   "refuse": {
+    "userLookups": [
+     "rev1"
+    ]
+   }
+  },
+  {
+   "advance": "PT1H"
+  },
+  {
+   "advance": "PT5M",
+   "expect": {
+    "instanceKinds": [
+     "record",
+     "run"
+    ],
+    "instances": [
+     {
+      "kind": "record",
+      "status": "active",
+      "error": null
+     },
+     {
+      "kind": "run",
+      "status": "incident",
+      "error": "A timer (reminder) failed 2 times and was stopped: InvalidOperationException: The directory failed looking up 'rev1'."
+     }
+    ],
+    "audit": [
+     {
+      "is": "instance.timerFailed",
+      "data": {
+       "purpose": "reminder",
+       "parked": true
+      }
+     },
+     "instance.incident"
+    ]
+   }
+  },
+  {
+   "allow": {
+    "userLookups": [
+     "rev1"
+    ]
+   },
+   "expect": {
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev1",
+     "transitions": [
+      "approve"
+     ],
+     "status": "active",
+     "error": null
+    },
+    "instanceKinds": [
+     "record",
+     "run"
+    ],
+    "instances": [
+     {
+      "kind": "record",
+      "status": "active"
+     },
+     {
+      "kind": "run",
+      "status": "incident"
+     }
+    ],
+    "tasks": [
+     {
+      "step": "ap",
+      "status": "open"
+     }
+    ]
+   }
+  },
+  {
+   "decide": {
+    "step": "ap",
+    "user": "rev1",
+    "outcome": "approved"
+   },
+   "expect": {
+    "instanceKinds": [
+     "record",
+     "run"
+    ],
+    "instances": [
+     {
+      "kind": "record",
+      "status": "active"
+     },
+     {
+      "kind": "run",
+      "status": "waiting",
+      "error": null
+     }
+    ],
+    "tasks": [
+     {
+      "step": "ap",
+      "status": "completed",
+      "outcome": "approved"
+     }
+    ],
+    "bookmarks": 1
+   }
+  },
+  {
+   "advance": "P1D",
+   "expect": {
+    "instanceKinds": [
+     "record",
+     "run"
+    ],
+    "instances": [
+     {
+      "kind": "record",
+      "status": "active"
+     },
+     {
+      "kind": "run",
+      "status": "completed",
+      "error": null
+     }
+    ]
+   }
+  }
+ ]
+}

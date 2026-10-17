@@ -47,6 +47,9 @@ public sealed class WorkflowTestHost
         Store.Changes = Engine.Changes;
     }
 
+    /// <summary>When true, settling tolerates timers that fail (tests of backoff and parking); otherwise a failed timer fails the test.</summary>
+    public bool AllowTimerFailures { get; set; }
+
     /// <summary>Runs the background work (outbox, notifications, due timers) until nothing is left, like the hosted workers do.</summary>
     public async Task SettleAsync(CancellationToken ct = default)
     {
@@ -58,7 +61,7 @@ public sealed class WorkflowTestHost
             // Background failures are engine or test bugs; surface them instead of leaving them parked.
             var failed = Store.All<OutboxRecord>("outbox").FirstOrDefault(o => o.Error is not null);
             if (failed is not null) throw new InvalidOperationException($"Outbox {failed.Kind} failed: {failed.Error}");
-            var timer = Store.All<AuditRecord>("audit").FirstOrDefault(a => a.Action == "timerFailed");
+            var timer = AllowTimerFailures ? null : Store.All<AuditRecord>("audit").FirstOrDefault(a => a.Action == "timerFailed");
             if (timer is not null) throw new InvalidOperationException($"Timer failed: {timer.Data}");
             if (n == 0) return;
         }
@@ -72,8 +75,10 @@ public sealed class WorkflowTestHost
         while (true)
         {
             await SettleAsync(ct);
-            var next = Store.All<BookmarkRecord>("bookmarks").Where(b => b.DueAt is not null && b.DueAt > Clock.GetUtcNow() && b.DueAt <= end)
-                .Select(b => b.DueAt!.Value).DefaultIfEmpty(end).Min();
+            // A timer backing off after a failure comes due again when its lock runs out (parked ones never do).
+            var next = Store.All<BookmarkRecord>("bookmarks").Where(b => b.DueAt is not null)
+                .Select(b => b.LockedUntil is { } l && l > b.DueAt!.Value ? l : b.DueAt!.Value)
+                .Where(at => at > Clock.GetUtcNow() && at <= end).DefaultIfEmpty(end).Min();
             Clock.Set(next);
             await SettleAsync(ct);
             if (next >= end) return;

@@ -35,6 +35,7 @@ Files whose name starts with `_` are not fixtures: they are shared files other f
 | `records` | no | Records that exist before any workflow: `{ "<entity>": [ { "id": "a1", "<field>": value, … } ] }`. `id` is the record id, the other keys are field values. |
 | `actions` | no | How app actions behave: `{ "<actionKey>": { "output": {…}, "failTimes": n, "failMessage": "…" } }`. The first `failTimes` calls of that action fail with `failMessage` (default "The action failed."); every other call returns `output` (default `{}`). Actions not listed return `{}`. |
 | `webhooks` | no | Canned webhook responses per URL prefix: `{ "<urlPrefix>": [ { "status": 200, "body": <any JSON> } ] }`. A call whose URL starts with a prefix gets that list's next response; the last one repeats. Calls matching no prefix get `200` with body `{}`. No call leaves the test. |
+| `maxTimerAttempts` | no | How many failed firings park a timer (default 10). When set, timer failures are what the fixture is about: settling no longer fails on a `timerFailed` entry. |
 | `definitions` | no | Definitions (spec/schema/definition.schema.json) to create and publish, in order, by `admin`. A definition that fails lint fails the fixture. |
 | `steps` | yes | What happens, in order (below). |
 
@@ -56,7 +57,7 @@ started by their `created` events, and lifecycles reach them only by applying to
 After setup and **after every step**, the runner settles: it runs background work (the outbox of
 change events and notifications, and due timers) round after round until a round does nothing.
 It fails the fixture when an outbox row records an error, when a timer fails (`timerFailed` audit
-entry), or after 100 rounds (a trigger loop). Settling never moves the clock.
+entry; not when the fixture sets `maxTimerAttempts`), or after 100 rounds (a trigger loop). Settling never moves the clock.
 
 ### Steps
 
@@ -82,19 +83,20 @@ the system acts. Admin operations (`retry`, `skip`, `cancel`, `migrate`, `settin
 | `manual` | `{ "workflow", "entity"?, "id"?, "input"?, "actor"? }` | Starts a manual workflow by definition key, on a record or on none. |
 | `advance` | `"PT2H"` (an ISO 8601 duration) | Moves the clock forward (below). |
 | `publish` | a definition object | Creates it (or saves a new draft of the same id) and publishes it. |
-| `retry` | `{ "definition", "step"? }` | Retries the stopped instance of definition key `definition` (the most recently created one, any kind). `step` picks which incident (token id or failed step id) when several paths stopped. |
-| `skip` | `{ "definition", "outputs"?, "step"? }` | Skips the failed step of that instance, giving it `outputs`. |
+| `retry` | `{ "definition", "step"? }` | Retries the stuck instance of definition key `definition` (the most recently created one, any kind): re-arms its parked timers, else runs the failed step again. `step` picks one problem (parked timer by bookmark id, purpose or step id; stopped path by token id or failed step id). |
+| `skip` | `{ "definition", "outputs"?, "step"? }` | Drops that instance's parked timers, else skips its failed step giving it `outputs`. |
 | `cancel` | `{ "definition" }` | Cancels that instance (reason `"test"`). |
 | `migrate` | `{ "definition", "id"?, "version", "stateMap"? }` | Moves an instance of definition key `definition` (record or automation, for record `id` when given; the engine's newest first) to `version`, renaming states by `stateMap` (`{ old: new }`). |
 | `settings` | a settings object | Replaces the global settings (at the current revision). |
 | `archive` / `restore` | `"<definitionKey>"` | Archives or restores the definition with that key. |
 | `permissions` | `{ "workflow", "changes": [ { "node", "who": [...] } ], "note"? }` | Changes who may do nodes of the workflow with that key (this publishes). |
+| `refuse` / `allow` | `{ "writes"?: ["entity.field"], "userLookups"?: [userIds] }` | Starts / stops a breakdown: the store refuses writes to those fields (as a database constraint would; the error is `InvalidOperationException: The database refused writing <entity>.<field>.`), and looking up those users in the directory fails (`InvalidOperationException: The directory failed looking up '<id>'.`). Only the engine's own work is affected while it lasts; the runner's expectations that look users up must wait for `allow`. |
 
 #### `advance` semantics
 
 The duration is turned into a fixed length: **years are 365 days, months 30 days, weeks 7 days**,
 then days, hours, minutes and seconds as written (`P1M` is 30 × 24 hours). The clock does not jump
-straight to the end: the runner settles, moves the clock to the next timer due within the window,
+straight to the end: the runner settles, moves the clock to the next timer due within the window (a timer backing off after a failure is due when its backoff ends; a parked one never is),
 settles again, and repeats until it reaches the end, so timers fire in order at their own due
 time and timers they schedule within the window fire too. The duration is not calendar-aware and
 ignores the work calendar; workflows themselves use the calendar for their own durations.
@@ -122,7 +124,7 @@ Each key is checked independently, after the step's settle.
 | `webhooks` | `[ { "method", "url", "body", "headers" } ]` | Every webhook call so far, in order; `body` is the parsed JSON body. |
 | `outputs` | `{ "<definitionKey>": { "<stepId>": {…} } }` | The step outputs of the most recently created instance of each key (subset). |
 | `vars` | `{ "<definitionKey>": {…} }` | The variables of that instance (subset). |
-| `available` | `{ "entity", "id", "user"?, "transitions": [keys], "state"?, "reset"?, "comments"?, "resetComment"? }` | What the record page offers that user: the exact ordered list of transition keys, the current state key, whether a reset is offered, each offered transition's remarks setting (`none`, `optional`, `required`; subset) and the reset's. |
+| `available` | `{ "entity", "id", "user"?, "transitions": [keys], "state"?, "status"?, "error"?, "reset"?, "comments"?, "resetComment"? }` | What the record page offers that user: the exact ordered list of transition keys, the current state key, the record instance's status and error (as the record view shows them; `"error": null` expects none), whether a reset is offered, each offered transition's remarks setting (`none`, `optional`, `required`; subset) and the reset's. |
 | `resetPreview` | `{ "entity", "id", "user"?, "items": [ { "id", "kind", "selected", "undoable", "title", "detail" } ] }` or `{ …, "error": "<code>" }` | The reset list for that user: exact item count, in order, each a subset match; or that listing it fails with that code. |
 | `audit` | `[ "category.action" or { "is": "category.action", "data"?: {…}, "actor"?: "…" } ]` | An ordered subsequence: these entries appear in this order, with any others in between. `data` is a subset match of the entry's data; `actor` matches the actor id, or the actor type (`system`). |
 | `auditCount` | `{ "category.action": n }` | Exactly `n` entries of each listed kind. |

@@ -1,0 +1,238 @@
+{
+ "name": "A person's move or an admin's force-state replans the state's timers, so a record instance held in incident by a parked timer is active again and its error is gone",
+ "registry": "_registry.json",
+ "users": "_users.json",
+ "maxTimerAttempts": 2,
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_x",
+   "key": "expiry",
+   "kind": "lifecycle",
+   "title": "Expiry",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     {
+      "id": "d",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "s",
+      "key": "submitted",
+      "label": "Submitted",
+      "category": "active"
+     },
+     {
+      "id": "w",
+      "key": "withdrawn",
+      "label": "Withdrawn",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "t1",
+      "key": "submit",
+      "label": "Submit",
+      "from": [
+       "d"
+      ],
+      "to": "s",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     },
+     {
+      "id": "tx",
+      "key": "expire",
+      "label": "Expire unsent drafts",
+      "from": [
+       "d"
+      ],
+      "to": "w",
+      "auto": {
+       "after": "PT1H"
+      },
+      "hidden": true
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "Grant a1"
+    }
+   }
+  },
+  {
+   "create": {
+    "entity": "application",
+    "id": "a2",
+    "values": {
+     "title": "Grant a2"
+    }
+   },
+   "expect": {
+    "bookmarks": 2
+   }
+  },
+  {
+   "refuse": {
+    "writes": [
+     "application.status"
+    ]
+   }
+  },
+  {
+   "advance": "PT1H",
+   "expect": {
+    "instances": [
+     {
+      "definition": "expiry",
+      "kind": "record",
+      "status": "active",
+      "state": "draft"
+     },
+     {
+      "definition": "expiry",
+      "kind": "record",
+      "status": "active",
+      "state": "draft"
+     }
+    ],
+    "auditCount": {
+     "instance.timerFailed": 2
+    }
+   }
+  },
+  {
+   "advance": "PT5M",
+   "expect": {
+    "instances": [
+     {
+      "definition": "expiry",
+      "kind": "record",
+      "status": "incident",
+      "state": "draft",
+      "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+     },
+     {
+      "definition": "expiry",
+      "kind": "record",
+      "status": "incident",
+      "state": "draft",
+      "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+     }
+    ],
+    "available": {
+     "entity": "application",
+     "id": "a1",
+     "user": "rev1",
+     "transitions": [
+      "submit"
+     ],
+     "state": "draft",
+     "status": "incident",
+     "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+    },
+    "audit": [
+     {
+      "is": "instance.timerFailed",
+      "data": {
+       "attempt": 2,
+       "parked": true
+      }
+     },
+     "instance.incident"
+    ],
+    "bookmarks": 2
+   }
+  },
+  {
+   "allow": {
+    "writes": [
+     "application.status"
+    ]
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "submit",
+    "actor": "rev1"
+   },
+   "expect": {
+    "instances": [
+     {
+      "status": "active",
+      "state": "submitted",
+      "error": null
+     },
+     {
+      "status": "incident",
+      "error": "A timer (auto:tx) failed 2 times and was stopped: InvalidOperationException: The database refused writing application.status."
+     }
+    ],
+    "bookmarks": 1
+   }
+  },
+  {
+   "forceState": {
+    "entity": "application",
+    "id": "a2",
+    "state": "draft",
+    "reason": "Plan its timers again",
+    "actor": "admin"
+   },
+   "expect": {
+    "instances": [
+     {
+      "status": "active",
+      "state": "submitted",
+      "error": null
+     },
+     {
+      "status": "active",
+      "state": "draft",
+      "error": null
+     }
+    ],
+    "available": {
+     "entity": "application",
+     "id": "a2",
+     "user": "rev1",
+     "status": "active",
+     "error": null,
+     "transitions": [
+      "submit"
+     ]
+    },
+    "bookmarks": 1
+   }
+  },
+  {
+   "advance": "PT1H",
+   "expect": {
+    "record": {
+     "entity": "application",
+     "id": "a2",
+     "values": {
+      "status": "withdrawn"
+     }
+    }
+   }
+  }
+ ]
+}

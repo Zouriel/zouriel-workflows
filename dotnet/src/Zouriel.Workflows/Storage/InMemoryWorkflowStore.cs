@@ -24,6 +24,12 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
     /// <summary>Set after the engine is created, so record writes can be inspected (change events, owned fields).</summary>
     public ChangeInspector? Changes { get; set; }
 
+    /// <summary>
+    /// Fields (<c>entity.field</c>) whose writes this store refuses, as a database constraint or trigger of the app would:
+    /// tests use it to make workflow writes fail (and the timers that make them).
+    /// </summary>
+    public System.Collections.Concurrent.ConcurrentDictionary<string, bool> RefusedWrites { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Reads records that are not in memory from here (test runs read the real app's records).</summary>
     public IEntityGateway? Fallback { get; set; }
 
@@ -482,6 +488,8 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             RecordSnapshot? before = existing?.ToSnapshot();
             if (before is null && session.Store.Fallback is not null) before = await session.Store.Fallback.GetAsync(entity, id, ct);
             if (before is null) throw new WorkflowException("noRecord", $"{entity} {id} does not exist.");
+            foreach (var k in values.Keys)
+                if (session.Store.RefusedWrites.ContainsKey($"{entity}.{k}")) throw new InvalidOperationException($"The database refused writing {entity}.{k}.");
             var after = new Dictionary<string, object?>(before.Values, StringComparer.Ordinal);
             foreach (var (k, v) in values) after[k] = Values.Normalize(v);
             var result = session.Store.Changes?.Inspect(entity, id, ChangeKinds.Updated, before.Values, after);

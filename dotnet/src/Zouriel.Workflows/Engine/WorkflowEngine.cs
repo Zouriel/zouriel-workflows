@@ -324,7 +324,7 @@ public sealed partial class WorkflowEngine
                 {
                     var page = await s.QueryInstancesAsync(new InstanceQuery
                     {
-                        DefinitionId = c.DefinitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.OutOfSync, InstanceStatus.Completed],
+                        DefinitionId = c.DefinitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.Incident, InstanceStatus.OutOfSync, InstanceStatus.Completed],
                         Skip = skip, Take = 1000,
                     }, ct);
                     foreach (var i in page)

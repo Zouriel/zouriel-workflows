@@ -135,6 +135,8 @@ public sealed partial class WorkflowEngine
         if (!x.U.Driving.Add(x.I.Id)) return;
         try
         {
+            // In incident only because of a parked timer (a failing reminder), a token can still be resumed (its task decided).
+            var wasIncident = x.I.Status == InstanceStatus.Incident;
             if (x.I.Status is InstanceStatus.Running or InstanceStatus.Waiting) x.I.Status = InstanceStatus.Running;
             var budget = Options.MaxStepsPerRun;
             while (!x.Ended)
@@ -150,9 +152,18 @@ public sealed partial class WorkflowEngine
             }
             if (!x.Ended)
             {
-                if (x.S.Tokens.Any(t => t.Waiting == "incident")) x.I.Status = InstanceStatus.Incident;
-                else if (x.S.Tokens.Any(t => t.Status == TokenStatus.Waiting)) x.I.Status = InstanceStatus.Waiting;
-                else if (x.S.Tokens.All(t => t.Status is TokenStatus.Done or TokenStatus.Cancelled)) await FinishAsync(x, InstanceStatus.Completed, null, ct);
+                var stopped = x.S.Tokens.Any(t => t.Waiting == "incident");
+                var parked = wasIncident && !stopped ? (await ParkedTimersAsync(x.U, x.I.Id, ct)).FirstOrDefault() : null;
+                if (stopped) x.I.Status = InstanceStatus.Incident;
+                else if (parked is not null) (x.I.Status, x.I.Error, x.I.ErrorStepId) = (InstanceStatus.Incident, ParkedMessage(parked), parked.NodeId);
+                else
+                {
+                    // Leaving incident: the error that held it there goes (spec §10), so it does not outlive the problem.
+                    if (wasIncident) (x.I.Error, x.I.ErrorStepId) = (null, null);
+                    if (x.S.Tokens.Any(t => t.Status == TokenStatus.Waiting)) x.I.Status = InstanceStatus.Waiting;
+                    else if (x.S.Tokens.All(t => t.Status is TokenStatus.Done or TokenStatus.Cancelled)) await FinishAsync(x, InstanceStatus.Completed, null, ct);
+                    else if (x.I.Status == InstanceStatus.Incident) x.I.Status = InstanceStatus.Running;
+                }
             }
             await SaveAsync(x, ct);
         }

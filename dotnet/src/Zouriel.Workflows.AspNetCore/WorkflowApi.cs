@@ -148,13 +148,27 @@ public sealed record SimulateBody(JsonNode Definition, SimulationRequest? Reques
 /// <param name="Reason">Why, in plain words.</param>
 public sealed record ReasonBody(string? Reason);
 
-/// <summary>Body of <c>POST /instances/{id}/skip</c>.</summary>
-/// <param name="Outputs">Outputs to give the skipped step.</param>
-/// <param name="Target">Which incident, by token id or failed step id, when several paths stopped (default: the first).</param>
+/// <summary>
+/// Body of <c>POST /instances/{id}/skip</c>. On an instance held in <c>incident</c> by parked timers (spec §10), skip drops
+/// them without running them (a record instance stays in its state with nothing scheduled for them); otherwise it
+/// continues after the failed step.
+/// </summary>
+/// <param name="Outputs">Outputs to give the skipped step (ignored for a parked timer).</param>
+/// <param name="Target">
+/// Which problem: a parked timer by bookmark id, purpose (e.g. <c>auto:t1</c>, <c>reminder</c>) or step id, or a stopped
+/// path by token id or failed step id. Default: every parked timer, else the first stopped path.
+/// </param>
 public sealed record SkipBody(Dictionary<string, JsonNode?>? Outputs, string? Target = null);
 
-/// <summary>Body of <c>POST /instances/{id}/retry</c>.</summary>
-/// <param name="Target">Which incident, by token id or failed step id, when several paths stopped (default: the first).</param>
+/// <summary>
+/// Body of <c>POST /instances/{id}/retry</c>. On an instance held in <c>incident</c> by parked timers (spec §10), retry
+/// re-arms them (due now, attempts reset); otherwise it runs the failed step again. Either way, once nothing else holds
+/// it the instance returns to <c>active</c> (record instances) or <c>waiting</c>/<c>running</c> (runs) and its error is cleared.
+/// </summary>
+/// <param name="Target">
+/// Which problem: a parked timer by bookmark id, purpose or step id, or a stopped path by token id or failed step id.
+/// Default: every parked timer, else the first stopped path.
+/// </param>
 public sealed record RetryBody(string? Target);
 
 /// <summary>Body of <c>POST /instances/{id}/migrate</c>.</summary>
@@ -368,7 +382,7 @@ public static class WorkflowApi
             var query = new InstanceQuery
             {
                 DefinitionId = definitionId, DefinitionKey = definitionKey, Entity = entity, EntityId = entityId, ParentId = parentId,
-                Statuses = Split(status), Kinds = Split(kind) ?? [InstanceKinds.Automation, InstanceKinds.Record],
+                Statuses = Split(status), Kinds = Split(kind) ?? DefaultKinds(Split(status)),
             };
             // Instances the caller may not see are left out of the items and of the total.
             return Results.Ok(await VisiblePageAsync(
@@ -378,7 +392,7 @@ public static class WorkflowApi
                     ParentId = query.ParentId, Statuses = query.Statuses, Kinds = query.Kinds, Skip = s, Take = t,
                 }, ct),
                 i => access.CanViewInstanceAsync(me, i, ct), access, Math.Max(0, skip ?? 0), Math.Clamp(take ?? 50, 1, 500)));
-        }).Produces<Page<InstanceView>>().WithDescription(VisibleTotalDescription), o.ViewPolicy);
+        }).Produces<Page<InstanceView>>().WithDescription(VisibleTotalDescription + " " + InstancesKindDescription), o.ViewPolicy);
         Secure(g.MapGet("/instances/{id}", async (string id, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
             Results.Ok(await VisibleInstanceAsync(id, e, access, http, ct))).Produces<InstanceView>(), o.ViewPolicy);
         Secure(g.MapGet("/instances/{id}/definition", async (string id, WorkflowEngine e, IWorkflowAccessPolicy access, HttpContext http, CancellationToken ct) =>
@@ -719,6 +733,17 @@ public static class WorkflowApi
     }
 
     private static WorkflowException TooLarge(int limit) => new("tooLarge", $"The request is too large (at most {limit / (1024 * 1024.0):0.#} MB).");
+
+    private const string InstancesKindDescription =
+        "Without `kind`, automations and lifecycle record instances are listed; when `status` includes `incident`, the "
+        + "lifecycle child runs (`run`) are listed too, so every stuck instance (a failed step, or a timer that kept failing "
+        + "and was parked: retry or skip it) shows in one list.";
+
+    /// <summary>The kinds <c>GET /instances</c> lists without <c>kind</c>: child runs too when stuck ones are asked for.</summary>
+    private static IReadOnlyList<string> DefaultKinds(IReadOnlyList<string>? statuses) =>
+        statuses?.Contains(InstanceStatus.Incident) == true
+            ? [InstanceKinds.Automation, InstanceKinds.Record, InstanceKinds.Run]
+            : [InstanceKinds.Automation, InstanceKinds.Record];
 
     private static IReadOnlyList<string>? Split(string? csv) =>
         string.IsNullOrWhiteSpace(csv) ? null : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);

@@ -435,11 +435,32 @@ it waits without a timer; it is never an error.
 ## 10. Instances, runs and statuses
 
 Instance statuses: `queued`, `running`, `waiting` (on a person, timer or signal), `incident`
-(a step failed with `onError: stop`), `completed`, `failed`, `cancelled`, and for record instances
-`active`/`outOfSync`. Admin operations: `cancel`, `retry` (re-run the failed step now), `skip`
-(continue after the failed step, with optional outputs), `migrate` (§6). When parallel paths stop in
-several incidents, `retry` and `skip` act on one of them (chosen by token or failed step id, else the
-first); the instance stays `incident`, showing the next one's error, until none is left.
+(stuck until someone acts: see below), `completed`, `failed`, `cancelled`, and for record instances
+`active`/`outOfSync` (and `incident`). Admin operations: `cancel`, `retry`, `skip`, `migrate` (§6).
+
+An instance is in `incident`, with its `error` set, when:
+
+- **a step failed** with `onError: stop` (or a timer it waited on kept failing): `retry` runs the
+  failed step again now; `skip` continues after it, with optional outputs. When parallel paths stop in
+  several incidents, `retry` and `skip` act on one of them (chosen by token or failed step id, else the
+  first); the instance stays `incident`, showing the next one's error, until none is left.
+- **a timer was parked** (§11 `instance.timerFailed`: it failed `MaxTimerAttempts` times): a lifecycle
+  record instance's automatic-transition or SLA timer, or a waiting run's task reminder or escalation
+  (the task stays open and can still be decided). `retry` re-arms the parked timers (attempts reset,
+  due now); `skip` drops them without running them (a record instance stays in its state with nothing
+  scheduled for them). Either names one by bookmark id, purpose (`auto:<transition id>`,
+  `sla:<state id>`, `reminder`, `escalation`) or step id, else acts on all of them, before any stopped step.
+
+Once nothing holds it there, an instance leaves `incident` back to where it was (`active` for a record
+instance; `waiting` or `running` for a run, which then carries on) and its `error` is cleared; the
+error never outlives the problem (a run whose parked reminder's task is decided moves on and clears
+it). A record instance in `incident` is not frozen: people are offered and may apply its transitions
+as when it is `active`, automatic moves still happen, and a permissions change still moves it to the new
+version. Any move (a transition, an automatic or observed move, force-state, reset, a migration, archiving
+the lifecycle) replans or drops the state's timers and so ends a parked-timer incident and clears the
+error. The record view (`GET /records/{entity}/{id}`) shows `status: "incident"` and the `error`.
+`GET /instances?status=incident` lists every stuck instance the caller may see, lifecycle child runs
+included.
 
 ## 11. Audit
 
@@ -464,7 +485,8 @@ Categories and actions:
   2, 4… minutes, up to an hour); after 10 attempts it is parked for an admin and the instance shows it: an
   automation or run token stops in `incident` (retry, skip or cancel as usual); a lifecycle record
   instance's automatic-transition or SLA timer, or a task's reminder or escalation (the task stays open),
-  sets the instance's `error` and writes `instance.incident`.
+  puts the instance in `incident` with its `error` and writes `instance.incident` (§10). `retried` and
+  `skipped` of a parked timer carry data `timers: [{ bookmark, purpose, step }]`.
 - `step`: `started`, `completed` (data: outputs, masked), `failed` (data: error, attempt),
   `retryScheduled`, `skipped`, `branchTaken` (data: path), `waiting`.
 - `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked, `comment`

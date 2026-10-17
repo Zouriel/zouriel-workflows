@@ -260,6 +260,7 @@ public sealed partial class WorkflowEngine
         }
         record.State = to.Id;
         record.StateEnteredAt = u.Now;
+        MovedOutOfIncident(record);
         record.Status = to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
         record.EndedAt = to.IsTerminal ? u.Now : null;
         record.UpdatedAt = u.Now;
@@ -295,6 +296,17 @@ public sealed partial class WorkflowEngine
             text = text[..Remarks.MaxLength];
         }
         return text;
+    }
+
+    /// <summary>
+    /// A record instance moved (transition, automatic or observed move, force-state, reset, back in sync): its state's
+    /// timers were replanned, so a parked timer no longer holds it in <c>incident</c> and its error goes (spec §10).
+    /// </summary>
+    private static void MovedOutOfIncident(InstanceRecord record)
+    {
+        if (record.Status != InstanceStatus.Incident) return;
+        record.Error = null;
+        record.ErrorStepId = null;
     }
 
     /// <summary>Adds the remarks to audit data when there are any.</summary>
@@ -397,7 +409,7 @@ public sealed partial class WorkflowEngine
         {
             var page = await u.S.QueryInstancesAsync(new InstanceQuery
             {
-                DefinitionId = definitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active], Skip = skip, Take = 500,
+                DefinitionId = definitionId, Kinds = [InstanceKinds.Record], Statuses = [InstanceStatus.Active, InstanceStatus.Incident], Skip = skip, Take = 500,
             }, ct);
             foreach (var found in page)
             {
@@ -405,6 +417,14 @@ public sealed partial class WorkflowEngine
                 var timers = (await u.S.ListBookmarksAsync(record.Id, ct))
                     .Where(b => b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal) || b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)).ToList();
                 foreach (var b in timers) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                if (record.Status == InstanceStatus.Incident && timers.Any(IsParked))
+                {
+                    // The parked timer went with the others: nothing holds the record in incident any more.
+                    MovedOutOfIncident(record);
+                    record.Status = InstanceStatus.Active;
+                    record.UpdatedAt = u.Now;
+                    await u.S.UpdateInstanceAsync(record, ct);
+                }
                 if (!restore) continue;
                 var c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
                 if (c.StateById(record.State) is not { IsTerminal: false } state) continue;
@@ -455,6 +475,7 @@ public sealed partial class WorkflowEngine
     {
         if (record.State != state.Id) record.StateEnteredAt = u.Now;
         record.State = state.Id;
+        MovedOutOfIncident(record);
         record.Status = state.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
         record.EndedAt = state.IsTerminal ? u.Now : null;
         record.UpdatedAt = u.Now;
@@ -502,6 +523,7 @@ public sealed partial class WorkflowEngine
             await WriteStateAsync(u, c, entity, id, to, admin, 0, record.Id, ct);
             record.State = to.Id;
             record.StateEnteredAt = u.Now;
+            MovedOutOfIncident(record);
             record.Status = to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
             record.EndedAt = to.IsTerminal ? u.Now : null;
             record.UpdatedAt = u.Now;
@@ -572,6 +594,7 @@ public sealed partial class WorkflowEngine
             await WriteStateAsync(u, c, entity, id, to, user, 0, record.Id, ct);
             record.State = to.Id;
             record.StateEnteredAt = u.Now;
+            MovedOutOfIncident(record);
             record.Status = to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
             record.EndedAt = to.IsTerminal ? u.Now : null;
             record.UpdatedAt = u.Now;
@@ -668,6 +691,7 @@ public sealed partial class WorkflowEngine
         await ExitStateAsync(u, c, record, from, change.Actor, trigger, change.Depth, ct);
         record.State = to.Id;
         record.StateEnteredAt = u.Now;
+        MovedOutOfIncident(record);
         record.Status = to.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
         record.EndedAt = to.IsTerminal ? u.Now : null;
         record.UpdatedAt = u.Now;
