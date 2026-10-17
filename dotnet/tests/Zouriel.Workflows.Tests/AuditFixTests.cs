@@ -595,6 +595,111 @@ public sealed class MaskingAuditTests
     }
 }
 
+/// <summary>Server-side form answers and runtime value checks from the final audit.</summary>
+public sealed class FormAnswerAuditTests
+{
+    private const string Form = """
+    { "schemaVersion": 1, "id": "f", "title": "F", "pages": [ { "id": "p", "elements": [
+      { "kind": "field", "id": "kind", "key": "kind", "type": "select", "label": "Kind",
+        "options": [ { "id": "o1", "value": "grant", "label": "Grant" }, { "id": "o2", "value": "loan", "label": "Loan" }, { "id": "o3", "value": "old", "label": "Old", "archived": true } ] },
+      { "kind": "field", "id": "tags", "key": "tags", "type": "checkboxes", "label": "Tags",
+        "options": [ { "id": "t1", "value": "a", "label": "A" }, { "id": "t2", "value": "b", "label": "B" } ] },
+      { "kind": "field", "id": "rate", "key": "rate", "type": "number", "label": "Rate",
+        "visibility": { "action": "show", "when": { "ref": "kind", "op": "eq", "value": { "const": "loan" } } } },
+      { "kind": "field", "id": "x", "key": "x", "type": "number", "label": "X" },
+      { "kind": "field", "id": "y", "key": "y", "type": "number", "label": "Y" },
+      { "kind": "field", "id": "total", "key": "total", "type": "calculated", "label": "Total", "calc": { "op": "sum", "args": [ { "ref": "x" }, { "ref": "y" } ] } },
+      { "kind": "field", "id": "src", "key": "source", "type": "hidden", "label": "Source", "defaultValue": "web" } ] } ] }
+    """;
+
+    private static JsonObject FormNode => JsonNode.Parse(Form)!.AsObject();
+
+    [Fact]
+    public void Answers_to_hidden_fields_unknown_keys_and_forged_calculations_are_not_kept()
+    {
+        var data = new Dictionary<string, object?>
+        {
+            ["kind"] = "grant", ["tags"] = new List<object?> { "a" }, ["rate"] = 99.0, ["x"] = 2.0, ["y"] = 3.0, ["total"] = 1000000.0,
+            ["source"] = "forged", ["isAdmin"] = true,
+        };
+        var v = new Forms.FormValidator();
+        Assert.Empty(v.Validate(FormNode, data, "2026-10-19"));
+        var kept = ((Forms.IFormValidator)v).Clean(FormNode, data, "2026-10-19");
+        Assert.Equal(["kind", "source", "tags", "total", "x", "y"], kept.Keys.OrderBy(k => k, StringComparer.Ordinal));
+        Assert.Equal(5.0, kept["total"]);
+        Assert.Equal("web", kept["source"]);
+    }
+
+    [Theory]
+    [InlineData("""{ "kind": "gift" }""")]
+    [InlineData("""{ "kind": "old" }""")]
+    [InlineData("""{ "tags": ["a", "z"] }""")]
+    public void Choices_outside_the_options_are_refused(string json)
+    {
+        var errors = new Forms.FormValidator().Validate(FormNode, (Dictionary<string, object?>)Values.FromJson(json)!, "2026-10-19");
+        Assert.Contains(errors, e => e.Message.StartsWith("Choose one of the options", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_manual_start_keeps_only_the_forms_answers_and_works_calculations_out_itself()
+    {
+        var h = await AuditFixTests.HostAsync();
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        var def = JsonNode.Parse("""
+        { "specVersion": 1, "id": "wf_f", "key": "formed", "kind": "automation", "title": "Formed", "entity": "application",
+          "trigger": { "type": "manual", "label": "Go" },
+          "variables": [ { "id": "v1", "key": "total", "type": "number" }, { "id": "v2", "key": "admin", "type": "text" } ],
+          "steps": [ { "id": "s", "type": "setVariables", "values": [ { "variable": "v1", "value": { "ref": "input.total" } }, { "variable": "v2", "value": { "ref": "input.isAdmin" } } ] },
+                     { "id": "w", "type": "wait", "until": { "type": "duration", "duration": "PT1H" } } ] }
+        """)!.AsObject();
+        def["trigger"]!["form"] = FormNode;
+        await h.PublishAsync(def.ToJsonString());
+        var view = await h.Engine.StartManualAsync("formed", "application", "a1",
+            new() { ["kind"] = "grant", ["x"] = 2.0, ["y"] = 3.0, ["total"] = 1000000.0, ["isAdmin"] = "yes" }, WorkflowActor.User("ali", "Ali"));
+        var vars = (Dictionary<string, object?>)Values.Normalize(view.Variables)!;
+        Assert.Equal(5.0, vars["total"]);
+        Assert.Null(vars["admin"]);
+    }
+
+    [Fact]
+    public async Task A_value_read_into_an_enum_field_must_be_one_of_its_options()
+    {
+        var h = await AuditFixTests.HostAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_e", "key": "prio", "kind": "automation", "title": "Prio", "entity": "application",
+          "trigger": { "type": "created" },
+          "steps": [ { "id": "s", "type": "setFields", "values": [ { "field": "priority", "value": { "ref": "entity.title" } } ] } ] }
+        """);
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "urgent!" });
+        await h.Store.CreateRecordAsync("application", "a2", new() { ["title"] = "high" });
+        await h.SettleAsync();
+        var inst = h.Store.All<InstanceRecord>("instances").Where(i => i.DefinitionKey == "prio").ToDictionary(i => i.EntityId!);
+        Assert.Equal(InstanceStatus.Incident, inst["a1"].Status);
+        Assert.Contains("'urgent!' is not one of", inst["a1"].Error);
+        Assert.Null(h.Store.PeekRecord("application", "a1")!["priority"]);
+        Assert.Equal(InstanceStatus.Completed, inst["a2"].Status);
+        Assert.Equal("high", h.Store.PeekRecord("application", "a2")!["priority"]);
+    }
+
+    [Fact]
+    public async Task A_decision_comment_is_capped_like_remarks()
+    {
+        var h = await AuditFixTests.HostAsync();
+        await h.Store.CreateRecordAsync("application", "a1", new() { ["title"] = "Q" });
+        await h.SettleAsync();
+        await h.PublishAsync("""
+        { "specVersion": 1, "id": "wf_a", "key": "ask", "kind": "automation", "title": "Ask", "entity": "application", "trigger": { "type": "manual", "label": "Go" },
+          "steps": [ { "id": "a", "type": "approval", "assignees": [ { "user": "rev1" } ], "rule": { "type": "any" }, "due": "P1D", "outcomes": { "approved": [], "rejected": [], "timedOut": [] } } ] }
+        """);
+        await h.Engine.StartManualAsync("ask", "application", "a1", null, WorkflowActor.User("ali", "Ali"));
+        var task = h.Store.All<TaskRecord>("tasks").Single();
+        var e = await Assert.ThrowsAsync<WorkflowException>(() => h.Engine.DecideAsync(task.Id, WorkflowActor.User("rev1", "Rana"), "approved", new string('x', 2001), null));
+        Assert.Equal("invalidInput", e.Code);
+        await h.Engine.DecideAsync(task.Id, WorkflowActor.User("rev1", "Rana"), "approved", "  " + new string('x', 2000) + "  ", null);
+    }
+}
+
 /// <summary>Webhook client hardening from the final audit.</summary>
 public sealed class WebhookClientAuditTests
 {

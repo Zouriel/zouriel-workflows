@@ -237,7 +237,10 @@ public sealed partial class WorkflowEngine
         {
             var errors = Options.FormValidator.Validate(form, input, u.Today);
             if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+            // Only the form's shown fields are kept; calculated ones are worked out here, not taken from the request.
+            input = Options.FormValidator.Clean(form, input, u.Today);
         }
+        else if (isPerson) input = [];
         // Remarks (spec §6): only a person must give required ones; automatic and workflow moves never need them.
         comment = CheckRemarks(tr.ResolvedComment, comment, isPerson && !auto, tr.Label);
         var from = c.StateById(record.State)!;
@@ -549,7 +552,9 @@ public sealed partial class WorkflowEngine
             {
                 var errors = Options.FormValidator.Validate(form, input, u.Today);
                 if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+                input = Options.FormValidator.Clean(form, input, u.Today);
             }
+            else input = [];
             comment = CheckRemarks(reset.ResolvedComment, comment, byPerson: true, label);
             var from = c.StateById(record.State);
             var trigger = new TriggerInfo

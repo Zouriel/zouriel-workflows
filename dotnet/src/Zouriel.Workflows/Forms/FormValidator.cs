@@ -16,6 +16,13 @@ public interface IFormValidator
 {
     /// <summary>The problems with <paramref name="data"/> (empty when the answers are acceptable); <paramref name="today"/> is <c>YYYY-MM-DD</c> for date checks.</summary>
     IReadOnlyList<FormError> Validate(JsonObject form, IReadOnlyDictionary<string, object?> data, string today);
+
+    /// <summary>
+    /// The answers the engine keeps, once they are valid: only the form's own fields that are shown (answers to hidden
+    /// fields and unknown keys are dropped), choices among the field's options, calculated fields worked out again on the
+    /// server and hidden fields set to their default value. The default is <see cref="FormValidator.CleanAnswers"/>.
+    /// </summary>
+    Dictionary<string, object?> Clean(JsonObject form, IReadOnlyDictionary<string, object?> data, string today) => FormValidator.CleanAnswers(form, data, today);
 }
 
 /// <summary>
@@ -150,6 +157,12 @@ public sealed partial class FormValidator : IFormValidator
                 continue;
             }
             if (empty) continue;
+            // Choices must be among the field's options (lists from an app source are checked by the app).
+            if (BadChoice(o, type, value))
+            {
+                errors.Add(new FormError(path, id, $"Choose one of the options for {fieldLabel}."));
+                continue;
+            }
             var rules = new List<(string Type, JsonObject? Params, string? Message, JsonObject? When, string Severity)>();
             var implicitType = type switch { "email" => "email", "url" => "url", "phone" => "phone", _ => null };
             var declared = o["validators"] as JsonArray ?? [];
@@ -175,6 +188,137 @@ public sealed partial class FormValidator : IFormValidator
                 break;
             }
         }
+    }
+
+    /// <summary>The values a field's options allow (archived options only stay readable in old answers), or null when anything goes.</summary>
+    private static HashSet<string>? OptionValues(JsonObject field, string type)
+    {
+        if (type is not ("select" or "radio" or "checkboxes" or "multiselect") || field["source"] is JsonObject || field["options"] is not JsonArray opts) return null;
+        return opts.OfType<JsonObject>().Where(x => !(x["archived"] is JsonValue a && a.TryGetValue<bool>(out var ar) && ar))
+            .Select(x => Values.Text(Values.FromJson(x["value"]))).ToHashSet(StringComparer.Ordinal);
+    }
+
+    private static bool BadChoice(JsonObject field, string type, object? value)
+    {
+        if (OptionValues(field, type) is not { } allowed) return false;
+        return type is "checkboxes" or "multiselect"
+            ? value is not List<object?> list || list.Any(v => !allowed.Contains(Values.Text(Conditions.OptionValueOf(v))))
+            : !allowed.Contains(Values.Text(value));
+    }
+
+    /// <summary>
+    /// The answers worth keeping (see <see cref="IFormValidator.Clean"/>): the shown fields of the form, by their keys and
+    /// groups; choices outside the options dropped; calculated fields worked out from the kept answers (unless the field
+    /// leaves its result out of the data); hidden fields set to their <c>defaultValue</c> when they have one.
+    /// </summary>
+    public static Dictionary<string, object?> CleanAnswers(JsonObject form, IReadOnlyDictionary<string, object?> data, string today)
+    {
+        var index = new Dictionary<string, Entry>(StringComparer.Ordinal);
+        foreach (var page in form["pages"] as JsonArray ?? [])
+            if (page is JsonObject p) IndexElements(p["elements"] as JsonArray, index, null, [], p);
+        var root = data.ToDictionary(kv => kv.Key, kv => Values.Normalize(kv.Value), StringComparer.Ordinal);
+        var output = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var calculated = new List<(JsonObject Field, Entry Entry, Dictionary<string, object?> Into, Dictionary<string, object?>? Row)>();
+        foreach (var page in form["pages"] as JsonArray ?? [])
+        {
+            if (page is not JsonObject p || !Shown(p, new Ctx(index, root, null, today))) continue;
+            CleanWalk(p["elements"] as JsonArray, index, root, null, today, output, calculated);
+        }
+        // Worked out from what is kept, in form order (a calculation may use an earlier one).
+        foreach (var (field, entry, into, row) in calculated)
+        {
+            var calc = field["calc"]?.Deserialize<Calc>(Definitions.JsonOptions);
+            SetPath(into, entry.Path, Calculations.Evaluate(calc, new FormSource(index, output, row, today)));
+        }
+        return output;
+    }
+
+    private static void CleanWalk(JsonArray? elements, Dictionary<string, Entry> index, Dictionary<string, object?> root, Dictionary<string, object?>? row, string today,
+        Dictionary<string, object?> into, List<(JsonObject, Entry, Dictionary<string, object?>, Dictionary<string, object?>?)> calculated)
+    {
+        var ctx = new Ctx(index, root, row, today);
+        foreach (var el in elements ?? [])
+        {
+            if (el is not JsonObject o) continue;
+            var kind = o["kind"]?.GetValue<string>();
+            if (kind == "static" || !Shown(o, ctx)) continue;
+            var id = o["id"]?.GetValue<string>() ?? "";
+            if (!index.TryGetValue(id, out var entry)) continue;
+            if (kind == "group")
+            {
+                var repeat = o["repeat"];
+                var isRepeat = repeat is JsonObject || (repeat is JsonValue rv && rv.TryGetValue<bool>(out var rb) && rb);
+                if (!isRepeat)
+                {
+                    CleanWalk(o["elements"] as JsonArray, index, root, row, today, into, calculated);
+                    continue;
+                }
+                var rows = new List<object?>();
+                foreach (var r in Values.ReadPath(row ?? root, entry.Path) as List<object?> ?? [])
+                {
+                    if (r is not Dictionary<string, object?> rd) continue;
+                    var rowOut = new Dictionary<string, object?>(StringComparer.Ordinal);
+                    CleanWalk(o["elements"] as JsonArray, index, root, rd, today, rowOut, calculated);
+                    rows.Add(rowOut);
+                }
+                SetPath(into, entry.Path, rows);
+                continue;
+            }
+            if (kind != "field") continue;
+            var type = o["type"]?.GetValue<string>() ?? "text";
+            if (type == "calculated")
+            {
+                if (!(o["props"]?["excludeFromData"] is JsonValue ex && ex.TryGetValue<bool>(out var exclude) && exclude)) calculated.Add((o, entry, into, row is null ? null : into));
+                continue;
+            }
+            if (type == "hidden" && o["defaultValue"] is { } dv)
+            {
+                SetPath(into, entry.Path, Values.FromJson(dv));
+                continue;
+            }
+            var value = Values.ReadPath(row ?? root, entry.Path);
+            if (value is null) continue;
+            if (OptionValues(o, type) is { } allowed)
+            {
+                if (type is "checkboxes" or "multiselect")
+                {
+                    if (value is not List<object?> list) continue;
+                    value = list.Where(v => allowed.Contains(Values.Text(Conditions.OptionValueOf(v)))).ToList();
+                }
+                else if (!allowed.Contains(Values.Text(Conditions.OptionValueOf(value)))) continue;
+            }
+            SetPath(into, entry.Path, value);
+        }
+    }
+
+    private static void SetPath(Dictionary<string, object?> into, List<string> path, object? value)
+    {
+        var d = into;
+        for (var i = 0; i < path.Count - 1; i++)
+        {
+            if (d.GetValueOrDefault(path[i]) is not Dictionary<string, object?> next) d[path[i]] = next = new Dictionary<string, object?>(StringComparer.Ordinal);
+            d = next;
+        }
+        if (path.Count > 0) d[path[^1]] = value;
+    }
+
+    /// <summary>What a form calculation reads: answers by field id; a field in a repeatable section gives one value per entry.</summary>
+    private sealed class FormSource(Dictionary<string, Entry> index, Dictionary<string, object?> root, Dictionary<string, object?>? row, string today) : Calculations.ISource
+    {
+        public string Today { get; } = today;
+
+        public IReadOnlyList<object?> Values(string path)
+        {
+            if (!index.TryGetValue(path, out var e)) return [null];
+            if (e.RepeatGroupId is null) return [Json.Values.ReadPath(root, e.Path)];
+            if (row is not null) return [Json.Values.ReadPath(row, e.Path)];
+            var group = index.GetValueOrDefault(e.RepeatGroupId);
+            var rows = group is null ? null : Json.Values.ReadPath(root, group.Path) as List<object?>;
+            return (rows ?? []).OfType<Dictionary<string, object?>>().Select(r => Json.Values.ReadPath(r, e.Path)).ToList();
+        }
+
+        public int? Rows(string path) =>
+            index.TryGetValue(path, out var e) && e.Element["kind"]?.GetValue<string>() == "group" ? (Json.Values.ReadPath(row ?? root, e.Path) as List<object?>)?.Count ?? 0 : null;
     }
 
     private static string RequiredMessage(string label) =>

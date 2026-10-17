@@ -331,7 +331,7 @@ public sealed partial class WorkflowEngine
         {
             var field = Registry.Field(entity, v.Field);
             if (field is null || !field.IsSettable) throw new WorkflowException("fieldNotSettable", $"Workflows cannot change '{v.Field}'.");
-            values[v.Field] = await scope.OperandAsync(v.Value, ct);
+            values[v.Field] = CheckOption(field, await scope.OperandAsync(v.Value, ct));
         }
         var masked = (await x.U.MaskerAsync(entity, id, ct)).MaskMap(values);
         var rec = await BeginStepAsync(x, t, sf, new Dictionary<string, object?> { ["entity"] = entity, ["id"] = id, ["values"] = masked }, ct);
@@ -353,6 +353,19 @@ public sealed partial class WorkflowEngine
         });
         await CompleteStepAsync(x, rec, sf, null, ct);
         Advance(t);
+    }
+
+    /// <summary>
+    /// A value for an enum field must be one of its options (lint only sees constants; a value read from a token is
+    /// checked here): <c>unknownValue</c> otherwise. Empty values clear the field.
+    /// </summary>
+    private static object? CheckOption(FieldDescriptor field, object? value)
+    {
+        if (field.Options is not { Count: > 0 } options || Values.IsEmpty(value)) return value;
+        var text = Values.Text(Conditions.OptionValueOf(value));
+        if (options.All(o => Values.Text(Values.Normalize(o.Value)) != text))
+            throw new WorkflowException("unknownValue", $"'{text}' is not one of {field.Label}'s values.");
+        return value;
     }
 
     internal async Task<(string? Entity, string? Id)> TargetAsync(ValueScope scope, string? target, CancellationToken ct)
@@ -378,7 +391,7 @@ public sealed partial class WorkflowEngine
         {
             var field = desc.Field(v.Field);
             if (field is null || !field.IsSettable) throw new WorkflowException("fieldNotSettable", $"Workflows cannot set '{v.Field}' of {desc.Label}.");
-            values[v.Field] = await scope.OperandAsync(v.Value, ct);
+            values[v.Field] = CheckOption(field, await scope.OperandAsync(v.Value, ct));
         }
         // Lint only knows the lifecycles published when the workflow was; a new record starts in its lifecycle's first state.
         var lifecycleFields = (await x.U.S.ListTriggersAsync(ct)).Where(tr => tr.Type == "lifecycle" && tr.Entity == cr.Entity).Select(tr => tr.Field).ToHashSet();
@@ -790,7 +803,7 @@ public sealed partial class WorkflowEngine
         x.U.Log?.Add("step", "failed", step.Id, message);
 
         var retry = step.Retry ?? (step is ActionStep or WebhookStep or NotifyStep or SubWorkflowStep ? x.U.Settings.Defaults?.Retry : null);
-        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" or "badHeader" };
+        var retryable = error is not WorkflowException { Code: "fieldNotSettable" or "unknownAction" or "missingInput" or "noRecord" or "goToInvalidTarget" or "noAssignees" or "webhookOriginNotAllowed" or "fieldOwned" or "subWorkflowDepth" or "badHeader" or "unknownValue" };
         if (retry is { Max: > 0 } && attempt <= retry.Max && retryable)
         {
             var initial = retry.Initial is null ? TimeSpan.FromMinutes(1) : IsoDuration.Parse(retry.Initial).Approximate;

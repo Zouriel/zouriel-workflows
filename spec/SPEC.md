@@ -194,7 +194,11 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
     only). Hosts may additionally require the `workflows.transition` permission.
   - `when`: a guard condition. When false the transition is not offered and cannot be applied.
   - `input`: `{ form: <form definition>, mode?: "create" }`. The answers are validated by the form
-    engine rules (required, built-in checks, visibility) server-side; `input.*` reads them.
+    engine rules (required, built-in checks, visibility, choices among the field's options) server-side;
+    `input.*` reads them. Only the answers to the form's shown fields are kept (answers to hidden fields
+    and keys the form does not have are dropped), calculated fields are worked out again on the server
+    and hidden fields take their `defaultValue`. The same holds for reset, manual-start and task forms;
+    without a form, a person's answers are ignored.
   - `steps`: steps run after the state changes (an automation-style run, §7).
   - `auto`: `{ after: <duration>, calendar? }` (applied by the system after the record has spent that
     long in a `from` state), or `{ when: <condition> }` (applied by the system when the condition
@@ -360,7 +364,7 @@ IPv4-compatible, NAT64, 6to4) and Teredo included.
 | `approval` | `assignees`, `rule: { type: "any"|"all"|"count"|"percent", value? }`, `due` (required), `calendar?`, `reminders?: [duration…]`, `escalation?: { after, assignees, notify? }`, `form?`, `instructions?: template`, `allowDelegation?`, `requireComment?: "never"|"reject"|"always"`, `outcomes: { approved: [...], rejected: [...], timedOut: [...] }` | `outcome` (`approved`/`rejected`/`timedOut`), `decidedBy` (user ids), `comments`, `data` (form answers of the last decision) |
 | `task` | Like `approval` but `outcomes: [{ id, key, label, tone?, steps }]` (1–8), `onTimeout: { steps }`, rule is always first decision wins. | `outcome` (key), `decidedBy`, `comment`, `data` |
 | `wait` | `until`: `{ type: "duration", duration, calendar? }` · `{ type: "date", date: <operand>, offset?, at? }` · `{ type: "condition", when, timeout, onTimeout: { steps } }` · `{ type: "signal", signal, timeout?, onTimeout? }` | `timedOut` (bool), `data` (signal data) |
-| `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
+| `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`; a value for an `enum` field must be one of its options, checked again at run time for values read from tokens: `unknownValue`, never retried; `createRecord` alike). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
 | `createRecord` | `entity: <registry entity>`, `values: [{ field, value: operand }]` (fields must be `settable`, `fieldNotSettable`; constants among an enum field's options, `unknownValue`; not a field a lifecycle controls, this definition's or a published one, `ownedField`: it starts at its initial state; every field the registry marks `required` set, `missingRequiredField`). At run time a field any published lifecycle controls is refused (`ownedField`), since lint only knows the lifecycles published when the workflow was. Needs a gateway that can create records: `notSupported` when it cannot (or cannot make that type), `unknownEntity` when it does not store it. One committed create, like `setFields`. | `id` |
 | `setVariables` | `values: [{ variable: <variable id>, value: operand }]` | — |
 | `applyTransition` | `target?: "self"|<relation path>`, `lifecycle: <definition key>`, `transition: <key>`, `input?: { <key>: operand }`, `comment?: template` (remarks recorded with the move and read as `trigger.comment`; the transition's `required` check does not apply to a workflow), `ifNotAllowed: "fail"|"skip"` | `applied` (bool) |
@@ -374,7 +378,8 @@ IPv4-compatible, NAT64, 6to4) and Teredo included.
 **Remarks on decisions.** `requireComment` on an `approval` or a `task`: `never` (default; a comment
 is always allowed), `always` (every decision needs one), or `reject`: a comment is needed for an
 approval's `rejected` outcome, and for any task outcome whose `tone` is `danger` (an outcome keyed
-`rejected` counts too). A missing or blank comment fails the decision with `commentRequired` (400).
+`rejected` counts too). A missing or blank comment fails the decision with `commentRequired` (400). Comments are trimmed and
+at most 2000 characters (`invalidInput`).
 The task view lists the outcomes with their `tone`, so clients can tell which ones need a comment. A
 task with `requireComment: "reject"` and no `danger` (or `rejected`) outcome never asks; lint warns
 (`noNegativeOutcome`).

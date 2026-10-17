@@ -705,7 +705,9 @@ public sealed partial class WorkflowEngine
             {
                 var errors = Options.FormValidator.Validate(form, input, u.Today);
                 if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+                input = Options.FormValidator.Clean(form, input, u.Today);
             }
+            else input = [];
             var info = new TriggerInfo { Type = TriggerTypes.Manual, ActorType = user.Type, ActorId = user.Id, ActorName = user.Name, At = Values.FormatInstant(u.Now), EventId = NewId(), Data = input };
             var inst = await StartAutomationAsync(u, c, entity, entityId, info, user, 0, input, null, null, null, ct)
                        ?? throw new WorkflowException("alreadyRunning", $"'{c.Definition.Title}' is already running for this record.");

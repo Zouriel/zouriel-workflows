@@ -106,14 +106,19 @@ public sealed partial class WorkflowEngine
         if (decisions.Any(d => d.UserId == user.Id)) throw new WorkflowException("alreadyDecided", "You have already decided this task.");
         var outcomes = (Values.FromJson(task.Outcomes) as List<object?> ?? []).OfType<Dictionary<string, object?>>().Select(o => o["key"] as string).ToList();
         if (!outcomes.Contains(outcome)) throw new WorkflowException("invalidOutcome", $"'{outcome}' is not one of this task's choices.");
-        if (CommentRequired(task, outcome) && string.IsNullOrWhiteSpace(comment)) throw new WorkflowException("commentRequired", "Add a comment to explain your decision.");
+        comment = string.IsNullOrWhiteSpace(comment) ? null : comment.Trim();
+        if (CommentRequired(task, outcome) && comment is null) throw new WorkflowException("commentRequired", "Add a comment to explain your decision.");
+        if (comment is { Length: > Remarks.MaxLength }) throw new WorkflowException("invalidInput", $"A comment can be at most {Remarks.MaxLength} characters.");
         data ??= [];
         if (Values.Serialize(data).Length > MaxDecisionDataBytes) throw new WorkflowException("tooLarge", "The answers are too large.");
         if (task.Form is not null)
         {
-            var errors = Options.FormValidator.Validate(JsonNode.Parse(task.Form)!.AsObject(), data, u.Today);
+            var form = JsonNode.Parse(task.Form)!.AsObject();
+            var errors = Options.FormValidator.Validate(form, data, u.Today);
             if (errors.Count > 0) throw new WorkflowException("invalidInput", "Some answers need attention.", errors);
+            data = Options.FormValidator.Clean(form, data, u.Today);
         }
+        else data = [];
         var decision = new TaskDecision(user.Id!, user.Name, outcome, comment, data, Values.FormatInstant(u.Now));
         decisions.Add(decision);
         task.Decisions = Values.Serialize(decisions.Select(DecisionValue).ToList());
