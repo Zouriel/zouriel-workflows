@@ -73,7 +73,7 @@ public sealed class TestApp : IAsyncDisposable
         services.AddWorkflowsCore(wf => wf
             .UseEntityFrameworkCore<AppDb>()
             .Configure(s => s.Time = Clock)
-            .Entity<Programme>("programme", e => e.Title(p => p.Name).Field(p => p.Name).Field(p => p.CoordinatorId, f => f.Key("coordinator").User()))
+            .Entity<Programme>("programme", e => e.Title(p => p.Name).Field(p => p.Name, f => f.Settable()).Field(p => p.CoordinatorId, f => f.Key("coordinator").User()))
             .Entity<Application>("application", e => e
                 .Label("Application").Title(a => a.Title)
                 .Field(a => a.Title)
@@ -88,6 +88,8 @@ public sealed class TestApp : IAsyncDisposable
                 .Collection(a => a.Documents, "documents"))
             .Entity<Document>("document", e => e.Field(d => d.Name).Field(d => d.Verified, f => f.Settable()))
             .Entity<Tag>("tag", e => e.Field(t => t.Name))
+            .Entity<Receipt>("receipt", e => e.Field(r => r.Text, f => f.Settable()))
+            .Entity<Ghost>("ghost", e => e.Field(g => g.Name, f => f.Settable()))
             .Action<StampThenFail>("stampThenFail", a => a.For("application"))
             .Action<StampNotes>("stamp", a => a.For("application").Input("text", "Text", required: true).Output("length", "Length", "number"))
             .Role("reviewer", "Reviewer"));
@@ -128,7 +130,14 @@ public sealed class TestApp : IAsyncDisposable
         var admin = WorkflowActor.User("admin", "Admin");
         var def = Model.Definitions.Parse(json);
         await Engine.CreateDefinitionAsync(json, admin);
-        await Engine.PublishAsync(def.Id, null, admin);
+        try
+        {
+            await Engine.PublishAsync(def.Id, null, admin);
+        }
+        catch (WorkflowException e) when (e.Details is IEnumerable<Lint.LintProblem> problems)
+        {
+            throw new InvalidOperationException($"'{def.Key}' cannot be published: {string.Join(" ", problems.Select(p => $"[{p.Code}] {p.Message}"))}");
+        }
         return def.Id;
     }
 

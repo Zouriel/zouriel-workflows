@@ -195,6 +195,112 @@ public abstract class EfEngineTests : IAsyncLifetime
         await App.SettleAsync();
         Assert.Equal(2m, await App.WithDbAsync(db => db.Applications.Where(a => a.Id == id).Select(a => a.Amount).FirstAsync()));
     }
+
+    // ── Reset list through EF (the undo column, created records, gateway values) ──
+
+    private const string Undoable = """
+    { "specVersion": 1, "id": "lc_u", "key": "undoable", "kind": "lifecycle", "title": "Undoable", "entity": "application",
+      "lifecycle": { "field": "status", "states": [
+          { "id": "d", "key": "Draft", "label": "Draft", "category": "initial" },
+          { "id": "s", "key": "Submitted", "label": "Submitted", "category": "active" } ],
+        "transitions": [
+          { "id": "t1", "key": "submit", "label": "Submit", "from": ["d"], "to": "s", "who": [ { "field": "entity.applicant" } ],
+            "steps": [
+              { "id": "mk", "type": "createRecord", "entity": "programme", "values": [ { "field": "name", "value": { "const": "Made by the workflow" } } ] },
+              { "id": "nt", "type": "setFields", "values": [ { "field": "notes", "value": { "const": 12 } }, { "field": "amount", "value": { "const": 1500.5 } } ] } ] } ],
+        "reset": { "who": [ { "user": "admin" } ] } } }
+    """;
+
+    private static readonly WorkflowActor Admin = WorkflowActor.User("admin", "Admin");
+
+    [Fact]
+    public async Task A_reset_deletes_what_the_workflow_created_and_restores_fields_through_ef_and_settles_the_journal()
+    {
+        App.Identity.Add(new WorkflowUser("admin", "Admin"));
+        await App.PublishAsync(Undoable);
+        var id = await App.WithDbAsync(async db =>
+        {
+            var a = new Application { Title = "Bursary", ApplicantId = "ali", Amount = 100 };
+            db.Add(a);
+            await db.SaveChangesAsync();
+            return a.Id;
+        });
+        await App.SettleAsync();
+        var rid = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        await App.Engine.ApplyTransitionAsync("application", rid, "submit", null, WorkflowActor.User("ali", "Ali"));
+        await App.SettleAsync();
+        Assert.Equal(1, await App.WithDbAsync(db => db.Programmes.CountAsync(p => p.Name == "Made by the workflow")));
+
+        var preview = await App.Engine.GetResetPreviewAsync("application", rid, Admin);
+        // The note is stored as text ("12") and the amount as a decimal: neither looks "changed again since".
+        var notes = Assert.Single(preview.Items, i => i.Id == $"field:application:{rid}:notes");
+        Assert.True(notes.Selected, notes.Warning);
+        Assert.True(Assert.Single(preview.Items, i => i.Id == $"field:application:{rid}:amount").Selected);
+        Assert.True(Assert.Single(preview.Items, i => i.Kind == "created").Selected);
+
+        await App.Engine.ResetAsync("application", rid, null, Admin, undo: preview.Items.Where(i => i.Selected).Select(i => i.Id).ToList(), token: preview.Token);
+        await App.SettleAsync();
+        Assert.Equal(0, await App.WithDbAsync(db => db.Programmes.CountAsync(p => p.Name == "Made by the workflow")));
+        var app = await App.WithDbAsync(db => db.Applications.AsNoTracking().FirstAsync(a => a.Id == id));
+        Assert.Null(app.Notes);
+        Assert.Equal(100m, app.Amount);
+        var undo = await App.WithDbAsync(db => db.Set<StepRecord>().Where(s => s.Undo != null).Select(s => s.Undo!).ToListAsync());
+        Assert.Equal(2, undo.Count);
+        Assert.All(undo, u => Assert.Contains("\"settled\"", u));
+    }
+
+    [Fact]
+    public async Task Create_record_refuses_types_the_database_does_not_store_or_cannot_make()
+    {
+        await App.PublishAsync("""
+        { "specVersion": 1, "id": "wf_mk", "key": "make", "kind": "automation", "title": "Make", "entity": "application",
+          "trigger": { "type": "manual", "label": "Make", "who": [ { "user": "ali" } ] },
+          "steps": [ { "id": "g", "type": "createRecord", "entity": "ghost", "values": [ { "field": "name", "value": { "const": "Boo" } } ] } ] }
+        """);
+        await App.PublishAsync("""
+        { "specVersion": 1, "id": "wf_rc", "key": "receipt", "kind": "automation", "title": "Receipt", "entity": "application",
+          "trigger": { "type": "manual", "label": "Receipt", "who": [ { "user": "ali" } ] },
+          "steps": [ { "id": "r", "type": "createRecord", "entity": "receipt", "values": [ { "field": "text", "value": { "const": "Paid" } } ] } ] }
+        """);
+        var id = await App.WithDbAsync(async db =>
+        {
+            var a = new Application { Title = "Bursary", ApplicantId = "ali" };
+            db.Add(a);
+            await db.SaveChangesAsync();
+            return a.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        });
+        await App.SettleAsync();
+        var ali = WorkflowActor.User("ali", "Ali");
+        var ghost = await App.Engine.StartManualAsync("make", "application", id, null, ali);
+        var receipt = await App.Engine.StartManualAsync("receipt", "application", id, null, ali);
+        Assert.Equal(InstanceStatus.Incident, ghost.Status);
+        Assert.Contains("not stored in this database", ghost.Error);
+        Assert.Equal(InstanceStatus.Incident, receipt.Status);
+        Assert.Contains("cannot be created by workflows", receipt.Error);
+    }
+
+    [Fact]
+    public async Task A_failed_create_leaves_nothing_tracked_and_deleting_a_missing_record_is_refused()
+    {
+        var id = await App.WithDbAsync(async db =>
+        {
+            var a = new Application { Title = "Bursary" };
+            db.Add(a);
+            await db.SaveChangesAsync();
+            return a.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        });
+        await using (var s = await App.Engine.Options.Store.BeginAsync())
+        {
+            // A document needs an application (foreign key), so this save fails ...
+            await Assert.ThrowsAnyAsync<Exception>(() => s.Entities.CreateAsync("document", new Dictionary<string, object?> { ["verified"] = true }));
+            // ... and the next save in the same unit does not try it again.
+            await s.Entities.SetFieldsAsync("application", id, new Dictionary<string, object?> { ["notes"] = "after" });
+            var gone = await Assert.ThrowsAsync<WorkflowException>(() => s.Entities.DeleteAsync("application", "987654"));
+            Assert.Equal("noRecord", gone.Code);
+            await s.CommitAsync();
+        }
+        Assert.Equal("after", await App.WithDbAsync(db => db.Applications.Where(a => a.Id == int.Parse(id)).Select(a => a.Notes).FirstAsync()));
+    }
 }
 
 public sealed class SqliteEngineTests : EfEngineTests, IDisposable

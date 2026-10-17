@@ -48,12 +48,27 @@ public sealed class Document
     public bool Verified { get; set; }
 }
 
+/// <summary>A mapped entity without a parameterless constructor (EF binds its constructor): workflows cannot create it.</summary>
+public sealed class Receipt(string text)
+{
+    public int Id { get; set; }
+    public string Text { get; set; } = text;
+}
+
+/// <summary>A registered type this database does not store.</summary>
+public sealed class Ghost
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
+}
+
 public sealed class AppDb(DbContextOptions<AppDb> options, bool sqlite = false) : DbContext(options)
 {
     public DbSet<Application> Applications => Set<Application>();
     public DbSet<Programme> Programmes => Set<Programme>();
     public DbSet<Document> Documents => Set<Document>();
     public DbSet<Tag> Tags => Set<Tag>();
+    public DbSet<Receipt> Receipts => Set<Receipt>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {

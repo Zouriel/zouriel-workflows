@@ -596,7 +596,19 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
     public async Task<string> CreateAsync(string entity, IReadOnlyDictionary<string, object?> values, CancellationToken ct = default)
     {
         var e = Entity(entity);
-        var obj = Activator.CreateInstance(e.ClrType!) ?? throw new WorkflowException("notSupported", $"{e.Label} records cannot be created by workflows.");
+        var notSupported = new WorkflowException("notSupported", $"{e.Label} records cannot be created by workflows.");
+        // Only a type this database maps, with a key, that can be made without arguments.
+        var et = db.Model.FindEntityType(e.ClrType!) ?? throw new WorkflowException("unknownEntity", $"{e.Label} is not stored in this database.");
+        if (et.FindPrimaryKey()?.Properties[0] is not { } key || e.ClrType!.IsAbstract) throw notSupported;
+        object obj;
+        try
+        {
+            obj = Activator.CreateInstance(e.ClrType)!;
+        }
+        catch (Exception x) when (x is MissingMethodException or MemberAccessException or System.Reflection.TargetInvocationException or NotSupportedException)
+        {
+            throw notSupported;
+        }
         foreach (var (k, v) in values)
         {
             var f = e.Field(k) ?? throw new WorkflowException("unknownField", $"'{k}' is not a field of {e.Label}.");
@@ -604,19 +616,35 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
             f.Setter(obj, v);
         }
         db.Add(obj);
-        // Saved now (inside the unit's transaction), like SetFieldsAsync, so the change hook sees the workflow's scope.
-        await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
-        var key = db.Model.FindEntityType(e.ClrType!)!.FindPrimaryKey()!.Properties[0];
+        try
+        {
+            // Saved now (inside the unit's transaction), like SetFieldsAsync, so the change hook sees the workflow's scope.
+            await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
+        }
+        catch
+        {
+            // A failed save leaves nothing half-added behind for the unit's next save.
+            db.Entry(obj).State = EntityState.Detached;
+            throw;
+        }
         return Values.Text(db.Entry(obj).Property(key.Name).CurrentValue);
     }
 
     public async Task DeleteAsync(string entity, string id, CancellationToken ct = default)
     {
         var e = Entity(entity);
-        var obj = await FindAsync(e, id, ct);
-        if (obj is null) return;
+        // Like the in-memory gateway: a record that is not there is an error, not a silent success.
+        var obj = await FindAsync(e, id, ct) ?? throw new WorkflowException("noRecord", $"{e.Label} {id} does not exist.");
         db.Remove(obj);
-        await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
+        try
+        {
+            await DbErrors.MapAsync(() => db.SaveChangesAsync(ct));
+        }
+        catch
+        {
+            if (db.Entry(obj).State == EntityState.Deleted) db.Entry(obj).State = EntityState.Unchanged;
+            throw;
+        }
     }
 
     public Task<IReadOnlyList<string>> ListIdsAsync(string entity, string? after, int limit, CancellationToken ct = default)
