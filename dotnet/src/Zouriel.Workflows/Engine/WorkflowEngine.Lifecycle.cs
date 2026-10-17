@@ -77,15 +77,39 @@ public sealed partial class WorkflowEngine
 
     // ── Applying transitions ──────────────────────────────────────────────
 
-    /// <summary>A person applies a transition to a record (spec §6). Everything happens in one unit of work.</summary>
-    public Task<RecordView> ApplyTransitionAsync(string entity, string id, string transition, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default) =>
-        RunAsync(async u =>
+    /// <summary>
+    /// A person applies a transition to a record (spec §6): <c>who</c>, the guard and the input are checked,
+    /// and hidden transitions are refused. Everything happens in one unit of work. The actor must be a
+    /// person (<see cref="WorkflowActor.IsUser"/>); app code that moves records itself calls
+    /// <see cref="ApplyTransitionAsSystemAsync"/>.
+    /// </summary>
+    public Task<RecordView> ApplyTransitionAsync(string entity, string id, string transition, Dictionary<string, object?>? input, WorkflowActor user, string? lifecycle = null, CancellationToken ct = default)
+    {
+        if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can apply a transition.");
+        return RunAsync(async u =>
         {
-            var c = lifecycle is null ? await LifecycleForAsync(u, entity, null, null, ct) : await RequireLifecycleAsync(u, lifecycle, entity, ct);
-            if (c is null) throw new WorkflowException("unknownLifecycle", $"{entity} has no published lifecycle.");
-            await ApplyTransitionCoreAsync(u, c.Definition.Key, entity, id, transition, input ?? [], user, isPerson: user.IsUser, auto: false, 0, ct);
+            var c = await LifecycleOfAsync(u, entity, lifecycle, ct);
+            await ApplyTransitionCoreAsync(u, c.Definition.Key, entity, id, transition, input ?? [], user, isPerson: true, auto: false, 0, ct);
             return await RecordViewAsync(u, entity, id, user, ct);
         }, ct);
+    }
+
+    /// <summary>
+    /// The app applies a transition itself (like an <c>applyTransition</c> step): <c>who</c> is not checked,
+    /// the guard and the input are. Use it from trusted code only, never with a request's user.
+    /// </summary>
+    public Task ApplyTransitionAsSystemAsync(string entity, string id, string transition, Dictionary<string, object?>? input = null, WorkflowActor? actor = null,
+        string? lifecycle = null, CancellationToken ct = default) =>
+        RunAsync(async u =>
+        {
+            var c = await LifecycleOfAsync(u, entity, lifecycle, ct);
+            await ApplyTransitionCoreAsync(u, c.Definition.Key, entity, id, transition, input ?? [], actor ?? WorkflowActor.System, isPerson: false, auto: false,
+                WorkflowWriteScope.Current?.Depth ?? 0, ct);
+        }, ct);
+
+    private async Task<CompiledDefinition> LifecycleOfAsync(Uow u, string entity, string? lifecycle, CancellationToken ct) =>
+        (lifecycle is null ? await LifecycleForAsync(u, entity, null, null, ct) : await RequireLifecycleAsync(u, lifecycle, entity, ct))
+        ?? throw new WorkflowException("unknownLifecycle", $"{entity} has no published lifecycle.");
 
     internal async Task ApplyTransitionCoreAsync(Uow u, string lifecycleKey, string entity, string id, string transitionKey, Dictionary<string, object?> input,
         WorkflowActor actor, bool isPerson, bool auto, int depth, CancellationToken ct, int chain = 0)
@@ -98,7 +122,7 @@ public sealed partial class WorkflowEngine
         if (record.State is null || !tr.From.Allows(lc, record.State, tr.To))
             throw new WorkflowException("notInFromState", $"“{tr.Label}” is not possible from the record's current state.");
         var scope = u.Scope(record, new RunState { Input = input }, null, new TriggerInfo { Type = "transition", Transition = tr.Key });
-        if (isPerson && !await MayApplyAsync(u, scope, tr, actor, record, ct))
+        if (isPerson && (tr.Hidden == true || !await MayApplyAsync(u, scope, tr, actor, record, ct)))
             throw new WorkflowException("notAllowed", $"You are not allowed to “{tr.Label}”.");
         if (!await scope.ConditionAsync(tr.When, ct))
             throw new WorkflowException("guardFailed", $"“{tr.Label}” is not possible right now.");
@@ -127,7 +151,7 @@ public sealed partial class WorkflowEngine
             Category = "lifecycle", Action = auto ? "autoTransitioned" : "transitioned", SubjectType = "record", SubjectId = id, Entity = entity, EntityId = id,
             InstanceId = record.Id, DefinitionId = c.DefinitionId, Actor = actor, CorrelationId = record.CorrelationId,
             Before = new Dictionary<string, object?> { ["state"] = from.Key }, After = new Dictionary<string, object?> { ["state"] = to.Key },
-            Data = new Dictionary<string, object?> { ["transition"] = tr.Key, ["label"] = tr.Label, ["input"] = AuditWriter.Mask(input, SensitiveInputs(u)) },
+            Data = new Dictionary<string, object?> { ["transition"] = tr.Key, ["label"] = tr.Label, ["input"] = input },
         }, ct);
         u.Log?.Add("lifecycle", "transitioned", id, $"{from.Label} → {to.Label} ({tr.Label})");
         await QueueLifecycleEventAsync(u, c, entity, id, from.Key, to.Key, tr.Key, actor, depth, record.CorrelationId, ct);

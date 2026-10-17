@@ -11,14 +11,25 @@ namespace Zouriel.Workflows.DependencyInjection;
 /// <summary>Settings for the engine and its background workers.</summary>
 public sealed class WorkflowEngineSettings
 {
-    /// <summary>Separates audit chains and data when several tenants share a database.</summary>
+    /// <summary>
+    /// The audit chain this app writes to, when several apps or tenants share one audit table: each tenant
+    /// value has its own hash chain. It does not separate any other data; use separate databases or
+    /// schemas for that.
+    /// </summary>
     public string? Tenant { get; set; }
     /// <summary>Links in notifications, e.g. <c>https://app.example.com/{entity}/{id}</c>.</summary>
     public string? RecordLinkTemplate { get; set; }
     /// <summary>Channel for "you have a new task" messages. Null = inApp, else email.</summary>
     public string? TaskNotificationChannel { get; set; }
     public bool NotifyTaskAssignees { get; set; } = true;
+    /// <summary>The most steps one instance may run in one go before it waits (stops runaway loops).</summary>
     public int MaxStepsPerRun { get; set; } = 5000;
+    /// <summary>See <see cref="WorkflowEngineOptions.OwnershipRefreshInterval"/>.</summary>
+    public TimeSpan OwnershipRefreshInterval { get; set; } = TimeSpan.FromSeconds(30);
+    /// <summary>Processed outbox rows older than this are deleted by the worker. Default 7 days.</summary>
+    public TimeSpan KeepProcessedOutbox { get; set; } = TimeSpan.FromDays(7);
+    /// <summary>Trigger claims (start dedupe rows) older than this are deleted by the worker. Default 30 days.</summary>
+    public TimeSpan KeepTriggerClaims { get; set; } = TimeSpan.FromDays(30);
     /// <summary>How often the worker checks the outbox and due timers.</summary>
     public TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
     /// <summary>Turn off to run the background work yourself (e.g. in a separate worker process).</summary>
@@ -163,6 +174,7 @@ public static class WorkflowServiceCollectionExtensions
                 Time = s.Time, Tenant = s.Tenant, MaxStepsPerRun = s.MaxStepsPerRun, TaskNotificationChannel = s.TaskNotificationChannel,
                 NotifyTaskAssignees = s.NotifyTaskAssignees, FormValidator = sp.GetRequiredService<IFormValidator>(),
                 RecordLinkTemplate = s.RecordLinkTemplate, ActorAccessor = sp.GetService<IWorkflowActorAccessor>(),
+                OwnershipRefreshInterval = s.OwnershipRefreshInterval,
             });
             return engine;
         });

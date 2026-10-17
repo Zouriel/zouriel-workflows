@@ -47,7 +47,7 @@ public sealed class AuditChainTests
         {
             var entry = Values.FromJson(item!["entry"]);
             Assert.Equal(item["canonical"]!.GetValue<string>(), Values.Canonical(entry));
-            var hash = AuditWriter.Sha256Hex(item["prevHash"]!.GetValue<string>() + "\n" + Values.Canonical(entry));
+            var hash = AuditChain.Sha256Hex(item["prevHash"]!.GetValue<string>() + "\n" + Values.Canonical(entry));
             Assert.Equal(item["hash"]!.GetValue<string>(), hash);
         }
     }
@@ -64,18 +64,18 @@ public sealed class AuditChainTests
         };
         var fx = JsonNode.Parse(File.ReadAllText(Path.Combine(SpecPaths.Fixtures("audit"), "chain.json")))!;
         var third = fx["entries"]![2]!;
-        Assert.Equal(third["canonical"]!.GetValue<string>(), Values.Canonical(AuditWriter.HashedObject(rec)));
+        Assert.Equal(third["canonical"]!.GetValue<string>(), Values.Canonical(AuditChain.HashedObject(rec)));
     }
 
     [Fact]
     public void Verification_finds_a_tampered_entry_and_a_missing_one()
     {
         var entries = new List<AuditRecord>();
-        var prev = AuditWriter.GenesisHash;
+        var prev = AuditChain.GenesisHash;
         for (var i = 1; i <= 4; i++)
         {
             var r = new AuditRecord { Seq = i, Id = $"e{i}", At = DateTimeOffset.UnixEpoch, Category = "c", Action = "a", SubjectType = "s", SubjectId = "x", CorrelationId = "x", PrevHash = prev };
-            r.Hash = AuditWriter.ComputeHash(r);
+            r.Hash = AuditChain.ComputeHash(r);
             prev = r.Hash;
             entries.Add(r);
         }
@@ -87,7 +87,7 @@ public sealed class AuditChainTests
         entries[1].Action = "a";
         var gap = entries.Where(e => e.Seq != 3).ToList();
         Assert.False(AuditVerifier.Verify(gap).Valid);
-        Assert.True(AuditVerifier.Verify(gap, [(3, 3)]).Valid);
+        Assert.True(AuditVerifier.Verify(gap, [new SeqRange(3, 3)]).Valid);
     }
 }
 

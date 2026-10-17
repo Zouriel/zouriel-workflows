@@ -14,7 +14,12 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
 {
     internal readonly object Gate = new();
     internal readonly Dictionary<string, Dictionary<string, object>> Tables = [];
+    /// <summary>The head of each tenant's audit chain (key: tenant, or "" without tenancy).</summary>
+    internal readonly Dictionary<string, AuditHead> AuditHeads = [];
     internal long RecordOrder;
+
+    /// <summary>Tables whose rows carry a <c>RowVersion</c> checked at commit (optimistic concurrency, like the EF store).</summary>
+    private static readonly HashSet<string> VersionedTables = ["instances", "tasks"];
 
     /// <summary>Set after the engine is created, so record writes can be inspected (change events, owned fields).</summary>
     public ChangeInspector? Changes { get; set; }
@@ -84,13 +89,19 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
     private sealed class TriggerClaim
     {
         public string Key { get; set; } = "";
+        public DateTimeOffset ClaimedAt { get; set; }
     }
 
     /// <summary>One unit of work: writes go to an overlay until commit.</summary>
     internal sealed class Session : IWorkflowSession
     {
         private readonly InMemoryWorkflowStore _store;
-        private readonly Dictionary<(string Table, string Key), object?> _overlay = [];
+        private Dictionary<(string Table, string Key), object?> _overlay = [];
+        /// <summary>Row versions as first read in this unit, for the commit-time conflict check.</summary>
+        private readonly Dictionary<(string Table, string Key), long> _readVersions = [];
+        private readonly Dictionary<string, AuditHead?> _readHeads = [];
+        private readonly Dictionary<string, AuditHead> _newHeads = [];
+        private readonly Dictionary<string, Dictionary<(string Table, string Key), object?>> _savepoints = [];
         private bool _done;
 
         public Session(InMemoryWorkflowStore store)
@@ -110,7 +121,9 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             if (_overlay.TryGetValue((table, key), out var o)) return o is null ? null : Clone((T)o);
             lock (_store.Gate)
             {
-                return _store.Tables.TryGetValue(table, out var t) && t.TryGetValue(key, out var v) ? Clone((T)v) : null;
+                if (!_store.Tables.TryGetValue(table, out var t) || !t.TryGetValue(key, out var v)) return null;
+                NoteVersion(table, key, v);
+                return Clone((T)v);
             }
         }
 
@@ -120,7 +133,11 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             lock (_store.Gate)
             {
                 if (_store.Tables.TryGetValue(table, out var t))
-                    foreach (var (k, v) in t) result[k] = (T)v;
+                    foreach (var (k, v) in t)
+                    {
+                        result[k] = (T)v;
+                        NoteVersion(table, k, v);
+                    }
             }
             foreach (var ((tb, k), v) in _overlay)
             {
@@ -130,6 +147,19 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             }
             return result.Values.Select(Clone).ToList();
         }
+
+        private void NoteVersion(string table, string key, object stored)
+        {
+            if (!VersionedTables.Contains(table) || _overlay.ContainsKey((table, key))) return;
+            _readVersions.TryAdd((table, key), RowVersionOf(stored));
+        }
+
+        private static long RowVersionOf(object row) => row switch
+        {
+            InstanceRecord i => i.RowVersion,
+            TaskRecord t => t.RowVersion,
+            _ => 0,
+        };
 
         internal void Put<T>(string table, string key, T value) where T : class => _overlay[(table, key)] = Clone(value);
 
@@ -165,7 +195,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         {
             var key = $"{definitionId}:{eventId}";
             if (Get<TriggerClaim>("claims", key) is not null) return Task.FromResult(false);
-            Put("claims", key, new TriggerClaim { Key = key });
+            Put("claims", key, new TriggerClaim { Key = key, ClaimedAt = _store.Time.GetUtcNow() });
             return Task.FromResult(true);
         }
 
@@ -181,6 +211,10 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         public Task<IReadOnlyList<InstanceRecord>> QueryInstancesAsync(InstanceQuery q, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<InstanceRecord>>(Filter(q).OrderByDescending(i => i.StartedAt).ThenByDescending(i => i.Id).Skip(q.Skip).Take(q.Take).ToList());
         public Task<int> CountInstancesAsync(InstanceQuery q, CancellationToken ct = default) => Task.FromResult(Filter(q).Count());
+        public Task<IReadOnlyDictionary<int, int>> CountInstancesByVersionAsync(string definitionId, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyDictionary<int, int>>(All<InstanceRecord>("instances")
+                .Where(i => i.DefinitionId == definitionId && i.Kind is InstanceKinds.Automation or InstanceKinds.Record)
+                .GroupBy(i => i.Version).ToDictionary(g => g.Key, g => g.Count()));
         public Task AddInstanceAsync(InstanceRecord i, CancellationToken ct = default) { Put("instances", i.Id, i); return Task.CompletedTask; }
         public Task UpdateInstanceAsync(InstanceRecord i, CancellationToken ct = default) { Put("instances", i.Id, i); return Task.CompletedTask; }
 
@@ -212,7 +246,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
 
         public Task<IReadOnlyList<BookmarkRecord>> FindBookmarksAsync(string kind, string? entity, string? entityId, string? signal, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<BookmarkRecord>>(All<BookmarkRecord>("bookmarks").Where(b => b.Kind == kind &&
-                (entity is null || b.Entity == entity) && (entityId is null || b.EntityId == entityId) && (signal is null || b.Signal == signal)).OrderBy(b => b.CreatedAt).ToList());
+                b.Entity == entity && b.EntityId == entityId && (signal is null || b.Signal == signal)).OrderBy(b => b.CreatedAt).ToList());
 
         public Task<IReadOnlyList<BookmarkRecord>> FindDefinitionBookmarksAsync(string definitionId, string kind, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<BookmarkRecord>>(All<BookmarkRecord>("bookmarks").Where(b => b.DefinitionId == definitionId && b.Kind == kind && b.InstanceId is null).ToList());
@@ -261,8 +295,22 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
 
         // ── Audit ─────────────────────────────────────────────────────────
 
-        public Task<AuditRecord?> GetAuditHeadAsync(string? tenant, CancellationToken ct = default) =>
-            Task.FromResult(All<AuditRecord>("audit").Where(a => a.Tenant == tenant).OrderByDescending(a => a.Seq).FirstOrDefault());
+        public Task<AuditHead?> GetAuditHeadAsync(string? tenant, CancellationToken ct = default)
+        {
+            var key = tenant ?? "";
+            if (_newHeads.TryGetValue(key, out var mine)) return Task.FromResult<AuditHead?>(mine);
+            if (_readHeads.TryGetValue(key, out var read)) return Task.FromResult(read);
+            AuditHead? head;
+            lock (_store.Gate) head = _store.AuditHeads.GetValueOrDefault(key);
+            _readHeads[key] = head;
+            return Task.FromResult(head);
+        }
+
+        public Task SetAuditHeadAsync(string? tenant, AuditHead head, CancellationToken ct = default)
+        {
+            _newHeads[tenant ?? ""] = head;
+            return Task.CompletedTask;
+        }
 
         public Task AddAuditAsync(AuditRecord a, CancellationToken ct = default) { Put("audit", a.Seq.ToString("D19", System.Globalization.CultureInfo.InvariantCulture), a); return Task.CompletedTask; }
 
@@ -277,11 +325,45 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             return Task.FromResult<IReadOnlyList<AuditRecord>>(ordered.Take(q.Take).ToList());
         }
 
-        public Task<int> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default)
+        public Task<AuditPurgeResult> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default)
         {
-            var victims = All<AuditRecord>("audit").Where(a => a.Category == category && a.At < before).ToList();
+            var victims = All<AuditRecord>("audit").Where(a => a.Category == category && a.At < before).OrderBy(a => a.Seq).ToList();
             foreach (var v in victims) Remove("audit", v.Seq.ToString("D19", System.Globalization.CultureInfo.InvariantCulture));
-            return Task.FromResult(victims.Count);
+            return Task.FromResult(new AuditPurgeResult(victims.Count, SeqRange.Compress(victims.Select(v => v.Seq))));
+        }
+
+        public Task<int> CleanupAsync(DateTimeOffset processedOutboxBefore, DateTimeOffset claimsBefore, CancellationToken ct = default)
+        {
+            var n = 0;
+            foreach (var o in All<OutboxRecord>("outbox").Where(o => o.ProcessedAt is not null && o.ProcessedAt < processedOutboxBefore))
+            {
+                Remove("outbox", o.Id);
+                n++;
+            }
+            foreach (var c in All<TriggerClaim>("claims").Where(c => c.ClaimedAt < claimsBefore))
+            {
+                Remove("claims", c.Key);
+                n++;
+            }
+            return Task.FromResult(n);
+        }
+
+        public Task<bool> CreateSavepointAsync(string name, CancellationToken ct = default)
+        {
+            _savepoints[name] = new Dictionary<(string Table, string Key), object?>(_overlay);
+            return Task.FromResult(true);
+        }
+
+        public Task RollbackToSavepointAsync(string name, CancellationToken ct = default)
+        {
+            if (_savepoints.Remove(name, out var saved)) _overlay = saved;
+            return Task.CompletedTask;
+        }
+
+        public Task ReleaseSavepointAsync(string name, CancellationToken ct = default)
+        {
+            _savepoints.Remove(name);
+            return Task.CompletedTask;
         }
 
         // ── Settings ──────────────────────────────────────────────────────
@@ -297,18 +379,32 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             lock (_store.Gate)
             {
                 // Audit entries form one chain: refuse a commit whose chain head moved under us.
-                var newAudit = _overlay.Where(kv => kv.Key.Table == "audit" && kv.Value is AuditRecord).Select(kv => (AuditRecord)kv.Value!).OrderBy(a => a.Seq).ToList();
-                if (newAudit.Count > 0)
+                foreach (var (tenant, _) in _newHeads)
+                    if (_store.AuditHeads.GetValueOrDefault(tenant) != _readHeads.GetValueOrDefault(tenant))
+                        throw new Engine.WorkflowConcurrencyException("The audit chain moved; retry.");
+                // Optimistic concurrency: a row written here must not have changed since this unit read it.
+                foreach (var ((table, key), value) in _overlay)
                 {
-                    var head = _store.Tables.TryGetValue("audit", out var at) && at.Count > 0 ? at.Values.Cast<AuditRecord>().Max(a => a.Seq) : 0;
-                    if (newAudit[0].Seq != head + 1) throw new Engine.WorkflowConcurrencyException("The audit chain moved; retry.");
+                    var stored = _store.Tables.TryGetValue(table, out var st) ? st.GetValueOrDefault(key) : null;
+                    if (table == "claims" && value is not null && stored is not null)
+                        throw new Engine.WorkflowConcurrencyException("Another unit claimed the same trigger event; retry.");
+                    if (!VersionedTables.Contains(table)) continue;
+                    var expected = _readVersions.TryGetValue((table, key), out var v) ? v : (long?)null;
+                    var current = stored is null ? (long?)null : RowVersionOf(stored);
+                    if (expected != current) throw new Engine.WorkflowConcurrencyException($"A {table[..^1]} changed under this unit; retry.");
                 }
                 foreach (var ((table, key), value) in _overlay)
                 {
                     if (!_store.Tables.TryGetValue(table, out var t)) _store.Tables[table] = t = [];
                     if (value is null) t.Remove(key);
-                    else t[key] = value;
+                    else
+                    {
+                        if (value is InstanceRecord i) i.RowVersion = (_readVersions.TryGetValue((table, key), out var rv) ? rv : 0) + 1;
+                        else if (value is TaskRecord tr) tr.RowVersion = (_readVersions.TryGetValue((table, key), out var rv2) ? rv2 : 0) + 1;
+                        t[key] = value;
+                    }
                 }
+                foreach (var (tenant, head) in _newHeads) _store.AuditHeads[tenant] = head;
             }
             _done = true;
             return Task.CompletedTask;
@@ -377,9 +473,14 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
             if (result?.Change is { } change) await session.AddOutboxAsync(session.Store.Changes!.ToOutbox(change), ct);
         }
 
-        public Task<IReadOnlyList<string>> ListIdsAsync(string entity, int limit, CancellationToken ct = default) =>
-            Task.FromResult<IReadOnlyList<string>>(session.All<StoredRecord>("records").Where(r => r.Entity == entity).OrderByDescending(r => r.Order).Take(limit).Select(r => r.Id).ToList());
+        public Task<IReadOnlyList<string>> ListIdsAsync(string entity, string? after, int limit, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<string>>(session.All<StoredRecord>("records")
+                .Where(r => r.Entity == entity && (after is null || string.CompareOrdinal(r.Id, after) > 0))
+                .OrderBy(r => r.Id, StringComparer.Ordinal).Take(limit).Select(r => r.Id).ToList());
     }
+
+    /// <summary>The clock for housekeeping timestamps (trigger claims); tests set the engine's manual clock.</summary>
+    public TimeProvider Time { get; set; } = TimeProvider.System;
 
     /// <summary>The registry, for resolving collection fields to their entity.</summary>
     public Registry.WorkflowRegistry? Registry { get; set; }

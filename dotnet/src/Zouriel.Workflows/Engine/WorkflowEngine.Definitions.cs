@@ -67,8 +67,7 @@ public sealed partial class WorkflowEngine
         RunAsync(async u =>
         {
             var d = await RequireDefinitionAsync(u, id, ct);
-            var instances = await u.S.QueryInstancesAsync(new InstanceQuery { DefinitionId = id, Kinds = [InstanceKinds.Automation, InstanceKinds.Record], Take = 100_000 }, ct);
-            var perVersion = instances.GroupBy(i => i.Version).ToDictionary(g => g.Key, g => g.Count());
+            var perVersion = await u.S.CountInstancesByVersionAsync(id, ct);
             var versions = (await u.S.ListVersionsAsync(id, ct)).OrderByDescending(v => v.Version)
                 .Select(v => new DefinitionVersionInfo(v.Version, v.Note, v.PublishedAt, v.PublishedBy, perVersion.GetValueOrDefault(v.Version)))
                 .ToList();
@@ -161,7 +160,7 @@ public sealed partial class WorkflowEngine
 
     private static string Normalize(string json) => JsonNode.Parse(json)!.ToJsonString();
 
-    internal static string Hash(string json) => AuditWriter.Sha256Hex(Values.Canonical(Values.FromJson(json)));
+    internal static string Hash(string json) => AuditChain.Sha256Hex(Values.Canonical(Values.FromJson(json)));
 
     /// <summary>Publishes the draft as a new immutable version. Lint errors block publishing.</summary>
     public async Task<DefinitionSummary> PublishAsync(string id, string? note, WorkflowActor actor, CancellationToken ct = default)

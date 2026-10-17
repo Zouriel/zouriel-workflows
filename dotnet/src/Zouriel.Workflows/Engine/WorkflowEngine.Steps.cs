@@ -312,7 +312,7 @@ public sealed partial class WorkflowEngine
             if (field is null || !field.IsSettable) throw new WorkflowException("fieldNotSettable", $"Workflows cannot change '{v.Field}'.");
             values[v.Field] = await scope.OperandAsync(v.Value, ct);
         }
-        var masked = AuditWriter.Mask(values, SensitiveFields(x.U, entity));
+        var masked = (await x.U.MaskerAsync(entity, id, ct)).MaskMap(values);
         var rec = await BeginStepAsync(x, t, sf, new Dictionary<string, object?> { ["entity"] = entity, ["id"] = id, ["values"] = masked }, ct);
         using (WorkflowWriteScope.Begin(x.Actor, x.I.Depth + 1, x.I.Id, x.I.DefinitionId, x.I.CorrelationId))
         {

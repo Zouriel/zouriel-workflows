@@ -78,12 +78,15 @@ public sealed partial class WorkflowEngine
     // ── Decisions ─────────────────────────────────────────────────────────
 
     /// <summary>Records a person's decision on an open task, and continues the workflow when the task is settled.</summary>
-    public Task<TaskView> DecideAsync(string taskId, WorkflowActor user, string outcome, string? comment, Dictionary<string, object?>? data, CancellationToken ct = default) =>
-        RunAsync(async u =>
+    public Task<TaskView> DecideAsync(string taskId, WorkflowActor user, string outcome, string? comment, Dictionary<string, object?>? data, CancellationToken ct = default)
+    {
+        if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a person can decide a task.");
+        return RunAsync(async u =>
         {
             await DecideCoreAsync(u, taskId, user, outcome, comment, data, ct);
             return await TaskViewAsync(u, (await u.S.GetTaskAsync(taskId, ct))!, user, ct);
         }, ct);
+    }
 
     internal async Task DecideCoreAsync(Uow u, string taskId, WorkflowActor user, string outcome, string? comment, Dictionary<string, object?>? data, CancellationToken ct)
     {
@@ -107,8 +110,7 @@ public sealed partial class WorkflowEngine
         var decision = new TaskDecision(user.Id!, user.Name, outcome, comment, data, Values.FormatInstant(u.Now));
         decisions.Add(decision);
         task.Decisions = Values.Serialize(decisions.Select(DecisionValue).ToList());
-        var maskedData = AuditWriter.Mask(data, SensitiveInputs(u));
-        await u.AuditAsync(TaskAudit(u, task, "decided", user, new Dictionary<string, object?> { ["outcome"] = outcome, ["comment"] = comment, ["answers"] = maskedData }), ct);
+        await u.AuditAsync(TaskAudit(u, task, "decided", user, new Dictionary<string, object?> { ["outcome"] = outcome, ["comment"] = comment, ["answers"] = data }), ct);
         u.Log?.Add("task", "decided", task.Id, $"{user.Name ?? user.Id}: {outcome}");
 
         var settled = Settle(task, decisions, assignees.Count);

@@ -29,6 +29,7 @@ public sealed class WorkflowTestHost
     {
         Store = new InMemoryWorkflowStore { Registry = registry };
         Clock = new ManualTimeProvider(now ?? new DateTimeOffset(2026, 10, 19, 9, 0, 0, TimeSpan.Zero));
+        Store.Time = Clock;
         var options = new WorkflowEngineOptions
         {
             Registry = registry, Store = Store, Identity = Identity, Notifications = Notifications, Webhooks = Webhooks, Actions = Actions, Time = Clock,

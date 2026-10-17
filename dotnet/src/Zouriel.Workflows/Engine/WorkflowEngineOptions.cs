@@ -15,6 +15,7 @@ public sealed class WorkflowEngineOptions
     public IWorkflowSecretResolver Secrets { get; init; } = new NoSecrets();
     public IWorkflowActionResolver Actions { get; init; } = new ActivatorActionResolver();
     public TimeProvider Time { get; init; } = TimeProvider.System;
+    /// <summary>The audit chain to write to (see <see cref="DependencyInjection.WorkflowEngineSettings.Tenant"/>).</summary>
     public string? Tenant { get; init; }
     /// <summary>Safety stop: the most steps one instance may run before it waits (protects against runaway loops).</summary>
     public int MaxStepsPerRun { get; init; } = 5000;
@@ -28,6 +29,12 @@ public sealed class WorkflowEngineOptions
     public SimulationLog? SimulationLog { get; init; }
     /// <summary>A base URL for links to records in notifications, e.g. <c>https://app.example.com/records/{entity}/{id}</c>.</summary>
     public string? RecordLinkTemplate { get; init; }
+    /// <summary>
+    /// How long the change hook trusts its cached list of lifecycle-owned fields before reloading it. A
+    /// node publishes and refreshes its own copy at once; other nodes see a newly owned field within this
+    /// interval (writes on them are accepted, and observed, until then). Default 30 seconds.
+    /// </summary>
+    public TimeSpan OwnershipRefreshInterval { get; init; } = TimeSpan.FromSeconds(30);
 }
 
 internal sealed class NoIdentity : IWorkflowIdentity
@@ -54,22 +61,4 @@ public sealed class ActivatorActionResolver : IWorkflowActionResolver
 {
     public IWorkflowAction? Resolve(ActionDescriptor action) =>
         action.HandlerType is null ? null : Activator.CreateInstance(action.HandlerType) as IWorkflowAction;
-}
-
-/// <summary>Sends webhooks with <see cref="HttpClient"/>.</summary>
-public sealed class HttpWebhookClient(HttpClient http) : IWebhookClient
-{
-    public async Task<WebhookResponse> SendAsync(WebhookRequest request, CancellationToken ct = default)
-    {
-        using var msg = new HttpRequestMessage(new HttpMethod(request.Method), request.Url);
-        if (request.Body is not null && request.Method != "GET")
-            msg.Content = new StringContent(request.Body, System.Text.Encoding.UTF8, "application/json");
-        foreach (var (k, v) in request.Headers) msg.Headers.TryAddWithoutValidation(k, v);
-        msg.Headers.TryAddWithoutValidation("Idempotency-Key", request.IdempotencyKey);
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        if (request.Timeout is { } t) cts.CancelAfter(t);
-        using var res = await http.SendAsync(msg, cts.Token);
-        var body = await res.Content.ReadAsStringAsync(cts.Token);
-        return new WebhookResponse((int)res.StatusCode, body);
-    }
 }

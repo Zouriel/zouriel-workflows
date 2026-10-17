@@ -76,7 +76,39 @@ public sealed partial class WorkflowEngine
             };
         }
 
-        public Task<AuditRecord> AuditAsync(AuditEntry e, CancellationToken ct) => Audit.WriteAsync(e, ct);
+        private readonly Dictionary<string, Masker> _maskers = [];
+
+        /// <summary>Queues an audit entry (masked, spec §11); the chain is linked when the unit commits.</summary>
+        public async Task AuditAsync(AuditEntry e, CancellationToken ct)
+        {
+            var m = await MaskerAsync(e.Entity, e.EntityId, ct);
+            var data = m.Mask(e.Data);
+            if (data is Dictionary<string, object?> d && d.TryGetValue("trigger", out var trig)) d["trigger"] = m.MaskTrigger(e.Data is Dictionary<string, object?> raw ? raw["trigger"] : trig);
+            Audit.Write(e with { Before = m.Mask(e.Before), After = m.Mask(e.After), Data = data });
+        }
+
+        /// <summary>The masker for one record (its current sensitive values), cached for the unit.</summary>
+        public async Task<Masker> MaskerAsync(string? entity, string? entityId, CancellationToken ct)
+        {
+            var key = $"{entity}\n{entityId}";
+            if (_maskers.TryGetValue(key, out var m)) return m;
+            IReadOnlyDictionary<string, object?>? values = null;
+            if (entity is not null && entityId is not null && Engine.Registry.Entity(entity) is not null)
+            {
+                try
+                {
+                    values = (await S.Entities.GetAsync(entity, entityId, ct))?.Values;
+                }
+                catch (WorkflowException)
+                {
+                    // Records the gateway cannot read are masked by key only.
+                }
+            }
+            return _maskers[key] = Masker.Create(Engine.Registry, Settings, values, entity);
+        }
+
+        /// <summary>Forgets a record's cached sensitive values (after a workflow wrote to it).</summary>
+        public void ForgetMasker(string entity, string entityId) => _maskers.Remove($"{entity}\n{entityId}");
     }
 
     internal async Task<Uow> OpenAsync(IWorkflowSession session, CancellationToken ct)
@@ -103,6 +135,7 @@ public sealed partial class WorkflowEngine
                     var result = await work(uow);
                     await RunDeferredAsync(uow, ct);
                     await StartQueuedAfterAsync(uow, ct);
+                    await uow.Audit.FlushAsync(ct);
                     await session.CommitAsync(ct);
                     return result;
                 }
@@ -156,8 +189,6 @@ public sealed partial class WorkflowEngine
         public IEnumerable<OwnedField> ForEntity(string entity) => Fields.Where(f => f.Entity == entity);
     }
 
-    /// <summary>How long the change hook trusts its cached list of lifecycle-owned fields (other nodes may publish).</summary>
-    public TimeSpan OwnershipRefreshInterval { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// The lifecycle-owned fields, as last loaded. Every unit of work refreshes a stale copy before it
@@ -176,11 +207,11 @@ public sealed partial class WorkflowEngine
         }
     }
 
-    /// <summary>Reloads the lifecycle-owned fields when the cached copy is older than <see cref="OwnershipRefreshInterval"/>.</summary>
+    /// <summary>Reloads the lifecycle-owned fields when the cached copy is older than <see cref="WorkflowEngineOptions.OwnershipRefreshInterval"/>.</summary>
     public async Task RefreshOwnershipAsync(CancellationToken ct = default)
     {
         var m = _ownership;
-        if (m is not null && Now - m.LoadedAt < OwnershipRefreshInterval && Now >= m.LoadedAt) return;
+        if (m is not null && Now - m.LoadedAt < Options.OwnershipRefreshInterval && Now >= m.LoadedAt) return;
         _ownership = await LoadOwnershipAsync(ct);
     }
 

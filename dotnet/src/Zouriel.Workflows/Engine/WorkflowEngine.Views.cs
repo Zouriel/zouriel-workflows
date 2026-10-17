@@ -307,31 +307,43 @@ public sealed partial class WorkflowEngine
     public Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default) =>
         RunAsync(u => u.S.QueryAuditAsync(q, ct), ct);
 
-    /// <summary>Checks the hash chain from <paramref name="fromSeq"/> (oldest first), in pages.</summary>
+    private const int AuditPage = 1000;
+
+    /// <summary>
+    /// Checks the hash chain from <paramref name="fromSeq"/> (oldest first), one page at a time: first the
+    /// purge checkpoints are collected (they explain gaps), then entries are streamed through the verifier.
+    /// </summary>
     public async Task<AuditVerification> VerifyAuditAsync(long fromSeq = 1, CancellationToken ct = default)
     {
-        var all = new List<AuditRecord>();
-        var purged = new List<(long, long)>();
-        var next = fromSeq;
-        while (true)
+        var purged = new List<SeqRange>();
+        for (long next = 1; ;)
         {
-            var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { FromSeq = next, Take = 1000 }, ct), ct);
-            if (page.Count == 0) break;
-            all.AddRange(page);
-            foreach (var p in page.Where(p => p.Category == "audit" && p.Action == "purged" && p.Data is not null))
-            {
-                var d = Values.FromJson(p.Data!) as Dictionary<string, object?>;
-                if (d?.GetValueOrDefault("fromSeq") is double f && d.GetValueOrDefault("toSeq") is double t) purged.Add(((long)f, (long)t));
-            }
+            var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { Category = "audit", Action = "purged", FromSeq = next, Take = AuditPage }, ct), ct);
+            foreach (var p in page) purged.AddRange(PurgedRanges(p));
+            if (page.Count < AuditPage) break;
             next = page[^1].Seq + 1;
-            if (page.Count < 1000) break;
         }
-        // Purges before the window also explain missing early entries.
-        var result = AuditVerifier.Verify(all, purged);
-        return result;
+        var verifier = new AuditChainVerifier(purged);
+        for (var next = fromSeq; ;)
+        {
+            var page = await RunAsync(u => u.S.QueryAuditAsync(new AuditQuery { FromSeq = next, Take = AuditPage }, ct), ct);
+            foreach (var e in page)
+                if (!verifier.Add(e)) return verifier.Result();
+            if (page.Count < AuditPage) break;
+            next = page[^1].Seq + 1;
+        }
+        return verifier.Result();
     }
 
-    /// <summary>Deletes audit entries older than the retention set in settings, leaving a checkpoint entry per category.</summary>
+    /// <summary>The exact ranges an <c>audit.purged</c> checkpoint recorded (<c>data.ranges: [[from, to], …]</c>).</summary>
+    internal static IEnumerable<SeqRange> PurgedRanges(AuditRecord checkpoint)
+    {
+        if (checkpoint.Data is null || Values.FromJson(checkpoint.Data) is not Dictionary<string, object?> d) yield break;
+        foreach (var r in d.GetValueOrDefault("ranges") as List<object?> ?? [])
+            if (r is List<object?> { Count: 2 } pair && pair[0] is double f && pair[1] is double t) yield return new SeqRange((long)f, (long)t);
+    }
+
+    /// <summary>Deletes audit entries older than the retention set in settings, leaving a checkpoint per category with the exact ranges deleted.</summary>
     public Task<int> PurgeAuditAsync(WorkflowActor actor, CancellationToken ct = default) =>
         RunAsync(async u =>
         {
@@ -340,17 +352,16 @@ public sealed partial class WorkflowEngine
             {
                 if (days < 1 || category == "audit") continue;
                 var before = u.Now.AddDays(-days);
-                var victims = await u.S.QueryAuditAsync(new AuditQuery { Category = category, To = before, FromSeq = 1, Take = 100_000 }, ct);
-                if (victims.Count == 0) continue;
-                var count = await u.S.PurgeAuditAsync(category, before, ct);
-                total += count;
+                var result = await u.S.PurgeAuditAsync(category, before, ct);
+                if (result.Count == 0) continue;
+                total += result.Count;
                 await u.AuditAsync(new AuditEntry
                 {
                     Category = "audit", Action = "purged", SubjectType = "audit", SubjectId = category, Actor = actor,
                     Data = new Dictionary<string, object?>
                     {
-                        ["category"] = category, ["before"] = Values.FormatInstant(before), ["count"] = (double)count,
-                        ["fromSeq"] = (double)victims.Min(v => v.Seq), ["toSeq"] = (double)victims.Max(v => v.Seq),
+                        ["category"] = category, ["before"] = Values.FormatInstant(before), ["count"] = (double)result.Count,
+                        ["ranges"] = result.Ranges.Select(r => (object?)new List<object?> { (double)r.From, (double)r.To }).ToList(),
                     },
                 }, ct);
             }

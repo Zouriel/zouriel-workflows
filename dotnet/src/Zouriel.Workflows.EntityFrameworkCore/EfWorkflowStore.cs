@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
@@ -141,6 +142,13 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     }
 
     public async Task<int> CountInstancesAsync(InstanceQuery q, CancellationToken ct = default) { await FlushAsync(ct); return await Filter(q).CountAsync(ct); }
+
+    public async Task<IReadOnlyDictionary<int, int>> CountInstancesByVersionAsync(string definitionId, CancellationToken ct = default)
+    {
+        await FlushAsync(ct);
+        return await Set<InstanceRecord>().Where(i => i.DefinitionId == definitionId && (i.Kind == InstanceKinds.Automation || i.Kind == InstanceKinds.Record))
+            .GroupBy(i => i.Version).Select(g => new { g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+    }
     public Task AddInstanceAsync(InstanceRecord i, CancellationToken ct = default) { Set<InstanceRecord>().Add(i); return Task.CompletedTask; }
     public Task UpdateInstanceAsync(InstanceRecord i, CancellationToken ct = default) { i.RowVersion++; Upsert(i); return Task.CompletedTask; }
 
@@ -204,8 +212,8 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
     {
         await FlushAsync(ct);
         var x = Set<BookmarkRecord>().Where(b => b.Kind == kind);
-        if (entity is not null) x = x.Where(b => b.Entity == entity);
-        if (entityId is not null) x = x.Where(b => b.EntityId == entityId);
+        x = entity is null ? x.Where(b => b.Entity == null) : x.Where(b => b.Entity == entity);
+        x = entityId is null ? x.Where(b => b.EntityId == null) : x.Where(b => b.EntityId == entityId);
         if (signal is not null) x = x.Where(b => b.Signal == signal);
         return await x.OrderBy(b => b.CreatedAt).ToListAsync(ct);
     }
@@ -275,7 +283,7 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
 
     // ── Audit ─────────────────────────────────────────────────────────────
 
-    public async Task<AuditRecord?> GetAuditHeadAsync(string? tenant, CancellationToken ct = default)
+    public async Task<AuditHead?> GetAuditHeadAsync(string? tenant, CancellationToken ct = default)
     {
         await FlushAsync(ct);
         var key = tenant ?? "";
@@ -297,21 +305,26 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
             Set<AuditHeadRecord>().Add(head);
             await FlushAsync(ct);
         }
-        if (head.Seq == 0) return null;
-        return await Set<AuditRecord>().AsNoTracking().FirstOrDefaultAsync(a => a.Tenant == tenant && a.Seq == head.Seq, ct);
+        // The head row is the chain's own state; it never depends on the newest entry still existing.
+        return head.Seq == 0 ? null : new AuditHead(head.Seq, head.Hash);
     }
 
-    public async Task AddAuditAsync(AuditRecord a, CancellationToken ct = default)
+    public async Task SetAuditHeadAsync(string? tenant, AuditHead head, CancellationToken ct = default)
     {
-        Set<AuditRecord>().Add(a);
-        var key = a.Tenant ?? "";
-        var head = Set<AuditHeadRecord>().Local.FirstOrDefault(h => h.TenantKey == key) ?? await Set<AuditHeadRecord>().FirstOrDefaultAsync(h => h.TenantKey == key, ct);
-        if (head is null) Set<AuditHeadRecord>().Add(new AuditHeadRecord { TenantKey = key, Seq = a.Seq, Hash = a.Hash });
+        var key = tenant ?? "";
+        var row = Set<AuditHeadRecord>().Local.FirstOrDefault(h => h.TenantKey == key) ?? await Set<AuditHeadRecord>().FirstOrDefaultAsync(h => h.TenantKey == key, ct);
+        if (row is null) Set<AuditHeadRecord>().Add(new AuditHeadRecord { TenantKey = key, Seq = head.Seq, Hash = head.Hash });
         else
         {
-            head.Seq = a.Seq;
-            head.Hash = a.Hash;
+            row.Seq = head.Seq;
+            row.Hash = head.Hash;
         }
+    }
+
+    public Task AddAuditAsync(AuditRecord a, CancellationToken ct = default)
+    {
+        Set<AuditRecord>().Add(a);
+        return Task.CompletedTask;
     }
 
     public async Task<IReadOnlyList<AuditRecord>> QueryAuditAsync(AuditQuery q, CancellationToken ct = default)
@@ -333,10 +346,34 @@ internal sealed class EfWorkflowSession(DbContext db, IDbContextTransaction tx, 
         return await x.Take(q.Take).ToListAsync(ct);
     }
 
-    public async Task<int> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default)
+    public async Task<AuditPurgeResult> PurgeAuditAsync(string category, DateTimeOffset before, CancellationToken ct = default)
     {
         await FlushAsync(ct);
-        return await Set<AuditRecord>().Where(a => a.Category == category && a.At < before).ExecuteDeleteAsync(ct);
+        // Page through the victims' sequence numbers so the checkpoint records exactly what went, however many.
+        const int page = 10_000;
+        var seqs = new List<long>();
+        long after = 0;
+        while (true)
+        {
+            var batch = await Set<AuditRecord>().AsNoTracking().Where(a => a.Category == category && a.At < before && a.Seq > after)
+                .OrderBy(a => a.Seq).Select(a => a.Seq).Take(page).ToListAsync(ct);
+            seqs.AddRange(batch);
+            if (batch.Count < page) break;
+            after = batch[^1];
+        }
+        var count = 0;
+        var ranges = SeqRange.Compress(seqs);
+        foreach (var r in ranges)
+            count += await Set<AuditRecord>().Where(a => a.Category == category && a.Seq >= r.From && a.Seq <= r.To).ExecuteDeleteAsync(ct);
+        return new AuditPurgeResult(count, ranges);
+    }
+
+    public async Task<int> CleanupAsync(DateTimeOffset processedOutboxBefore, DateTimeOffset claimsBefore, CancellationToken ct = default)
+    {
+        await FlushAsync(ct);
+        var n = await Set<OutboxRecord>().Where(o => o.ProcessedAt != null && o.ProcessedAt < processedOutboxBefore).ExecuteDeleteAsync(ct);
+        n += await Set<TriggerClaimRecord>().Where(c => c.ClaimedAt < claimsBefore).ExecuteDeleteAsync(ct);
+        return n;
     }
 
     // ── Settings ──────────────────────────────────────────────────────────
@@ -496,13 +533,37 @@ internal sealed class EfEntityGateway(DbContext db, WorkflowRegistry registry) :
         await db.SaveChangesAsync(ct);
     }
 
-    public async Task<IReadOnlyList<string>> ListIdsAsync(string entity, int limit, CancellationToken ct = default)
+    public Task<IReadOnlyList<string>> ListIdsAsync(string entity, string? after, int limit, CancellationToken ct = default)
     {
         var e = Entity(entity);
         var et = db.Model.FindEntityType(e.ClrType!)!;
-        var keyName = et.FindPrimaryKey()!.Properties[0].Name;
-        var set = (IQueryable<object>)typeof(DbContext).GetMethod(nameof(DbContext.Set), Type.EmptyTypes)!.MakeGenericMethod(e.ClrType!).Invoke(db, null)!;
-        var ids = await set.OrderByDescending(x => EF.Property<object>(x, keyName)).Take(limit).Select(x => EF.Property<object>(x, keyName)).ToListAsync(ct);
+        var key = et.FindPrimaryKey()!.Properties[0];
+        var method = typeof(EfEntityGateway).GetMethod(nameof(PageIdsAsync), System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .MakeGenericMethod(e.ClrType!, key.ClrType);
+        return (Task<IReadOnlyList<string>>)method.Invoke(this, [key.Name, after, limit, ct])!;
+    }
+
+    private async Task<IReadOnlyList<string>> PageIdsAsync<TEntity, TKey>(string keyName, string? after, int limit, CancellationToken ct) where TEntity : class
+    {
+        IQueryable<TEntity> q = db.Set<TEntity>().AsNoTracking();
+        if (after is not null)
+        {
+            var cursor = ConvertKey<TKey>(after);
+            var p = Expression.Parameter(typeof(TEntity), "x");
+            Expression prop = Expression.Call(typeof(EF), nameof(EF.Property), [typeof(TKey)], p, Expression.Constant(keyName));
+            Expression value = Expression.Constant(cursor, typeof(TKey));
+            // Keys without a ">" operator (string, Guid) compare through Compare/CompareTo, which EF translates.
+            Expression body = typeof(TKey) == typeof(string)
+                ? Expression.GreaterThan(Expression.Call(typeof(string).GetMethod(nameof(string.Compare), [typeof(string), typeof(string)])!, prop, value), Expression.Constant(0))
+                : typeof(TKey) == typeof(Guid)
+                    ? Expression.GreaterThan(Expression.Call(prop, typeof(Guid).GetMethod(nameof(Guid.CompareTo), [typeof(Guid)])!, value), Expression.Constant(0))
+                    : Expression.GreaterThan(prop, value);
+            q = q.Where(Expression.Lambda<Func<TEntity, bool>>(body, p));
+        }
+        var ids = await q.OrderBy(x => EF.Property<TKey>(x, keyName)).Select(x => EF.Property<TKey>(x, keyName)).Take(limit).ToListAsync(ct);
         return ids.Select(i => Values.Text(i)).ToList();
     }
+
+    private static TKey ConvertKey<TKey>(string id) =>
+        typeof(TKey) == typeof(Guid) ? (TKey)(object)Guid.Parse(id) : typeof(TKey) == typeof(string) ? (TKey)(object)id : (TKey)Convert.ChangeType(id, typeof(TKey), System.Globalization.CultureInfo.InvariantCulture);
 }

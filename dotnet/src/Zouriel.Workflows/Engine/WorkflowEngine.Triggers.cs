@@ -73,6 +73,19 @@ public sealed partial class WorkflowEngine
         await s.CommitAsync(ct);
     }
 
+    /// <summary>
+    /// Deletes housekeeping rows nobody needs any more: processed outbox rows older than
+    /// <paramref name="keepOutbox"/> and trigger claims older than <paramref name="keepClaims"/> (by then no
+    /// event can be delivered again). The worker calls it now and then.
+    /// </summary>
+    public async Task<int> CleanupAsync(TimeSpan keepOutbox, TimeSpan keepClaims, CancellationToken ct = default)
+    {
+        await using var s = await Options.Store.BeginAsync(ct);
+        var n = await s.CleanupAsync(Now - keepOutbox, Now - keepClaims, ct);
+        await s.CommitAsync(ct);
+        return n;
+    }
+
     // ── Change events ─────────────────────────────────────────────────────
 
     internal async Task ProcessChangeAsync(Uow u, EntityChange change, CancellationToken ct)
@@ -394,7 +407,7 @@ public sealed partial class WorkflowEngine
         if (c.Definition.Entity is null || u.Settings.IsPaused(c.Definition.Entity)) return;
         var limit = Math.Clamp(trig.ForEach.Limit, 1, 500);
         var started = 0;
-        foreach (var id in await u.S.Entities.ListIdsAsync(c.Definition.Entity, 5000, ct))
+        await foreach (var id in AllIdsAsync(u, c.Definition.Entity, ct))
         {
             if (started >= limit) break;
             if (trig.ForEach.When is not null)
@@ -405,6 +418,20 @@ public sealed partial class WorkflowEngine
             if (!await u.S.TryClaimTriggerEventAsync(c.DefinitionId, $"{eventId}:{id}", ct)) continue;
             await StartAutomationAsync(u, c, c.Definition.Entity, id, info, WorkflowActor.System, 0, null, null, null, null, ct);
             started++;
+        }
+    }
+
+    /// <summary>Every id of an entity, read page by page.</summary>
+    internal static async IAsyncEnumerable<string> AllIdsAsync(Uow u, string entity, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        const int page = 500;
+        string? after = null;
+        while (true)
+        {
+            var ids = await u.S.Entities.ListIdsAsync(entity, after, page, ct);
+            foreach (var id in ids) yield return id;
+            if (ids.Count < page) yield break;
+            after = ids[^1];
         }
     }
 
@@ -461,8 +488,10 @@ public sealed partial class WorkflowEngine
         }, ct);
 
     /// <summary>A person starts a manual-trigger automation from a record (spec §5 <c>manual</c>).</summary>
-    public Task<InstanceView> StartManualAsync(string definitionKey, string? entity, string? entityId, Dictionary<string, object?>? input, WorkflowActor user, CancellationToken ct = default) =>
-        RunAsync(async u =>
+    public Task<InstanceView> StartManualAsync(string definitionKey, string? entity, string? entityId, Dictionary<string, object?>? input, WorkflowActor user, CancellationToken ct = default)
+    {
+        if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a signed-in person can start a workflow by hand.");
+        return RunAsync(async u =>
         {
             var rec = await u.S.GetDefinitionByKeyAsync(definitionKey, ct);
             if (rec is null || rec.Version == 0 || rec.Status == DefinitionStatus.Archived) throw new WorkflowException("unknownWorkflow", $"There is no published workflow '{definitionKey}'.");
@@ -488,4 +517,5 @@ public sealed partial class WorkflowEngine
                        ?? throw new WorkflowException("alreadyRunning", $"'{c.Definition.Title}' is already running for this record.");
             return await InstanceViewAsync(u, inst.Id, ct);
         }, ct);
+    }
 }
