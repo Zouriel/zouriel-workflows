@@ -25,13 +25,16 @@ var origins = builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?
 builder.Services.AddCors(o => o.AddDefaultPolicy(p => p.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod().WithExposedHeaders("Content-Disposition")));
 
 // Behind a reverse proxy the connection comes from the proxy; X-Forwarded-For carries the visitor. Only
-// proxies listed in ForwardedHeaders:KnownProxies (default: this machine) are believed, so clients
-// cannot pick their own address to dodge the rate limits below.
+// proxies listed in ForwardedHeaders:KnownProxies, or inside ForwardedHeaders:KnownNetworks (CIDR, for a
+// proxy whose container address changes), are believed (default: this machine), so clients cannot pick
+// their own address to dodge the rate limits below.
 builder.Services.Configure<ForwardedHeadersOptions>(o =>
 {
     o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     foreach (var ip in builder.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>() ?? [])
         if (IPAddress.TryParse(ip, out var address)) o.KnownProxies.Add(address);
+    foreach (var cidr in builder.Configuration.GetSection("ForwardedHeaders:KnownNetworks").Get<string[]>() ?? [])
+        if (System.Net.IPNetwork.TryParse(cidr, out var network)) o.KnownIPNetworks.Add(network);
 });
 builder.Services.AddRateLimiter(o =>
 {
