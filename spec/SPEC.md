@@ -407,6 +407,10 @@ settings; a connection names a secret the host resolves.
   re-indexes its triggers with its original first-publish time.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
   produce the same codes for the same definition.
+- **Test runs** (`POST /simulate`) report the definition's lint problems with the result. A lifecycle
+  tested on a record that would not get it (pinned to another lifecycle for the field, not meeting
+  `appliesWhen` with the test values on top, or another lifecycle comes first in publish order) still
+  runs, and its problems carry a `lifecycleNotSelected` warning saying so.
 - **Permissions.** `POST /definitions/{id}/permissions` with `{ changes: [{ node, who }], note? }`
   changes who may do parts of a published workflow and publishes straight away (publish permission).
   A `node` is a transition id (its `who`), `reset` (`lifecycle.reset.who`), `trigger` (a manual

@@ -447,6 +447,25 @@ public sealed class EngineBehaviourTests
         Assert.Equal("***", result.Record!["applicantEmail"]);
     }
 
+    [Fact]
+    public async Task Test_runs_warn_when_the_record_would_not_get_the_lifecycle()
+    {
+        var h = await WithRecordAsync(new() { ["title"] = "Q", ["track"] = "visa" });
+        var def = """
+        { "specVersion": 1, "id": "lc_s", "key": "passportSim", "kind": "lifecycle", "title": "Passport", "entity": "application",
+          "lifecycle": { "field": "status",
+            "appliesWhen": { "match": "all", "conditions": [ { "ref": "entity.track", "op": "eq", "value": { "const": "passport" } } ] },
+            "states": [ { "id": "a", "key": "draft", "label": "Draft", "category": "initial" }, { "id": "b", "key": "approved", "label": "Done", "category": "terminal" } ],
+            "transitions": [ { "id": "t", "key": "finish", "label": "Finish", "from": ["a"], "to": "b", "who": [ { "role": "admin" } ] } ] } }
+        """;
+        var visa = await h.Engine.SimulateAsync(def, new SimulationRequest { EntityId = "a1", Transition = "finish" }, Admin);
+        Assert.Null(visa.Error);
+        Assert.Contains(visa.Problems, p => p is { Code: "lifecycleNotSelected", Severity: "warning" });
+        // With test values that meet the condition there is nothing to warn about.
+        var passport = await h.Engine.SimulateAsync(def, new SimulationRequest { EntityId = "a1", Values = new() { ["track"] = "passport" } }, Admin);
+        Assert.DoesNotContain(passport.Problems, p => p.Code == "lifecycleNotSelected");
+    }
+
     // ── Limits ────────────────────────────────────────────────────────────
 
     [Fact]

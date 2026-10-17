@@ -49,7 +49,7 @@ public sealed class SimulationRequest
 }
 
 /// <summary>What a test run did. Everything is masked like the audit log; fields workflows may not read are left out.</summary>
-/// <param name="Problems">Lint problems of the definition (errors stop the run before it starts).</param>
+/// <param name="Problems">Lint problems of the definition (errors stop the run before it starts), plus a <c>lifecycleNotSelected</c> warning when the test record would not get this lifecycle.</param>
 /// <param name="Log">What happened, side effects that were skipped included (messages, webhooks, actions, writes).</param>
 /// <param name="Instances">The instances the run created, oldest first.</param>
 /// <param name="OpenTasks">Tasks still open at the end.</param>
@@ -76,6 +76,8 @@ public sealed partial class WorkflowEngine
         var problems = await ValidateAsync(definitionJson, ct);
         if (problems.Any(p => p.Severity == "error")) return new SimulationResult(problems, [], [], [], null, "Fix the problems before testing.");
         var def = Definitions.Parse(definitionJson);
+        // A lifecycle tested on a record that would not get it (spec §6 applies to) still runs, with a warning.
+        if (await LifecycleNotSelectedAsync(def, req, ct) is { } notSelected) problems = [.. problems, notSelected];
         var run = await CreateSimulationAsync(def, definitionJson, ct);
         string? error = null;
         try
@@ -100,6 +102,43 @@ public sealed partial class WorkflowEngine
             run.Log.Add("error", e.Code, null, e.Message);
         }
         return await CollectSimulationAsync(run, def, req, problems, error, ct);
+    }
+
+    /// <summary>
+    /// For a lifecycle tested on a real record: a <c>lifecycleNotSelected</c> warning when the record would
+    /// not get this lifecycle (spec §6 applies to): it is pinned to another lifecycle for the field, its
+    /// values (with the test values on top) do not meet <c>appliesWhen</c>, or another lifecycle comes first.
+    /// </summary>
+    private async Task<LintProblem?> LifecycleNotSelectedAsync(WorkflowDefinition def, SimulationRequest req, CancellationToken ct)
+    {
+        if (!def.IsLifecycle || def.Lifecycle is not { } lc || def.Entity is not { } entity || req.EntityId is not { } id) return null;
+        static LintProblem Warn(string message) => new("lifecycleNotSelected", "warning", null, message);
+        return await RunAsync<LintProblem?>(async u =>
+        {
+            foreach (var i in await LiveRecordInstancesAsync(u, entity, id, ct))
+            {
+                if (i.DefinitionId == def.Id) return null;
+                var other = await CompiledAsync(u, i.DefinitionId, i.Version, ct);
+                if (other.Lifecycle.Field == lc.Field)
+                    return Warn($"This record already follows '{other.Definition.Title}' for {lc.Field}, so it would never get this lifecycle. The test run shows what would happen if it did.");
+            }
+            var values = new Dictionary<string, object?>((await u.S.Entities.GetAsync(entity, id, ct))?.Values ?? [], StringComparer.Ordinal);
+            foreach (var (k, v) in req.Values ?? []) values[k] = v;
+            var triggers = (await u.S.ListTriggersAsync(ct)).Where(t => t.Type == "lifecycle" && t.Entity == entity && t.Field == lc.Field).ToList();
+            // This definition takes its place by its first publish time (a draft that was never published comes last).
+            var mine = triggers.FirstOrDefault(t => t.DefinitionId == def.Id)?.PublishedAt ?? DateTimeOffset.MaxValue;
+            var candidates = triggers.Where(t => t.DefinitionId != def.Id)
+                .Select(t => (Id: t.DefinitionId, Trigger: (TriggerRecord?)t, When: AppliesWhenOf(t), At: t.PublishedAt))
+                .Append((Id: def.Id, Trigger: null, When: lc.AppliesWhen, At: mine));
+            foreach (var c in InSelectionOrder(candidates, x => x.When is not null, x => x.At, x => x.Id))
+            {
+                if (!LifecycleSelection.Applies(c.When, values, u.Today)) continue;
+                if (c.Trigger is null) return null;
+                var title = (await CompiledAsync(u, c.Trigger.DefinitionId, c.Trigger.Version, ct)).Definition.Title;
+                return Warn($"This record would get '{title}' instead of this lifecycle (it comes first for these values). The test run shows what would happen if it got this one.");
+            }
+            return Warn("This record does not meet this lifecycle's “Applies to” condition, so it would never get this lifecycle. The test run shows what would happen if it did.");
+        }, ct);
     }
 
     /// <summary>A test run's private engine: an in-memory store over the app's records, a manual clock and a log of side effects.</summary>
