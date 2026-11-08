@@ -1,0 +1,56 @@
+{
+    "name": "zouriel/workflows",
+    "description": "Zouriel Workflows for Laravel: automations, lifecycles, approvals and a tamper-evident audit log, run inside the app's own database and driven by the @zouriel/ui workflow builder through the shared REST API.",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.4",
+        "ext-mbstring": "*",
+        "illuminate/support": "^12.0 || ^13.0",
+        "zouriel/forms": "^0.1"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.27",
+        "orchestra/testbench": "^10.0 || ^11.0",
+        "pestphp/pest": "^5.0"
+    },
+    "repositories": [
+        {
+            "type": "vcs",
+            "url": "git@github.com:Zouriel/zouriel-forms.git"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Zouriel\\Workflows\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Zouriel\\Workflows\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Zouriel\\Workflows\\Laravel\\WorkflowsServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "lint": "pint"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        },
+        "preferred-install": {
+            "zouriel/*": "source",
+            "*": "dist"
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
