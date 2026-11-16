@@ -37,6 +37,7 @@ The Laravel engine for Zouriel Workflows. Read, in this order: `../spec/SPEC.md`
 | `src/Core/Changes` | `ChangeInspector` (change events, owned fields, initial states), `EntityChange`, `LifecycleEvent`, `WriteScope(s)` (the request's stack of engine write scopes) | `Changes/*.cs` |
 | `src/Core/Engine` | `WorkflowEngine` (core: units of work with retries, ownership cache, settings) and its partials as traits in `Concerns/` (`Definitions`, `Triggers`, `Runs`, `Steps`, `Tasks`, `Lifecycles`, `SlaPause`, `Resets`, `Simulation`, `Views`); `RunState`/`Token`/`Frame`, `ValueScope`, `Uow`, `Exec`, `SlaClocks`, `CompiledDefinition`; read models in `Views/` | `Engine/*.cs` |
 | `src/Core/Testing` | `WorkflowTestHost` (engine + in-memory store + manual clock + fakes), `ConformanceRunner` (`spec/fixtures/engine`) | `Zouriel.Workflows.Testing/*.cs` |
+| `src/Laravel/Http` | The REST API: `WorkflowApi` (routes, default bindings), thin controllers in `Controllers/` over the engine, `IdentifyActor`/`AuthorizeOperation` middleware (401, config gates), `ActorResolver` (+ `AuthActorResolver`), `AccessPolicy` (+ `RecordAccessPolicy`, `AllowAllAccessPolicy`), `ApiJson` (.NET's JSON shapes), `RequestBody` (System.Text.Json web reading), `ApiErrors` (code → status), `AuditCsv` | `Zouriel.Workflows.AspNetCore/*` |
 | `src/Core/Expressions`, `Audit`, `Support` | conditions through `zouriel/forms`; audit chain, `AuditWriter`, `Masker`; `AbsoluteUrl` (.NET `Uri` rules for origins) | `Expressions/`, `Audit/` |
 | `src/Laravel/Storage` | `DatabaseStore`/`DatabaseSession` (the `wf_*` tables; one transaction per unit, begun at the first write; row versions, unique live keys and claims, audit head row lock, `FOR UPDATE SKIP LOCKED` claims), `Rows` (record ⇄ row), `DbErrors` (races → `WorkflowConcurrencyException`) | `EntityFrameworkCore/EfWorkflowStore.cs`, `DbErrors.cs`, `WorkflowModel.cs` |
 | `src/Laravel/Registry`, `Eloquent` | `ModelRegistry` (`->entity(key, Model::class, fn)`), `ModelBindings`; `EloquentGateway` (records through models, writes in savepoints), `ModelValues` (enums, dates, decimals, JSON, translations, relations) | `RegistryBuilder` CLR bindings, `EfEntityGateway` |
@@ -66,6 +67,11 @@ PostgreSQL with `DB_CONNECTION=pgsql` (`DB_HOST`/`DB_PORT`/`DB_USERNAME`/`DB_PAS
 It reruns every engine fixture on the database store (`Support/DatabaseHostStore` keeps fixture records in a table),
 and tests Eloquent capture with the models in `tests/Support/App`. `tests/Laravel` covers the provider and adapters.
 MySQL is supported by the migration and queries but not tested here (no `pdo_mysql`).
+API conventions: every endpoint of `../spec/api/openapi.json` is served, and `tests/Laravel/Http/ContractTest.php` fails
+when one is missing or extra or a response does not match its schema (`ApiTestCase::api()` checks every response of the
+API tests). Views go out with ASP.NET's web defaults (all members, nulls included, .NET `DateTimeOffset` members as
+`…+00:00`); error `details` and the JSON audit export leave null members out (.NET's document options). Engine errors
+are mapped in the base controller, never in the app's exception handler.
 
 ## Commands
 

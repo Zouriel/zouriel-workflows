@@ -33,6 +33,7 @@ use Zouriel\Workflows\Laravel\Console\SeedCommand;
 use Zouriel\Workflows\Laravel\Console\TickCommand;
 use Zouriel\Workflows\Laravel\Console\WorkCommand;
 use Zouriel\Workflows\Laravel\Eloquent\EloquentGateway;
+use Zouriel\Workflows\Laravel\Http\WorkflowApi;
 use Zouriel\Workflows\Laravel\Registry\ModelBindings;
 use Zouriel\Workflows\Laravel\Registry\ModelRegistry;
 use Zouriel\Workflows\Laravel\Storage\DatabaseSession;
@@ -41,7 +42,7 @@ use Zouriel\Workflows\Laravel\Storage\DatabaseStore;
 /**
  * Connects Zouriel Workflows to a Laravel app: the registry the app declares (`config('workflows.registry')`), the
  * engine on the database store with the app's host services, the change hook of `HasWorkflows` models, and the
- * `workflows:work`, `workflows:tick` and `workflows:seed` commands. The engine and its store are scoped, so each request
+ * `workflows:work`, `workflows:tick` and `workflows:seed` commands, and the REST API (mounted at `workflows.path`). The engine and its store are scoped, so each request
  * or job (Octane included) gets its own write scopes. Port of .NET `AddWorkflowsCore` + `UseEntityFrameworkCore`.
  */
 class WorkflowsServiceProvider extends ServiceProvider
@@ -105,6 +106,7 @@ class WorkflowsServiceProvider extends ServiceProvider
             (int) config('workflows.worker.keep_outbox_days', 7),
             (int) config('workflows.worker.keep_claims_days', 30),
         ));
+        WorkflowApi::bindDefaults($this->app);
     }
 
     public function boot(): void
@@ -128,5 +130,8 @@ class WorkflowsServiceProvider extends ServiceProvider
                 $this->app->make(WorkflowEngine::class)->flushBackground();
             }
         });
+        if (config('workflows.api.routes', true) && ! $this->app->routesAreCached()) {
+            WorkflowApi::routes();
+        }
     }
 }

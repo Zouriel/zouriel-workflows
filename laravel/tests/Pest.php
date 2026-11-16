@@ -4,6 +4,7 @@ use Zouriel\Forms\Json;
 use Zouriel\Workflows\Core\Host\WorkflowUser;
 use Zouriel\Workflows\Core\Registry\WorkflowRegistry;
 use Zouriel\Workflows\Core\Testing\WorkflowTestHost;
+use Zouriel\Workflows\Tests\Laravel\Http\ApiTestCase;
 
 /**
  * Whether the shared spec is next to this package. It is in the zouriel-workflows monorepo; the
@@ -44,3 +45,5 @@ function engineHost(?array $record = null): WorkflowTestHost
 
     return $host;
 }
+
+uses(ApiTestCase::class)->in('Laravel/Http');

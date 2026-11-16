@@ -11,9 +11,11 @@
     },
     "require-dev": {
         "laravel/pint": "^1.27",
+        "opis/json-schema": "^2.4",
         "orchestra/testbench": "^10.0 || ^11.0",
         "pestphp/pest": "^5.0",
-        "spatie/laravel-translatable": "^6.15"
+        "spatie/laravel-translatable": "^6.15",
+        "symfony/polyfill-iconv": "^1.43"
     },
     "repositories": [
         {
