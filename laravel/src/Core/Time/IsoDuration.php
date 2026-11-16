@@ -7,8 +7,7 @@ use Zouriel\Workflows\Core\WorkflowException;
 
 /**
  * An ISO 8601 duration (spec §9), kept in its parts so months and days stay calendar-aware. Port of
- * the `IsoDuration` record in .NET `Time/Durations.cs`; adding durations to instants (the work
- * calendar) comes with the engine.
+ * the `IsoDuration` record in .NET `Time/Durations.cs`; `WorkCalendar` adds durations to instants.
  */
 final readonly class IsoDuration
 {
@@ -69,6 +68,18 @@ final readonly class IsoDuration
     public function totalDays(): int
     {
         return $this->weeks * 7 + $this->days;
+    }
+
+    /** The time part (hours, minutes, seconds) in milliseconds. */
+    public function timePartMs(): int
+    {
+        return (($this->hours * 60 + $this->minutes) * 60 + $this->seconds) * 1000;
+    }
+
+    /** An approximate length in milliseconds (years 365 days, months 30), as .NET's `Approximate`; the sign is ignored. */
+    public function approximateMs(): int
+    {
+        return $this->approximateSeconds() * 1000;
     }
 
     /** An approximate length in seconds, for ordering and limits only (years 365 days, months 30); the sign is ignored. */

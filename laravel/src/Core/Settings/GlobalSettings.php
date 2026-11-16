@@ -11,11 +11,12 @@ use Zouriel\Workflows\Core\Json\Read;
 use Zouriel\Workflows\Core\Json\Write;
 use Zouriel\Workflows\Core\Support\AbsoluteUrl;
 use Zouriel\Workflows\Core\Time\IsoDuration;
+use Zouriel\Workflows\Core\Time\WorkCalendar;
 
 /**
  * App-wide workflow settings (spec §12), edited in `ui-workflow-global-settings`. Port of .NET
  * `Settings/GlobalSettings.cs`: `parse()` reads them, `problems()` lists what saving refuses, and the
- * engine reads values it cannot use leniently (the work calendar comes with the engine).
+ * engine reads values it cannot use leniently (`workCalendar()`).
  */
 final class GlobalSettings
 {
@@ -108,6 +109,51 @@ final class GlobalSettings
     public function zone(): DateTimeZone
     {
         return self::knownZone($this->timeZone) ? new DateTimeZone($this->timeZone) : new DateTimeZone('UTC');
+    }
+
+    /**
+     * The calendar durations are added with (working time only when a calendar is set). Never throws: values
+     * saved before they were validated are left out and the defaults used, each reported to `$warn`, so one bad
+     * value cannot stop every unit of work (.NET `GlobalSettings.WorkCalendar`).
+     *
+     * @param  (callable(string): void)|null  $warn
+     */
+    public function workCalendar(?callable $warn = null): WorkCalendar
+    {
+        $zone = $this->zone();
+        if ($this->calendar === null) {
+            return new WorkCalendar($zone, hasWorkingTime: false);
+        }
+        $days = null;
+        if ($this->calendar->days !== null) {
+            $days = [];
+            foreach ($this->calendar->days as $day) {
+                $index = array_search($day, ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'], true);
+                if ($index !== false) {
+                    $days[] = $index;
+                } elseif ($warn !== null) {
+                    $warn("Ignoring the working day '{$day}' in settings: use mon, tue, wed, thu, fri, sat or sun.");
+                }
+            }
+        }
+        [$start, $end] = [null, null];
+        $hours = $this->calendar->hours;
+        if ($hours !== null && count($hours) === 2 && self::isTime($hours[0]) && self::isTime($hours[1]) && strcmp($hours[1], $hours[0]) > 0) {
+            $minutes = fn (string $time) => (int) substr($time, 0, 2) * 60 + (int) substr($time, 3, 2);
+            [$start, $end] = [$minutes($hours[0]), $minutes($hours[1])];
+        } elseif ($hours !== null && $warn !== null) {
+            $warn('Ignoring the working hours ['.implode(', ', $hours).'] in settings: they must be two HH:mm times, end after start. Using 09:00-17:00.');
+        }
+        $holidays = [];
+        foreach ($this->calendar->holidays ?? [] as $holiday) {
+            if (self::isDate($holiday)) {
+                $holidays[] = $holiday;
+            } elseif ($warn !== null) {
+                $warn("Ignoring the holiday '{$holiday}' in settings: it is not a date (YYYY-MM-DD).");
+            }
+        }
+
+        return new WorkCalendar($zone, $days, $start, $end, $holidays);
     }
 
     /**

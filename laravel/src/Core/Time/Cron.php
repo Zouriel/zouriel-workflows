@@ -6,8 +6,7 @@ use InvalidArgumentException;
 
 /**
  * A standard 5-field cron expression (minute hour day-of-month month day-of-week) with `*`, lists,
- * ranges and steps. Day-of-week 0 and 7 are Sunday. Port of .NET `Time/Cron.cs`; finding the next
- * run in a time zone comes with the engine.
+ * ranges and steps. Day-of-week 0 and 7 are Sunday. Port of .NET `Time/Cron.cs`.
  */
 final class Cron
 {
@@ -107,5 +106,62 @@ final class Cron
         }
 
         return (int) $text;
+    }
+
+    /** The first matching minute strictly after `$after`, in `$zone`'s local time (null when none within 5 years). */
+    public function next(int $after, WorkCalendar $calendar): ?int
+    {
+        $minute = 60000;
+        $local = intdiv($calendar->toLocal($after), $minute) * $minute + $minute;
+        [$y, $m, $d] = array_map('intval', explode('-', gmdate('Y-n-j', intdiv($local, 1000))));
+        $limit = gmmktime(0, 0, 0, $m, min($d, (int) gmdate('t', gmmktime(0, 0, 0, $m, 1, $y + 5))), $y + 5) * 1000 + ($local % 86400000);
+        while ($local < $limit) {
+            $seconds = intdiv($local, 1000);
+            [$year, $month, $day, $hour, $min, $weekday] = array_map('intval', explode(' ', gmdate('Y n j G i w', $seconds)));
+            if (! ($this->months[$month] ?? false)) {
+                $local = gmmktime(0, 0, 0, $month + 1, 1, $year) * 1000;
+
+                continue;
+            }
+            if (! $this->dayMatches($day, $weekday)) {
+                $local = gmmktime(0, 0, 0, $month, $day + 1, $year) * 1000;
+
+                continue;
+            }
+            if (! ($this->hours[$hour] ?? false)) {
+                $local = gmmktime($hour + 1, 0, 0, $month, $day, $year) * 1000;
+
+                continue;
+            }
+            if (! ($this->minutes[$min] ?? false)) {
+                $local += $minute;
+
+                continue;
+            }
+            $instant = $calendar->fromLocal($local);
+            if ($calendar->toLocal($instant) !== $local) {
+                // Inside a DST gap: that local minute does not exist.
+                $local += $minute;
+
+                continue;
+            }
+
+            return $instant;
+        }
+
+        return null;
+    }
+
+    private function dayMatches(int $day, int $weekday): bool
+    {
+        $dom = $this->daysOfMonth[$day] ?? false;
+        $dow = $this->daysOfWeek[$weekday] ?? false;
+
+        return match (true) {
+            $this->anyDayOfMonth && $this->anyDayOfWeek => true,
+            $this->anyDayOfMonth => $dow,
+            $this->anyDayOfWeek => $dom,
+            default => $dom || $dow,
+        };
     }
 }
