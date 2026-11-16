@@ -124,6 +124,70 @@ public sealed class WorkCalendar
     /// <summary>Adds an ISO duration given as text (see the other overload).</summary>
     public DateTimeOffset Add(DateTimeOffset from, string iso, bool working = false) => Add(from, IsoDuration.Parse(iso), working);
 
+    /// <summary>
+    /// Adds an exact length of time. <paramref name="working"/> counts only working hours (nights, non-working days and
+    /// holidays are skipped; a start outside working hours moves to the next opening); without a working calendar, or
+    /// when not <paramref name="working"/>, it is plain elapsed time. The inverse of <see cref="WorkingTimeBetween"/>.
+    /// </summary>
+    public DateTimeOffset AddTime(DateTimeOffset from, TimeSpan span, bool working = false)
+    {
+        if (span < TimeSpan.Zero) span = TimeSpan.Zero;
+        if (!working || !HasWorkingTime) return from + span;
+        try
+        {
+            var local = ToLocal(from);
+            var remaining = span;
+            // A zero length stays where it is, like a plain addition.
+            if (remaining == TimeSpan.Zero) return from;
+            while (remaining > TimeSpan.Zero)
+            {
+                local = MoveIntoWorkingTime(local);
+                var available = local.Date + _end.ToTimeSpan() - local;
+                if (remaining <= available)
+                {
+                    local += remaining;
+                    remaining = TimeSpan.Zero;
+                }
+                else
+                {
+                    remaining -= available;
+                    local = NextWorkingStart(local.Date.AddDays(1));
+                }
+            }
+            return FromLocal(local);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return DateTimeOffset.MaxValue;
+        }
+    }
+
+    /// <summary>
+    /// The time between two instants: working hours only (spec §9) when <paramref name="working"/> and a working calendar
+    /// exists (nights, non-working days and holidays count nothing), else plain elapsed time. Zero when <paramref name="to"/>
+    /// is not after <paramref name="from"/>. The inverse of <see cref="AddTime"/>.
+    /// </summary>
+    public TimeSpan WorkingTimeBetween(DateTimeOffset from, DateTimeOffset to, bool working = true)
+    {
+        if (to <= from) return TimeSpan.Zero;
+        if (!working || !HasWorkingTime) return to - from;
+        var a = ToLocal(from);
+        // Beyond the longest duration there is nothing meaningful to measure (and a "never" instant must not loop for ever).
+        if (to - from > IsoDuration.MaxLength) to = from + IsoDuration.MaxLength;
+        var b = ToLocal(to);
+        var total = TimeSpan.Zero;
+        for (var day = a.Date; day <= b.Date; day = day.AddDays(1))
+        {
+            if (!IsWorkingDay(DateOnly.FromDateTime(day))) continue;
+            var open = day + _start.ToTimeSpan();
+            var close = day + _end.ToTimeSpan();
+            var lo = open > a ? open : a;
+            var hi = close < b ? close : b;
+            if (hi > lo) total += hi - lo;
+        }
+        return total;
+    }
+
     /// <summary>Whether a date is a working day (a working weekday and not a holiday).</summary>
     public bool IsWorkingDay(DateOnly day) => _days.Contains(day.DayOfWeek) && !_holidays.Contains(day);
 

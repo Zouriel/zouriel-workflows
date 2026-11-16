@@ -241,6 +241,12 @@ public sealed class Sla
     public string? Calendar { get; set; }
     /// <summary>Steps run as a child run when the time is up.</summary>
     public List<Step> Steps { get; set; } = [];
+    /// <summary>State ids the record can be in (instead of this state) without the clock running: the clock is kept and paused there (spec §6).</summary>
+    public List<string>? PauseOnStatus { get; set; }
+    /// <summary>Signal keys about the record that pause the clock while it is in this state.</summary>
+    public List<string>? PauseOnEvent { get; set; }
+    /// <summary>Signal keys about the record that end an event pause.</summary>
+    public List<string>? ResumeOnEvent { get; set; }
 }
 
 /// <summary>A move between lifecycle states (spec §6): who may apply it, its guard, input form and steps.</summary>
