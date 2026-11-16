@@ -131,7 +131,9 @@ public static class SampleSetup
                 .Input("amount", "Amount", "currency", required: true)
                 .Input("memo", "Memo")
                 .Output("invoiceNo", "Invoice number"))
-            .Signal("payment.received", s => s.Label("Payment received").For("application").Field("amount", "Amount", "currency")));
+            .Signal("payment.received", s => s.Label("Payment received").For("application").Field("amount", "Amount", "currency"))
+            .Signal("documents.requested", s => s.Label("Documents requested").For("application"))
+            .Signal("documents.received", s => s.Label("Documents received").For("application")));
         // One of each per service collection: the playground calls AddSampleApp for every sandbox, so each
         // visitor has their own inbox and bank, and switching the bank off never stops anyone else's payments.
         services.AddSingleton<DemoInbox>();

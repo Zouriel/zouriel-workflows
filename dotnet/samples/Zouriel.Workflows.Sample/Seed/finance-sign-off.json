@@ -6,7 +6,7 @@
   "steps": [
     { "id": "s_sign", "type": "parallel", "title": "Sign-off", "join": { "type": "all" }, "paths": [
       { "id": "p_fin", "label": "Finance", "steps": [
-        { "id": "s_fin", "type": "approval", "title": "Finance sign-off", "assignees": [ { "role": "finance" } ], "rule": { "type": "any" }, "due": "P2D", "calendar": "working",
+        { "id": "s_fin", "type": "approval", "title": "Finance sign-off", "assignees": [ { "role": "finance" } ], "rule": { "type": "any" }, "makerChecker": { "excludeInitiator": true }, "due": "P2D", "calendar": "working",
           "reminders": ["P1D"], "escalation": { "after": "P2D", "assignees": [ { "managerOf": "assignees" } ] },
           "instructions": ["Approve paying ", { "ref": "entity.amount" }, " for “", { "ref": "entity.title" }, "”."], "requireComment": "reject",
           "outcomes": { "approved": [], "rejected": [ { "id": "s_fin_no", "type": "end", "title": "Stop", "result": "failed", "reason": "Finance did not sign off." } ],
