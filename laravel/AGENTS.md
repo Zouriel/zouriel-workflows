@@ -37,6 +37,7 @@ The Laravel engine for Zouriel Workflows. Read, in this order: `../spec/SPEC.md`
 | `src/Core/Changes` | `ChangeInspector` (change events, owned fields, initial states), `EntityChange`, `LifecycleEvent`, `WriteScope(s)` (the request's stack of engine write scopes) | `Changes/*.cs` |
 | `src/Core/Engine` | `WorkflowEngine` (core: units of work with retries, ownership cache, settings) and its partials as traits in `Concerns/` (`Definitions`, `Triggers`, `Runs`, `Steps`, `Tasks`, `Lifecycles`, `SlaPause`, `Resets`, `Simulation`, `Views`); `RunState`/`Token`/`Frame`, `ValueScope`, `Uow`, `Exec`, `SlaClocks`, `CompiledDefinition`; read models in `Views/` | `Engine/*.cs` |
 | `src/Core/Testing` | `WorkflowTestHost` (engine + in-memory store + manual clock + fakes), `ConformanceRunner` (`spec/fixtures/engine`) | `Zouriel.Workflows.Testing/*.cs` |
+| `src/Laravel/Http` | The REST API: `WorkflowApi` (routes, default bindings), thin controllers in `Controllers/` over the engine, `IdentifyActor`/`AuthorizeOperation` middleware (401, config gates), `ActorResolver` (+ `AuthActorResolver`), `AccessPolicy` (+ `RecordAccessPolicy`, `AllowAllAccessPolicy`), `ApiJson` (.NET's JSON shapes), `RequestBody` (System.Text.Json web reading), `ApiErrors` (code → status), `AuditCsv` | `Zouriel.Workflows.AspNetCore/*` |
 | `src/Core/Expressions`, `Audit`, `Support` | conditions through `zouriel/forms`; audit chain, `AuditWriter`, `Masker`; `AbsoluteUrl` (.NET `Uri` rules for origins) | `Expressions/`, `Audit/` |
 
 Model classes read with `X::fromJson(stdClass, path)` and write with `toJson()`. Where .NET would leave a
@@ -47,6 +48,12 @@ values are `zouriel/forms` values (objects as `stdClass`, numbers as floats); st
 `async` methods are synchronous here and drop the `Async` suffix. An instance is held once per unit of work (`Uow`
 `execs`/`records`), as in .NET. Where an incident text names an exception type, `InvalidOperationException` keeps the
 .NET wording. App action timeouts are not enforced (PHP runs the handler synchronously); webhook timeouts go to the client.
+
+API conventions: every endpoint of `../spec/api/openapi.json` is served, and `tests/Laravel/Http/ContractTest.php` fails
+when one is missing or extra or a response does not match its schema (`ApiTestCase::api()` checks every response of the
+API tests). Views go out with ASP.NET's web defaults (all members, nulls included, .NET `DateTimeOffset` members as
+`…+00:00`); error `details` and the JSON audit export leave null members out (.NET's document options). Engine errors
+are mapped in the base controller, never in the app's exception handler.
 
 ## Commands
 
