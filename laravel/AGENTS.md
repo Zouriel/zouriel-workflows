@@ -16,8 +16,9 @@ The Laravel engine for Zouriel Workflows. Read, in this order: `../spec/SPEC.md`
 4. **Forms go through `zouriel/forms`** (conditions, calculations, form validation). Never reimplement them here.
 5. **JSON:** decode with `Zouriel\Forms\Json` (objects stay `stdClass`, numbers are floats); hash with
    `Core\Json\Canonical`; store definitions and audit JSON as text, never `json`/`jsonb` columns.
-6. **Progress is visible:** every spec fixture is either a passing test or a named `todo` in
-   `tests/Conformance/ProgressTest.php`. When you port a part, replace its todos with real runs.
+6. **Progress is visible:** every spec fixture runs as a test (engine in `tests/Conformance/EngineTest.php`, lint,
+   conditions and audit in their own files, each taking its file list from disk); `ProgressTest.php` fails when a
+   fixture folder has no runner. Behaviour the fixtures cannot reach is ported from the .NET tests into `tests/Unit`.
 7. **Every change ships with tests that pass; prove each new test can fail** by planting the fault once.
    A fixture gap you find goes into the plan's Phase 0 list and gets a unit test here meanwhile.
 
@@ -28,14 +29,24 @@ The Laravel engine for Zouriel Workflows. Read, in this order: `../spec/SPEC.md`
 | `src/Core/Json` | `Canonical` (JCS), `Values::text`, `Read`/`Write` (typed JSON reads with System.Text.Json's strictness, null-omitting writes), `JsonShapeException` | `Json/Values.cs`, `Model/Converters.cs` options |
 | `src/Core/Model` | Definitions: `WorkflowDefinition`, triggers, lifecycles (states, transitions, SLA with pause fields, reset, remarks), every step type, assignees, operands, templates, conditions; `Definitions::parse()`/`serialize()` | `Model/*.cs` |
 | `src/Core/Registry` | `WorkflowRegistry` + descriptors, `RegistryBuilder` (fluent), `Schema::response()` (`GET /schema` body) | `Registry/*.cs`, `WorkflowApi.PublicRegistry` |
-| `src/Core/Settings` | `GlobalSettings` (`parse`, `toJson`, `problems`) | `Settings/GlobalSettings.cs` |
+| `src/Core/Settings` | `GlobalSettings` (`parse`, `toJson`, `problems`, `workCalendar`) | `Settings/GlobalSettings.cs` |
 | `src/Core/Lint` | `Linter` (+ `LintRun`, `LintEnv`), `LintProblem`, `LintContext`, `DefinitionDiff` | `Lint/*.cs` |
-| `src/Core/Time` | `IsoDuration`, `Cron` (parsing; the work calendar and `next()` come with the engine) | `Time/Durations.cs`, `Time/Cron.cs` |
-| `src/Core/Engine` | `CompiledDefinition` (step lists by id) | `Engine/CompiledDefinition.cs` |
-| `src/Core/Expressions`, `Audit`, `Support` | conditions through `zouriel/forms`; audit chain; `AbsoluteUrl` (.NET `Uri` rules for origins) | `Expressions/`, `Audit/` |
+| `src/Core/Time` | `IsoDuration`, `WorkCalendar` (plain and working time, DST), `Cron` (parsing, `next()`), `Instant` (ms since 1970 UTC, `MAX` = never), `Clock`, `SystemClock`, `ManualClock` | `Time/Durations.cs`, `Time/Cron.cs`, `Time/ManualTimeProvider.cs` |
+| `src/Core/Host` | What the app supplies: `WorkflowIdentity`, `NotificationSender`, `WebhookClient`, `SecretResolver`, `ActionResolver` + `WorkflowAction`/`UndoableWorkflowAction`, `ActorAccessor`, `FormValidator` (default `FormsValidator` = `zouriel/forms`), and their value types (`WorkflowActor`, `WorkflowUser`, `WorkflowNotification`…) | `Abstractions.cs`, `Engine/WorkflowEngineOptions.cs` |
+| `src/Core/Storage` | Records, statuses, queries, `WorkflowStore`/`WorkflowSession`/`EntityGateway` contracts, `InMemoryStore` (+ session and gateway: overlay units, row versions, live keys, claims, savepoints, per-tenant audit chains) | `Storage/Store.cs`, `Storage/Records.cs`, `Storage/InMemoryWorkflowStore.cs` |
+| `src/Core/Changes` | `ChangeInspector` (change events, owned fields, initial states), `EntityChange`, `LifecycleEvent`, `WriteScope(s)` (the request's stack of engine write scopes) | `Changes/*.cs` |
+| `src/Core/Engine` | `WorkflowEngine` (core: units of work with retries, ownership cache, settings) and its partials as traits in `Concerns/` (`Definitions`, `Triggers`, `Runs`, `Steps`, `Tasks`, `Lifecycles`, `SlaPause`, `Resets`, `Simulation`, `Views`); `RunState`/`Token`/`Frame`, `ValueScope`, `Uow`, `Exec`, `SlaClocks`, `CompiledDefinition`; read models in `Views/` | `Engine/*.cs` |
+| `src/Core/Testing` | `WorkflowTestHost` (engine + in-memory store + manual clock + fakes), `ConformanceRunner` (`spec/fixtures/engine`) | `Zouriel.Workflows.Testing/*.cs` |
+| `src/Core/Expressions`, `Audit`, `Support` | conditions through `zouriel/forms`; audit chain, `AuditWriter`, `Masker`; `AbsoluteUrl` (.NET `Uri` rules for origins) | `Expressions/`, `Audit/` |
 
 Model classes read with `X::fromJson(stdClass, path)` and write with `toJson()`. Where .NET would leave a
 non-nullable member null (and crash later), an absent or null value gives the member's default instead.
+
+Engine conventions: instants are `int` milliseconds since 1970 UTC (`Instant::format` writes `…ss.fffZ`); workflow
+values are `zouriel/forms` values (objects as `stdClass`, numbers as floats); stored JSON members stay text. .NET
+`async` methods are synchronous here and drop the `Async` suffix. An instance is held once per unit of work (`Uow`
+`execs`/`records`), as in .NET. Where an incident text names an exception type, `InvalidOperationException` keeps the
+.NET wording. App action timeouts are not enforced (PHP runs the handler synchronously); webhook timeouts go to the client.
 
 ## Commands
 

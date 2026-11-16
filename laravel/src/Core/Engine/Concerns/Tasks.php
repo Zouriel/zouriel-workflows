@@ -3,6 +3,7 @@
 namespace Zouriel\Workflows\Core\Engine\Concerns;
 
 use stdClass;
+use Zouriel\Forms\Js;
 use Zouriel\Forms\Json;
 use Zouriel\Workflows\Core\Engine\Exec;
 use Zouriel\Workflows\Core\Engine\Frame;
@@ -175,7 +176,7 @@ trait Tasks
         if (self::commentRequired($task, $outcome) && $comment === null) {
             throw new WorkflowException('commentRequired', 'Add a comment to explain your decision.');
         }
-        if ($comment !== null && mb_strlen($comment) > Remarks::MAX_LENGTH) {
+        if ($comment !== null && Js::length($comment) > Remarks::MAX_LENGTH) {
             throw new WorkflowException('invalidInput', 'A comment can be at most '.Remarks::MAX_LENGTH.' characters.');
         }
         $data ??= new stdClass;

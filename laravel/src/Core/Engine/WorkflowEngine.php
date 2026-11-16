@@ -3,9 +3,7 @@
 namespace Zouriel\Workflows\Core\Engine;
 
 use Closure;
-use stdClass;
 use Throwable;
-use Zouriel\Forms\Json;
 use Zouriel\Workflows\Core\Audit\AuditEntry;
 use Zouriel\Workflows\Core\Changes\ChangeInspector;
 use Zouriel\Workflows\Core\Changes\WriteScope;
@@ -350,11 +348,5 @@ final class WorkflowEngine
         $this->invalidateOwnership();
 
         return $revision;
-    }
-
-    /** A copy of an object value, or an empty object. */
-    public static function obj(?stdClass $value): stdClass
-    {
-        return $value === null ? new stdClass : Json::copy($value);
     }
 }

@@ -1,11 +1,29 @@
 # zouriel/workflows (Laravel)
 
-Status: **in progress** on branch `laravel-engine`. Ported so far: canonical JSON (RFC 8785), the audit hash
-chain and its verifier, workflow conditions (through `zouriel/forms`), the definition model and its parsing,
-the registry (fluent builder, JSON form, `GET /schema` body), global settings and their checks, ISO durations
-and cron parsing, the linter (all `spec/fixtures/lint` pass) and the version diff, plus the service provider.
-The engine (work calendar, runs, in-memory store), Eloquent storage, change capture, REST API and worker follow
-the phases in `../docs/plans/go-and-laravel.md`. `composer test` lists every shared fixture not passed yet as a todo.
+Status: **in progress** on branch `laravel-engine`. Ported so far (framework-free, under `src/Core`): canonical
+JSON (RFC 8785), the audit hash chain and its verifier, workflow conditions (through `zouriel/forms`), the
+definition model and its parsing, the registry (fluent builder, JSON form, `GET /schema` body), global settings
+and their checks, ISO durations, the work calendar and cron schedules, the linter (all `spec/fixtures/lint`
+pass) and the version diff, and the **runtime engine with an in-memory store**: definitions (drafts, publish,
+versions, rollback, archive, permissions), change inspection, the outbox, every step type, tasks with
+maker-checker, lifecycles with SLA pause and resume, resets with undo, timers with parking, signals, manual
+starts, test runs and views. All 58 `spec/fixtures/engine` files pass through the conformance runner.
+Eloquent storage and change capture, the REST API and the worker follow the phases in
+`../docs/plans/go-and-laravel.md`.
+
+Running the engine (here with the in-memory store and the test host's fakes; apps will get it from the
+service provider once the Eloquent store exists):
+
+```php
+use Zouriel\Workflows\Core\Testing\WorkflowTestHost;
+
+$host = new WorkflowTestHost($registry);              // in-memory store, manual clock, recording fakes
+$host->publish($definitionJson);                      // create + publish (lint errors refuse it)
+$host->store->createRecord('application', 'a1', (object) ['title' => 'Q']);
+$host->settle();                                      // outbox and due timers, as the worker would
+$view = $host->engine->applyTransition('application', 'a1', 'submit', null, WorkflowActor::user('ali', 'Ali'));
+$host->advance(2 * 86400000);                         // fire timers due in the next two days
+```
 
 Declaring a registry (framework-free; the Laravel layer will bind fields to Eloquent attributes):
 
