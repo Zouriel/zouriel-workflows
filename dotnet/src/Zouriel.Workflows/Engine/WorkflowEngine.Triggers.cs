@@ -697,6 +697,7 @@ public sealed partial class WorkflowEngine
                     WorkflowWriteScope.Current?.DefinitionId, null, null);
                 if (await TryStartFromEventAsync(u, c, start, ct)) resumed++;
             }
+            if (entity is not null && entityId is not null) await ApplySlaSignalAsync(u, signal, entity, entityId, actor, ct);
             return resumed;
         }, ct);
 

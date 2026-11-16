@@ -247,6 +247,15 @@ public static class Linter
                     if (!IsoDuration.TryParse(s.Sla.Within, out _)) Error("badDuration", s.Id, $"'{s.Sla.Within}' is not a valid time limit.");
                     LintSteps(s.Sla.Steps, env, $"sla:{s.Id}");
                     if (s.IsTerminal) Warn("slaOnTerminal", s.Id, $"A time limit on the final state '{s.Label}' is never checked.");
+                    foreach (var pid in s.Sla.PauseOnStatus ?? [])
+                    {
+                        if (pid == s.Id) Error("slaPauseSelf", s.Id, $"The clock of '{s.Label}' cannot pause while the record is in '{s.Label}' itself.");
+                        else if (lc.States.All(x => x.Id != pid)) Error("unknownState", s.Id, $"The time limit of '{s.Label}' pauses in a state that does not exist.");
+                    }
+                    foreach (var key in (s.Sla.PauseOnEvent ?? []).Concat(s.Sla.ResumeOnEvent ?? []).Distinct())
+                        if (R.Signal(key) is null) Error("unknownSignal", s.Id, $"'{key}' is not an event the app sends.");
+                    if (s.Sla.PauseOnEvent is { Count: > 0 } && s.Sla.ResumeOnEvent is not { Count: > 0 })
+                        Warn("slaNeverResumes", s.Id, "The clock is paused by an event but nothing starts it again.");
                 }
             }
             var stateIds = lc.States.Select(s => s.Id).ToHashSet();

@@ -300,7 +300,10 @@
           "properties": {
             "within": { "$ref": "#/$defs/duration" },
             "calendar": { "$ref": "#/$defs/calendar" },
-            "steps": { "$ref": "#/$defs/steps" }
+            "steps": { "$ref": "#/$defs/steps" },
+            "pauseOnStatus": { "type": "array", "items": { "$ref": "#/$defs/id" }, "uniqueItems": true },
+            "pauseOnEvent": { "type": "array", "items": { "$ref": "#/$defs/key" }, "uniqueItems": true },
+            "resumeOnEvent": { "type": "array", "items": { "$ref": "#/$defs/key" }, "uniqueItems": true }
           },
           "additionalProperties": false
         }

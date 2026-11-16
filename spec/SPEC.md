@@ -204,8 +204,40 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
 
 - **States** map 1:1 to field values by `key` (the enum value). Each has a `category`: exactly one
   `initial`; any number of `active` and `terminal`. A state may have `onEnter` steps, `onExit` steps
-  and an `sla: { within: <duration>, calendar?, steps: [...] }` (run once when the record has been
-  in the state longer than `within`).
+  and an `sla: { within: <duration>, calendar?, steps: [...], pauseOnStatus?, pauseOnEvent?, resumeOnEvent? }`
+  (run once when the record has been in the state longer than `within`, not counting paused time).
+- **SLA pause and resume.** The state that owns an `sla` is S. All three pause fields are optional:
+  `pauseOnStatus` lists state ids of the same lifecycle (never S itself), `pauseOnEvent` and
+  `resumeOnEvent` list registry signal keys. A definition that uses none of them behaves exactly as
+  before. S's clock runs only while no pause reason holds; there are two independent reasons.
+  - *Status.* When the record moves from S straight to a state listed in `pauseOnStatus` (any way it
+    can move: transition, automatic, observed write), S's clock is kept and paused (reason `status`)
+    instead of dropped. It stays kept while the record moves among listed states. Coming back to S ends
+    the `status` reason. Moving to any state that is neither S nor listed drops the kept clock (a later
+    entry into S starts a fresh clock). A move from S to S, or into a terminal state, drops it too.
+  - *Event.* While the record is in S and S has a clock (running, or paused for the other reason), a
+    signal about that record (entity and id) whose key is in `pauseOnEvent` adds the reason `event`; one
+    in `resumeOnEvent` removes it. A signal about another record, about no record, or when the record has
+    no clock (the SLA already ran in this stay, or S has no clock) does nothing, and so does a signal
+    that changes nothing (a second pause, a resume with no event pause): no audit entry. If a key is in
+    both lists, resuming is checked first. Event reasons are only added or removed while the record is in S.
+  - *Pausing* removes S's SLA timer and remembers the time left: working time when the SLA's calendar
+    is `working` and the settings have a working calendar (§9: the working hours between the pause and
+    the due instant; nights, non-working days and holidays count nothing), plain elapsed time otherwise.
+    *Resuming* (the record is in S and no reason is left) plans the timer again, due after that much time
+    counted from the resume instant, with the same calendar (a start outside working hours moves to the
+    next opening). A clock that is due but has not fired yet when it is paused has no time left and fires
+    at once on resume. A paused clock never fires.
+  - *Already ran.* An SLA that already ran in this stay never runs again: pausing, resuming, or leaving
+    to a listed state and coming back plans nothing once it has run.
+  - *Interventions.* Force-state, reset, out-of-sync (an outside write the lifecycle cannot follow),
+    cancelling the record instance, deleting the record and migrating to another version drop the kept
+    clock (what they already do to the state's timers); a fresh clock starts as usual where the record
+    is next planned. Archiving the lifecycle keeps a paused clock paused (restoring never starts it); a
+    clock that was running is restored due at the same instant, not counted again from entry.
+  - *Audit.* `lifecycle.slaPaused` and `lifecycle.slaResumed` (§11) are written only when the clock
+    really goes from running to paused or from paused to running, never for adding a second reason to a
+    clock that is already paused or removing one while another remains.
 - **Transitions** `{ id, key, label, from: [stateId…] | "*", to: stateId, who, when, input, steps,
   auto, confirm, tone, hidden, comment }`.
   - `from: "*"` means every non-terminal state other than `to`.
@@ -273,7 +305,7 @@ A lifecycle definition (`kind: "lifecycle"`) owns one `lifecycle: true` enum fie
 - **Force state.** Admins with `workflows.intervene` may move a record to any state with a reason
   (`POST /records/{entity}/{id}/force-state`). No guards or inputs are checked; `onExit`/`onEnter`
   run unless `skipSteps: true`. Either way the record leaves its state: the old state's timers are
-  dropped and its `onEnter`/`sla` runs are cancelled (unless `keepRunsOnExit`). Audited as `lifecycle.forced`.
+  dropped (a paused SLA clock kept for it too) and its `onEnter`/`sla` runs are cancelled (unless `keepRunsOnExit`). Audited as `lifecycle.forced`.
 - **Reset.** `reset?: { label?, to?, who, confirm?, input?: { form }, comment?, states?, runExitEnter?,
   cancelAutomations?, steps? }` lets people start a record's workflow over (`POST /records/{entity}/{id}/reset` with
   `{ input?, comment?, undo? }`). Without `reset` a lifecycle cannot be reset. `comment` is the
@@ -536,7 +568,10 @@ Categories and actions:
 - `lifecycle`: `created`, `transitioned` (before/after state, data: transition, input masked, `comment`
   when remarks were given),
   `autoTransitioned`, `autoSkipped` (an automatic transition's time came but its guard failed or the
-  record had left the state), `slaBreached` (data: state, within), `forced` (data: reason),
+  record had left the state), `slaBreached` (data: state, within), `slaPaused` (data: `state` = the state
+  key that owns the clock, `reason` = `status` or `event`, and `status` = the state key the record moved
+  to, or `signal` = the signal key), `slaResumed` (data: `state`, `reason` = the reason that ended last,
+  `due` = the new due instant), `forced` (data: reason),
   `reset` (before/after state, data: label, input masked, `comment` when given, `undone`), `writeRefused`,
   `writeObserved`, `outOfSync`.
 - `task`: `created` (data: title, assignees, due, step, and `excluded` when separation of duties removed people), `assigned`, `reminded`, `escalated`, `delegated`, `reassigned`, `decided`
