@@ -1,0 +1,124 @@
+{
+ "name": "A time limit cannot pause while the record is in its own state",
+ "definition": {
+  "specVersion": 1,
+  "id": "lc_sla",
+  "key": "slaLint",
+  "kind": "lifecycle",
+  "title": "SLA lint",
+  "entity": "application",
+  "lifecycle": {
+   "field": "status",
+   "states": [
+    {
+     "id": "a",
+     "key": "draft",
+     "label": "Draft",
+     "category": "initial"
+    },
+    {
+     "id": "b",
+     "key": "underReview",
+     "label": "Under review",
+     "category": "active",
+     "sla": {
+      "within": "P5D",
+      "steps": [
+       {
+        "id": "n",
+        "type": "notify",
+        "channel": "email",
+        "to": [
+         {
+          "user": "admin"
+         }
+        ],
+        "body": "Late"
+       }
+      ],
+      "pauseOnStatus": [
+       "b"
+      ]
+     }
+    },
+    {
+     "id": "c",
+     "key": "submitted",
+     "label": "Awaiting information",
+     "category": "active"
+    },
+    {
+     "id": "d",
+     "key": "approved",
+     "label": "Approved",
+     "category": "terminal"
+    }
+   ],
+   "transitions": [
+    {
+     "id": "t1",
+     "key": "start",
+     "label": "start",
+     "from": [
+      "a"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "reviewer"
+      }
+     ]
+    },
+    {
+     "id": "t2",
+     "key": "ask",
+     "label": "ask",
+     "from": [
+      "b"
+     ],
+     "to": "c",
+     "who": [
+      {
+       "role": "reviewer"
+      }
+     ]
+    },
+    {
+     "id": "t3",
+     "key": "back",
+     "label": "back",
+     "from": [
+      "c"
+     ],
+     "to": "b",
+     "who": [
+      {
+       "role": "reviewer"
+      }
+     ]
+    },
+    {
+     "id": "t4",
+     "key": "done",
+     "label": "done",
+     "from": [
+      "b"
+     ],
+     "to": "d",
+     "who": [
+      {
+       "role": "reviewer"
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "expected": [
+  {
+   "code": "slaPauseSelf",
+   "node": "b"
+  }
+ ],
+ "registry": "../engine/_registry.json"
+}

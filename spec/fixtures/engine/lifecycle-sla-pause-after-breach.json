@@ -1,0 +1,359 @@
+{
+ "name": "SLA clock pause after the SLA already ran in this stay: pausing, resuming and moving to a listed state and back never plan it again",
+ "registry": {
+  "specVersion": 1,
+  "entities": [
+   {
+    "key": "application",
+    "label": "Application",
+    "pluralLabel": "Applications",
+    "titleField": "title",
+    "fields": [
+     {
+      "key": "title",
+      "label": "Title",
+      "type": "text"
+     },
+     {
+      "key": "status",
+      "label": "Status",
+      "type": "enum",
+      "watchable": true,
+      "lifecycle": true,
+      "options": [
+       {
+        "value": "draft",
+        "label": "Draft"
+       },
+       {
+        "value": "underReview",
+        "label": "Under review"
+       },
+       {
+        "value": "awaitingInfo",
+        "label": "Awaiting information"
+       },
+       {
+        "value": "onHold",
+        "label": "On hold"
+       },
+       {
+        "value": "approved",
+        "label": "Approved"
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "signals": [
+   {
+    "key": "documents.requested",
+    "label": "Documents requested",
+    "entity": "application"
+   },
+   {
+    "key": "documents.received",
+    "label": "Documents received",
+    "entity": "application"
+   }
+  ],
+  "channels": [
+   {
+    "key": "email",
+    "label": "Email"
+   }
+  ],
+  "roles": [
+   {
+    "key": "reviewer",
+    "label": "Reviewer"
+   },
+   {
+    "key": "admin",
+    "label": "Admin"
+   }
+  ]
+ },
+ "users": [
+  {
+   "id": "rev1",
+   "name": "Rana Reviewer",
+   "email": "rana@example.com",
+   "roles": [
+    "reviewer"
+   ]
+  },
+  {
+   "id": "admin",
+   "name": "Admin",
+   "email": "admin@example.com",
+   "roles": [
+    "admin"
+   ]
+  }
+ ],
+ "now": "2026-10-19T09:00:00Z",
+ "definitions": [
+  {
+   "specVersion": 1,
+   "id": "lc_app",
+   "key": "applicationReview",
+   "kind": "lifecycle",
+   "title": "Application review",
+   "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "mode": "enforce",
+    "states": [
+     {
+      "id": "st_draft",
+      "key": "draft",
+      "label": "Draft",
+      "category": "initial"
+     },
+     {
+      "id": "st_rev",
+      "key": "underReview",
+      "label": "Under review",
+      "category": "active",
+      "sla": {
+       "within": "P1D",
+       "steps": [
+        {
+         "id": "sla_n",
+         "type": "notify",
+         "channel": "email",
+         "to": [
+          {
+           "user": "admin"
+          }
+         ],
+         "body": "Review is overdue"
+        }
+       ],
+       "pauseOnStatus": [
+        "st_wait"
+       ],
+       "pauseOnEvent": [
+        "documents.requested"
+       ],
+       "resumeOnEvent": [
+        "documents.received"
+       ]
+      }
+     },
+     {
+      "id": "st_wait",
+      "key": "awaitingInfo",
+      "label": "Awaiting information",
+      "category": "active"
+     },
+     {
+      "id": "st_hold",
+      "key": "onHold",
+      "label": "On hold",
+      "category": "active"
+     },
+     {
+      "id": "st_ok",
+      "key": "approved",
+      "label": "Approved",
+      "category": "terminal"
+     }
+    ],
+    "transitions": [
+     {
+      "id": "tr_start",
+      "key": "startReview",
+      "label": "Start review",
+      "from": [
+       "st_draft"
+      ],
+      "to": "st_rev",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     },
+     {
+      "id": "tr_ask",
+      "key": "askInfo",
+      "label": "Ask for information",
+      "from": [
+       "st_rev"
+      ],
+      "to": "st_wait",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     },
+     {
+      "id": "tr_recv",
+      "key": "received",
+      "label": "Information received",
+      "from": [
+       "st_wait",
+       "st_hold"
+      ],
+      "to": "st_rev",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     },
+     {
+      "id": "tr_hold",
+      "key": "putOnHold",
+      "label": "Put on hold",
+      "from": [
+       "st_wait",
+       "st_rev"
+      ],
+      "to": "st_hold",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     },
+     {
+      "id": "tr_approve",
+      "key": "approve",
+      "label": "Approve",
+      "from": [
+       "st_rev"
+      ],
+      "to": "st_ok",
+      "who": [
+       {
+        "role": "reviewer"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  {
+   "create": {
+    "entity": "application",
+    "id": "a1",
+    "values": {
+     "title": "Application a1"
+    }
+   },
+   "expect": {}
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "startReview",
+    "actor": "rev1"
+   },
+   "expect": {
+    "bookmarks": 1
+   }
+  },
+  {
+   "advance": "P2D",
+   "expect": {
+    "auditCount": {
+     "lifecycle.slaPaused": 0,
+     "lifecycle.slaResumed": 0,
+     "lifecycle.slaBreached": 1
+    },
+    "bookmarks": 0,
+    "notificationCount": 1
+   }
+  },
+  {
+   "signal": {
+    "signal": "documents.requested",
+    "entity": "application",
+    "id": "a1"
+   },
+   "expect": {
+    "auditCount": {
+     "lifecycle.slaPaused": 0,
+     "lifecycle.slaResumed": 0,
+     "lifecycle.slaBreached": 1
+    },
+    "bookmarks": 0
+   }
+  },
+  {
+   "signal": {
+    "signal": "documents.received",
+    "entity": "application",
+    "id": "a1"
+   },
+   "expect": {
+    "auditCount": {
+     "lifecycle.slaPaused": 0,
+     "lifecycle.slaResumed": 0,
+     "lifecycle.slaBreached": 1
+    },
+    "bookmarks": 0
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "askInfo",
+    "actor": "rev1"
+   },
+   "expect": {
+    "auditCount": {
+     "lifecycle.slaPaused": 0,
+     "lifecycle.slaResumed": 0,
+     "lifecycle.slaBreached": 1
+    },
+    "bookmarks": 0
+   }
+  },
+  {
+   "transition": {
+    "entity": "application",
+    "id": "a1",
+    "transition": "received",
+    "actor": "rev1"
+   },
+   "expect": {
+    "auditCount": {
+     "lifecycle.slaPaused": 0,
+     "lifecycle.slaResumed": 0,
+     "lifecycle.slaBreached": 1
+    },
+    "bookmarks": 0,
+    "record": {
+     "entity": "application",
+     "id": "a1",
+     "values": {
+      "status": "underReview"
+     }
+    }
+   }
+  },
+  {
+   "advance": "P10D",
+   "expect": {
+    "auditCount": {
+     "lifecycle.slaPaused": 0,
+     "lifecycle.slaResumed": 0,
+     "lifecycle.slaBreached": 1
+    },
+    "bookmarks": 0,
+    "notificationCount": 1,
+    "auditChainValid": true
+   }
+  }
+ ]
+}
