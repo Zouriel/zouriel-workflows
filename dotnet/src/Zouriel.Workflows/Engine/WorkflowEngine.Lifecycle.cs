@@ -250,6 +250,7 @@ public sealed partial class WorkflowEngine
             Type = "transition", Field = lc.Field, From = from.Key, To = to.Key, Transition = tr.Key, ActorType = actor.Type, ActorId = actor.Id,
             ActorName = actor.Name, At = Values.FormatInstant(u.Now), Comment = comment,
         };
+        var slaAudits = await PrepareSlaCarryAsync(u, c, record, from, to, actor, ct);
         await ExitStateAsync(u, c, record, from, actor, trigger, depth, ct);
         await WriteStateAsync(u, c, entity, id, to, actor, depth, record.Id, ct);
         // A record created by the app or the system has no initiator yet: the first person who moves it is (spec §8).
@@ -272,6 +273,7 @@ public sealed partial class WorkflowEngine
             Before = new Dictionary<string, object?> { ["state"] = from.Key }, After = new Dictionary<string, object?> { ["state"] = to.Key },
             Data = WithComment(new Dictionary<string, object?> { ["transition"] = tr.Key, ["label"] = tr.Label, ["input"] = input }, comment),
         }, ct);
+        foreach (var a in slaAudits) await u.AuditAsync(a, ct);
         u.Log?.Add("lifecycle", "transitioned", id, $"{from.Label} → {to.Label} ({tr.Label})");
         await QueueLifecycleEventAsync(u, c, entity, id, from.Key, to.Key, tr.Key, actor, depth, record.CorrelationId, ct, comment);
         await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, actor, depth, input, ct);
@@ -365,7 +367,7 @@ public sealed partial class WorkflowEngine
         await StartRunAsync(u, record, c, $"onEnter:{to.Id}", $"onEnter:{to.Id}", trigger, actor, depth, input, ct);
         // The onEnter steps may already have moved the record on; then the new state planned its own timers.
         if (to.IsTerminal || record.State != to.Id) return;
-        await PlanStateTimersAsync(u, c, record, to, ct);
+        await PlanStateTimersAsync(u, c, record, to, ct, actor: actor);
         await CheckAutoWhenAsync(u, c, record, depth, chain, ct);
     }
 
@@ -373,7 +375,7 @@ public sealed partial class WorkflowEngine
     /// Plans a state's automatic-transition and SLA timers, counted from <paramref name="from"/> (default now; restoring
     /// an archived lifecycle counts from when the record entered the state). <paramref name="withSla"/> false leaves the SLA out.
     /// </summary>
-    private async Task PlanStateTimersAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct, DateTimeOffset? from = null, bool withSla = true)
+    private async Task PlanStateTimersAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct, DateTimeOffset? from = null, bool withSla = true, WorkflowActor? actor = null)
     {
         var start = from ?? u.Now;
         var lc = c.Lifecycle;
@@ -389,6 +391,7 @@ public sealed partial class WorkflowEngine
         }
         if (withSla && state.Sla is { } sla && IsoDuration.TryParse(sla.Within, out var within))
         {
+            if (await PlanKeptSlaAsync(u, c, record, state, sla, actor, "status", ct)) return;
             var working = (sla.Calendar ?? c.Definition.Settings?.Calendar) == "working";
             await u.S.AddBookmarkAsync(new BookmarkRecord
             {
@@ -417,6 +420,7 @@ public sealed partial class WorkflowEngine
                 var timers = (await u.S.ListBookmarksAsync(record.Id, ct))
                     .Where(b => b.Purpose.StartsWith(BookmarkPurposes.AutoPrefix, StringComparison.Ordinal) || b.Purpose.StartsWith(BookmarkPurposes.SlaPrefix, StringComparison.Ordinal)).ToList();
                 foreach (var b in timers) await u.S.RemoveBookmarkAsync(b.Id, ct);
+                if (!restore) await KeepRunningSlaAsync(u, record, timers, ct);
                 if (record.Status == InstanceStatus.Incident && timers.Any(IsParked))
                 {
                     // The parked timer went with the others: nothing holds the record in incident any more.
@@ -474,6 +478,7 @@ public sealed partial class WorkflowEngine
     private async Task FollowStateAsync(Uow u, CompiledDefinition c, InstanceRecord record, State state, CancellationToken ct)
     {
         if (record.State != state.Id) record.StateEnteredAt = u.Now;
+        SlaClocks.Clear(record);
         record.State = state.Id;
         MovedOutOfIncident(record);
         record.Status = state.IsTerminal ? InstanceStatus.Completed : InstanceStatus.Active;
@@ -487,6 +492,7 @@ public sealed partial class WorkflowEngine
     private async Task MarkOutOfSyncAsync(Uow u, CompiledDefinition c, InstanceRecord record, State? state, object? value, CancellationToken ct)
     {
         foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+        SlaClocks.Clear(record);
         if (state is not null && state.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, state, ct);
         record.Status = InstanceStatus.OutOfSync;
         record.UpdatedAt = u.Now;
@@ -521,6 +527,7 @@ public sealed partial class WorkflowEngine
                 if (from is not null && from.KeepRunsOnExit != true) await CancelStateRunsAsync(u, record, from, ct);
             }
             await WriteStateAsync(u, c, entity, id, to, admin, 0, record.Id, ct);
+            SlaClocks.Clear(record);
             record.State = to.Id;
             record.StateEnteredAt = u.Now;
             MovedOutOfIncident(record);
@@ -592,6 +599,7 @@ public sealed partial class WorkflowEngine
             if (from is not null && runExitEnter) await ExitStateAsync(u, c, record, from, user, trigger, 0, ct);
             else foreach (var b in await u.S.ListBookmarksAsync(record.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
             await WriteStateAsync(u, c, entity, id, to, user, 0, record.Id, ct);
+            SlaClocks.Clear(record);
             record.State = to.Id;
             record.StateEnteredAt = u.Now;
             MovedOutOfIncident(record);
@@ -688,6 +696,7 @@ public sealed partial class WorkflowEngine
             Type = "transition", Field = lc.Field, From = from.Key, To = to.Key, Transition = tr.Key, ActorType = change.ActorType, ActorId = change.ActorId,
             ActorName = change.ActorName, At = Values.FormatInstant(u.Now), EventId = change.EventId,
         };
+        var slaAudits = await PrepareSlaCarryAsync(u, c, record, from, to, change.Actor, ct);
         await ExitStateAsync(u, c, record, from, change.Actor, trigger, change.Depth, ct);
         record.State = to.Id;
         record.StateEnteredAt = u.Now;
@@ -703,8 +712,26 @@ public sealed partial class WorkflowEngine
             Before = new Dictionary<string, object?> { ["state"] = from.Key }, After = new Dictionary<string, object?> { ["state"] = to.Key },
             Data = new Dictionary<string, object?> { ["transition"] = tr.Key, ["label"] = tr.Label, ["observed"] = true },
         }, ct);
+        foreach (var a in slaAudits) await u.AuditAsync(a, ct);
         await QueueLifecycleEventAsync(u, c, change.Entity, change.EntityId, from.Key, to.Key, tr.Key, change.Actor, change.Depth, record.CorrelationId, ct);
         await StartRunAsync(u, record, c, $"transition:{tr.Id}", $"transition:{tr.Id}", trigger, change.Actor, change.Depth, null, ct);
         await EnterStateAsync(u, c, record, to, change.Actor, trigger, change.Depth, 0, ct);
+    }
+
+    /// <summary>
+    /// Archiving drops a running SLA timer; when the state's SLA can pause, its due instant is kept so restoring plans it there
+    /// (a clock that was shifted by pauses is not recounted from when the record entered the state). A paused clock is left as it is.
+    /// </summary>
+    private async Task KeepRunningSlaAsync(Uow u, InstanceRecord record, List<BookmarkRecord> timers, CancellationToken ct)
+    {
+        var c = await CompiledAsync(u, record.DefinitionId, record.Version, ct);
+        if (c.StateById(record.State) is not { Sla: { } sla } state || !UsesPause(sla)) return;
+        if (timers.FirstOrDefault(b => b.Purpose == BookmarkPurposes.SlaPrefix + state.Id) is not { } timer) return;
+        var clocks = SlaClocks.Read(record);
+        if (clocks.ContainsKey(state.Id)) return;
+        clocks[state.Id] = new SlaClock { Due = timer.DueAt };
+        SlaClocks.Write(record, clocks);
+        record.UpdatedAt = u.Now;
+        await u.S.UpdateInstanceAsync(record, ct);
     }
 }

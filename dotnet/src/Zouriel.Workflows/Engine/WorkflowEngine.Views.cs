@@ -409,6 +409,7 @@ public sealed partial class WorkflowEngine
         if (current is not null && target is null) throw new WorkflowException("unmappedState", $"Version {to.Version} has no state for “{current.Label}”. Choose where it should go.");
         if (target is not null && target.Key != current?.Key) await WriteStateAsync(u, to, i.Entity!, i.EntityId!, target, admin, 0, i.Id, ct);
         foreach (var b in await u.S.ListBookmarksAsync(i.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+        SlaClocks.Clear(i);
         i.State = target?.Id;
         if (target is null) return;
         // Its timers were all replanned, so a parked one no longer holds it in incident.

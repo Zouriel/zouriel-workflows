@@ -365,6 +365,7 @@ public sealed partial class WorkflowEngine
             foreach (var run in await u.S.QueryInstancesAsync(new InstanceQuery { ParentId = inst.Id, Take = 1000 }, ct))
                 if (!InstanceStatus.IsFinished(run.Status)) await CancelInstanceAsync(u, run, actor, reason, ct);
             foreach (var b in await u.S.ListBookmarksAsync(inst.Id, ct)) await u.S.RemoveBookmarkAsync(b.Id, ct);
+            SlaClocks.Clear(inst);
             inst.Status = InstanceStatus.Cancelled;
             inst.LiveKey = null;
             inst.EndedAt = u.Now;
