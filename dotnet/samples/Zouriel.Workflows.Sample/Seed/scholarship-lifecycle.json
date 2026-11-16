@@ -10,7 +10,7 @@
         "onEnter": [ { "id": "s_ack", "type": "notify", "title": "Thank the applicant", "channel": "email", "to": [ { "field": "entity.applicant" } ],
           "subject": ["We received “", { "ref": "entity.title" }, "”"], "body": ["Thank you. Your application is with the review panel."], "link": "record" } ] },
       { "id": "st_review", "key": "UnderReview", "label": "Under review", "category": "active", "tone": "warning",
-        "sla": { "within": "P3D", "calendar": "working", "pauseOnStatus": ["st_draft"], "pauseOnEvent": ["documents.requested"], "resumeOnEvent": ["documents.received"], "steps": [
+        "sla": { "within": "P3D", "calendar": "working", "pauseOnStatus": ["st_draft", "st_submitted"], "pauseOnEvent": ["documents.requested"], "resumeOnEvent": ["documents.received"], "steps": [
           { "id": "s_sla", "type": "notify", "title": "Tell the head it is late", "channel": "inApp", "to": [ { "role": "head" } ],
             "subject": "Review overdue", "body": ["“", { "ref": "entity.title" }, "” has been under review for more than 3 working days."], "link": "record" } ] } },
       { "id": "st_approved", "key": "Approved", "label": "Approved", "category": "terminal", "tone": "success" },
