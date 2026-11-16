@@ -19,7 +19,7 @@ use Zouriel\Workflows\Laravel\WorkflowsServiceProvider;
  */
 abstract class ApiTestCase extends TestCase
 {
-    protected WorkflowTestHost $host;
+    public WorkflowTestHost $host;
 
     protected function getPackageProviders($app): array
     {
@@ -52,7 +52,7 @@ abstract class ApiTestCase extends TestCase
      * Calls the API with a JSON body (arrays and objects are encoded, a string is sent as it is) and checks the response
      * against the spec.
      */
-    protected function api(string $method, string $path, mixed $body = null): TestResponse
+    public function api(string $method, string $path, mixed $body = null): TestResponse
     {
         $uri = '/api/workflows'.$path;
         $content = match (true) {

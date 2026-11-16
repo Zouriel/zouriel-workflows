@@ -92,3 +92,32 @@ it('starts manual workflows on a record and on none', function () {
     expect($this->api('POST', '/manual/alone')->assertOk()->json('entity'))->toBeNull()
         ->and($this->api('POST', '/manual/nothing')->assertStatus(400)->json('code'))->toBe('unknownWorkflow');
 });
+
+it('passes the caller\'s remarks with a move that requires them', function () {
+    $this->signIn('ali');
+    $this->api('POST', '/records/application/a1/transitions/submit')->assertOk();
+    $this->host->settle();
+    $this->signIn('rev1');
+    $this->api('POST', '/records/application/a1/transitions/startReview')->assertOk();
+
+    $this->api('POST', '/records/application/a1/transitions/reject', ['comment' => 'Out of scope', 'lifecycle' => 'applicationReview'])
+        ->assertOk()->assertJsonPath('state', 'rejected');
+    expect(json_decode($this->api('GET', '/records/application/a1/history?take=1')->json('0.data'), true))->toMatchArray(['comment' => 'Out of scope']);
+});
+
+it('shows lifecycle moves and task decisions together as the record\'s history', function () {
+    $this->publishDefinition(Definitions::signOff());
+    $this->signIn('ali');
+    $this->api('POST', '/records/application/a1/transitions/submit')->assertOk();
+    $this->signIn('head');
+    $this->api('POST', '/records/application/a1/manual/sign')->assertOk();
+    $this->host->settle();
+    $this->signIn('rev1');
+    $task = $this->api('GET', '/tasks')->json('items.0.id');
+    $this->api('POST', "/tasks/{$task}/decide", ['outcome' => 'approved', 'data' => ['reference' => 'R']])->assertOk();
+
+    $history = $this->api('GET', '/records/application/a1/history')->assertOk()->json();
+    expect(array_column($history, 'category'))->toContain('lifecycle', 'task')
+        ->and($history[0]['action'])->toBe('decided')
+        ->and($this->api('GET', '/records/application/a1/history?take=1')->json())->toHaveCount(1);
+});
