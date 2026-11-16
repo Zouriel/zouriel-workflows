@@ -1,0 +1,148 @@
+{
+ "name": "Department, portal and queue assignees must be in the registry when it lists any; known ones are fine",
+ "registry": "../engine/_registry-assignee-kinds.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "a",
+    "type": "approval",
+    "assignees": [
+     {
+      "department": "nowhere"
+     }
+    ],
+    "rule": {
+     "type": "any"
+    },
+    "due": "P1D",
+    "outcomes": {
+     "approved": [],
+     "rejected": [],
+     "timedOut": []
+    }
+   },
+   {
+    "id": "b",
+    "type": "approval",
+    "assignees": [
+     {
+      "portal": "nowhere"
+     }
+    ],
+    "rule": {
+     "type": "any"
+    },
+    "due": "P1D",
+    "outcomes": {
+     "approved": [],
+     "rejected": [],
+     "timedOut": []
+    }
+   },
+   {
+    "id": "c",
+    "type": "approval",
+    "assignees": [
+     {
+      "queue": "nowhere"
+     }
+    ],
+    "rule": {
+     "type": "any"
+    },
+    "due": "P1D",
+    "outcomes": {
+     "approved": [],
+     "rejected": [],
+     "timedOut": []
+    }
+   },
+   {
+    "id": "d",
+    "type": "approval",
+    "assignees": [
+     {
+      "department": "licensing"
+     },
+     {
+      "portal": "staff"
+     },
+     {
+      "queue": "frontDesk"
+     }
+    ],
+    "rule": {
+     "type": "any"
+    },
+    "due": "P1D",
+    "outcomes": {
+     "approved": [],
+     "rejected": [],
+     "timedOut": []
+    }
+   },
+   {
+    "id": "n",
+    "type": "notify",
+    "channel": "email",
+    "to": [
+     {
+      "department": "nowhere"
+     }
+    ],
+    "body": "Hi"
+   }
+  ]
+ },
+ "expected": [
+  {
+   "code": "unknownDepartment",
+   "node": "a"
+  },
+  {
+   "code": "unknownPortal",
+   "node": "b"
+  },
+  {
+   "code": "unknownQueue",
+   "node": "c"
+  },
+  {
+   "code": "unknownDepartment",
+   "node": "n"
+  },
+  {
+   "code": "emptyTimeoutPath",
+   "node": "a",
+   "severity": "warning"
+  },
+  {
+   "code": "emptyTimeoutPath",
+   "node": "b",
+   "severity": "warning"
+  },
+  {
+   "code": "emptyTimeoutPath",
+   "node": "c",
+   "severity": "warning"
+  },
+  {
+   "code": "emptyTimeoutPath",
+   "node": "d",
+   "severity": "warning"
+  }
+ ]
+}

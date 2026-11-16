@@ -23,6 +23,15 @@ public sealed partial class WorkflowEngine
     {
         var scope = x.Scope(t);
         var assignees = await ResolveAssigneesAsync(scope, h.Assignees, null, x.I.InitiatorId, ct);
+        List<string>? excluded = null;
+        if (h is ApprovalStep { MakerChecker: { Any: true } mc })
+        {
+            var sod = await BuildSodAsync(x.U, mc, x.I, x.I.Kind == InstanceKinds.Run ? x.I.ParentId : x.I.Id, null, ct);
+            excluded = [];
+            foreach (var id in assignees.ToList())
+                if (sod.Refused(id) is not null) { assignees.Remove(id); excluded.Add(id); }
+            if (excluded.Count == 0) excluded = null;
+        }
         if (assignees.Count == 0) throw new WorkflowException("noAssignees", $"Nobody matches the people chosen for “{h.Title ?? h.Type}”.");
         var rec = await BeginStepAsync(x, t, h, new Dictionary<string, object?> { ["assignees"] = assignees }, ct);
         var due = Due(x, h.Due, h.Calendar);
@@ -61,7 +70,7 @@ public sealed partial class WorkflowEngine
         await x.U.AuditAsync(TaskAudit(x.U, task, "created", x.Actor, new Dictionary<string, object?>
         {
             ["title"] = title, ["assignees"] = assignees, ["due"] = Values.FormatInstant(due), ["step"] = h.Id,
-        }), ct);
+        }.WithExcluded(excluded)), ct);
         x.U.Log?.Add("task", "created", task.Id, title, new Dictionary<string, object?> { ["assignees"] = assignees, ["outcomes"] = outcomes });
         await NotifyAssigneesAsync(x.U, task, assignees, $"New {task.Kind}: {title}", instructions ?? $"“{title}” is waiting for you.", "created", ct);
     }
@@ -100,6 +109,7 @@ public sealed partial class WorkflowEngine
         var task = await u.S.GetTaskAsync(taskId, ct) ?? throw new WorkflowException("notFound", "That task does not exist.");
         if (task.Status != TaskStatus.Open) throw new WorkflowException("taskClosed", "This task has already been completed.");
         if (!user.IsUser) throw new WorkflowException("notAllowed", "Only a person can decide a task.");
+        await EnsureMayJoinAsync(u, task, user.Id!, user.Roles, true, ct);
         var assignees = Values.FromJson(task.Assignees) as List<object?> ?? [];
         if (!assignees.Any(a => Values.Text(a) == user.Id)) throw new WorkflowException("notAllowed", "This task is not assigned to you.");
         var decisions = ParseDecisions(task);
@@ -249,6 +259,12 @@ public sealed partial class WorkflowEngine
         var current = (Values.FromJson(task.Assignees) as List<object?> ?? []).Select(Values.Text).ToList();
         var added = await ResolveAssigneesAsync(x.Scope(x.S.Token(task.TokenId)), esc.Assignees, current, x.I.InitiatorId, ct);
         var fresh = added.Where(a => !current.Contains(a)).ToList();
+        if (step is ApprovalStep { MakerChecker: { Any: true } mc })
+        {
+            // Escalation never adds someone separation of duties refuses, and says nothing about it.
+            var sod = await BuildSodAsync(u, mc, x.I, task.RootInstanceId, task.Id, ct);
+            fresh = fresh.Where(id => sod.Refused(id) is null).ToList();
+        }
         task.Assignees = Values.Serialize(current.Concat(fresh).ToList());
         task.EscalationLevel++;
         await u.S.UpdateTaskAsync(task, ct);
@@ -272,6 +288,7 @@ public sealed partial class WorkflowEngine
             if (list.Contains(toUserId) || decisions.Any(d => d.UserId == toUserId))
                 throw new WorkflowException("alreadyAssigned", "That person is already on this task.");
             if (await Options.Identity.GetUserAsync(toUserId, ct) is null) throw new WorkflowException("unknownUser", "That person does not exist.");
+            await EnsureMayJoinAsync(u, task, toUserId, null, false, ct);
             list[list.IndexOf(user.Id!)] = toUserId;
             task.Assignees = Values.Serialize(list);
             await u.AuditAsync(TaskAudit(u, task, "delegated", user, new Dictionary<string, object?> { ["from"] = user.Id, ["to"] = toUserId, ["note"] = note }), ct);
@@ -289,6 +306,7 @@ public sealed partial class WorkflowEngine
             if (userIds.Count == 0) throw new WorkflowException("noAssignees", "Choose at least one person.");
             foreach (var id in userIds)
                 if (await Options.Identity.GetUserAsync(id, ct) is null) throw new WorkflowException("unknownUser", $"'{id}' is not a person the app knows.");
+            foreach (var id in userIds) await EnsureMayJoinAsync(u, task, id, null, false, ct);
             var before = Values.FromJson(task.Assignees);
             var decisions = ParseDecisions(task);
             var assignees = userIds.Concat(decisions.Select(d => d.UserId)).Distinct().ToList();
@@ -301,4 +319,77 @@ public sealed partial class WorkflowEngine
             await NotifyAssigneesAsync(u, task, userIds, $"Assigned to you: {task.Title}", reason ?? $"“{task.Title}” has been assigned to you.", $"reassigned:{u.Now.ToUnixTimeMilliseconds()}", ct);
             return await TaskViewAsync(u, task, admin, ct);
         }, ct);
+
+    // ── Separation of duties (spec §7 makerChecker) ───────────────────────
+
+    /// <summary>
+    /// Throws <c>segregationOfDuties</c> when the approval's <c>makerChecker</c> rule refuses <paramref name="userId"/>
+    /// (deciding, being handed the task, or being assigned it by an admin). Tasks and approvals without a rule pass.
+    /// </summary>
+    private async Task EnsureMayJoinAsync(Uow u, TaskRecord task, string userId, IReadOnlyList<string>? actorRoles, bool self, CancellationToken ct)
+    {
+        if (task.Kind != "approval") return;
+        var inst = await u.S.GetInstanceAsync(task.InstanceId, ct);
+        if (inst is null) return;
+        var c = await CompiledAsync(u, inst.DefinitionId, inst.Version, ct);
+        if (c.Step(task.NodeId) is not ApprovalStep { MakerChecker: { Any: true } mc }) return;
+        var sod = await BuildSodAsync(u, mc, inst, task.RootInstanceId, task.Id, ct);
+        var reason = sod.Refused(userId, actorRoles);
+        if (reason is null) return;
+        var who = self ? "You cannot" : $"{(await Options.Identity.GetUserAsync(userId, ct))?.Name ?? userId} cannot";
+        throw new WorkflowException("segregationOfDuties", $"{who} approve this: {reason}.");
+    }
+
+    /// <summary>The people an approval's <c>makerChecker</c> rule refuses, worked out from the step and the store.</summary>
+    private async Task<Sod> BuildSodAsync(Uow u, MakerChecker mc, InstanceRecord inst, string? rootInstanceId, string? thisTaskId, CancellationToken ct)
+    {
+        var sod = new Sod();
+        if (mc.ExcludeInitiator == true)
+        {
+            var reason = "the person who started it cannot approve it";
+            if (inst.InitiatorId is not null) sod.Excluded.TryAdd(inst.InitiatorId, reason);
+            if (inst.Entity is not null && inst.EntityId is not null && await RecordInitiatorAsync(u, inst.Entity, inst.EntityId, ct) is { } ri) sod.Excluded.TryAdd(ri, reason);
+        }
+        if (mc.ExcludePreviousApprover == true && rootInstanceId is not null)
+        {
+            var previous = (await u.S.QueryTasksAsync(new TaskQuery { RootInstanceId = rootInstanceId, Statuses = [TaskStatus.Completed], Take = 1000 }, ct))
+                .Where(t => t.Kind == "approval" && t.Id != thisTaskId)
+                .OrderByDescending(t => t.CompletedAt).ThenByDescending(t => t.CreatedAt).FirstOrDefault();
+            if (previous is not null)
+                foreach (var d in ParseDecisions(previous)) sod.Excluded.TryAdd(d.UserId, "you approved the step before it");
+        }
+        if (!string.IsNullOrEmpty(mc.RequiredRole))
+        {
+            sod.RequiredRole = mc.RequiredRole;
+            sod.RoleLabel = Registry.Roles.FirstOrDefault(r => r.Key == mc.RequiredRole)?.Label ?? mc.RequiredRole;
+            sod.RoleHolders = (await Options.Identity.GetUsersInRoleAsync(mc.RequiredRole, ct)).ToHashSet();
+        }
+        return sod;
+    }
+
+    private sealed class Sod
+    {
+        public Dictionary<string, string> Excluded { get; } = [];
+        public string? RequiredRole { get; set; }
+        public string? RoleLabel { get; set; }
+        public HashSet<string> RoleHolders { get; set; } = [];
+
+        /// <summary>Why a person is refused (without a full stop), or null.</summary>
+        public string? Refused(string userId, IReadOnlyList<string>? actorRoles = null)
+        {
+            if (Excluded.TryGetValue(userId, out var why)) return why;
+            if (RequiredRole is not null && !RoleHolders.Contains(userId) && actorRoles?.Contains(RequiredRole) != true) return $"it needs the {RoleLabel} role";
+            return null;
+        }
+    }
+}
+
+internal static class AuditDataExtensions
+{
+    /// <summary>Adds <c>excluded</c> only when someone was removed, so audit bytes of workflows without a rule do not change.</summary>
+    public static Dictionary<string, object?> WithExcluded(this Dictionary<string, object?> data, List<string>? excluded)
+    {
+        if (excluded is { Count: > 0 }) data["excluded"] = excluded;
+        return data;
+    }
 }

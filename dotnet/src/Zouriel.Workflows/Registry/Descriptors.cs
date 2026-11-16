@@ -22,6 +22,12 @@ public sealed class WorkflowRegistry
     public List<LabelledItem> Roles { get; init; } = [];
     /// <summary>Groups assignee lists may name.</summary>
     public List<LabelledItem> Groups { get; init; } = [];
+    /// <summary>Departments assignee lists may name (left out of the JSON when none).</summary>
+    public List<LabelledItem>? Departments { get; init; }
+    /// <summary>Portals assignee lists may name (left out of the JSON when none).</summary>
+    public List<LabelledItem>? Portals { get; init; }
+    /// <summary>Work queues assignee lists may name (left out of the JSON when none).</summary>
+    public List<LabelledItem>? Queues { get; init; }
 
     /// <summary>The entity with this key, or null.</summary>
     /// <param name="key">The entity key (null finds nothing).</param>
@@ -56,7 +62,7 @@ public sealed class WorkflowRegistry
     public string ToJson() => System.Text.Json.JsonSerializer.Serialize(this, Model.Definitions.JsonOptions);
 }
 
-/// <summary>A key with a label, for channels, roles and groups.</summary>
+/// <summary>A key with a label, for channels, roles, groups, departments, portals and queues.</summary>
 public sealed class LabelledItem
 {
     /// <summary>The key definitions use.</summary>

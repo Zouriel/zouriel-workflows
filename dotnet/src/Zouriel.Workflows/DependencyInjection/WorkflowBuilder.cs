@@ -111,6 +111,27 @@ public sealed class WorkflowBuilder(IServiceCollection services)
         return this;
     }
 
+    /// <summary>Registers a department assignees may name (members come from the identity service).</summary>
+    public WorkflowBuilder Department(string key, string label)
+    {
+        Registry.Department(key, label);
+        return this;
+    }
+
+    /// <summary>Registers a portal assignees may name (members come from the identity service).</summary>
+    public WorkflowBuilder Portal(string key, string label)
+    {
+        Registry.Portal(key, label);
+        return this;
+    }
+
+    /// <summary>Registers a work queue assignees may name (members come from the identity service).</summary>
+    public WorkflowBuilder Queue(string key, string label)
+    {
+        Registry.Queue(key, label);
+        return this;
+    }
+
     /// <summary>Registers a notification channel <c>notify</c> steps may use.</summary>
     public WorkflowBuilder Channel(string key, string label)
     {
@@ -238,6 +259,9 @@ internal sealed class ScopedIdentity<T>(IServiceProvider root) : IWorkflowIdenti
     public Task<WorkflowUser?> GetUserAsync(string id, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, WorkflowUser?>(root, s => s.GetUserAsync(id, ct));
     public Task<IReadOnlyList<string>> GetUsersInRoleAsync(string role, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, IReadOnlyList<string>>(root, s => s.GetUsersInRoleAsync(role, ct));
     public Task<IReadOnlyList<string>> GetUsersInGroupAsync(string group, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, IReadOnlyList<string>>(root, s => s.GetUsersInGroupAsync(group, ct));
+    public Task<IReadOnlyList<string>> GetUsersInDepartmentAsync(string department, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, IReadOnlyList<string>>(root, s => s.GetUsersInDepartmentAsync(department, ct));
+    public Task<IReadOnlyList<string>> GetUsersInPortalAsync(string portal, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, IReadOnlyList<string>>(root, s => s.GetUsersInPortalAsync(portal, ct));
+    public Task<IReadOnlyList<string>> GetUsersInQueueAsync(string queue, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, IReadOnlyList<string>>(root, s => s.GetUsersInQueueAsync(queue, ct));
     public Task<string?> GetManagerAsync(string userId, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, string?>(root, s => s.GetManagerAsync(userId, ct));
     public Task<IReadOnlyList<WorkflowUser>> SearchUsersAsync(string? query, int limit, CancellationToken ct = default) => WorkflowServiceScope.UseAsync<T, IReadOnlyList<WorkflowUser>>(root, s => s.SearchUsersAsync(query, limit, ct));
 }

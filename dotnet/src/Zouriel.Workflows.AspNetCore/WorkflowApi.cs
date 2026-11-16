@@ -118,7 +118,7 @@ public sealed record ResetBody(Dictionary<string, JsonNode?>? Input, string? Lif
 /// <summary>One permission change: who may do a node of a workflow.</summary>
 /// <param name="Node">A transition id, <c>reset</c>, <c>trigger</c> (a manual start) or an approval/task step id.</param>
 /// <param name="Who">
-/// The assignees (roles, groups, users, person fields of the record) who may do it. What empty means depends on
+/// The assignees (roles, groups, departments, portals, queues, users, person fields of the record) who may do it. What empty means depends on
 /// the node: a transition or the reset, nobody by hand; a manual start (<c>trigger</c>), anyone who can see the
 /// record; an approval or task, refused (it needs someone, <c>lintErrors</c>).
 /// </param>
@@ -269,6 +269,7 @@ public static class WorkflowApi
     internal static WorkflowRegistry PublicRegistry(WorkflowRegistry r) => new()
     {
         SpecVersion = r.SpecVersion, Actions = r.Actions, Signals = r.Signals, Channels = r.Channels, Roles = r.Roles, Groups = r.Groups,
+        Departments = r.Departments, Portals = r.Portals, Queues = r.Queues,
         Entities = r.Entities.Select(e => new EntityDescriptor
         {
             Key = e.Key, Label = e.Label, PluralLabel = e.PluralLabel, TitleField = e.TitleField, ClrType = e.ClrType, IdGetter = e.IdGetter,
@@ -755,7 +756,7 @@ public static class WorkflowApi
     {
         var status = e.Code switch
         {
-            "notAllowed" => 403,
+            "notAllowed" or "segregationOfDuties" => 403,
             "notFound" or "noRecord" or "definitionNotFound" => 404,
             "notInIncident" or "alreadyRunning" or "alreadyAssigned" or "staleSettings" or "taskClosed" or "alreadyDecided" or "duplicateId" or "duplicateKey" or "finished" or "published" or "keyLocked" or "kindLocked" or "nothingToReset" or "notPublished" or "resetChanged" or "wrongLifecycle" => 409,
             "tooLarge" => 413,

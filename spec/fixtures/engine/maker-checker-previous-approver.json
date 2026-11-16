@@ -1,0 +1,59 @@
+{
+ "name": "Maker-checker excludePreviousApprover: whoever decided the previous approval (any outcome) of the same run cannot decide the next; the first approval has no previous one; delegation to a refused person is refused",
+  "registry": {
+  "specVersion": 1,
+  "entities": [
+   { "key": "application", "label": "Application", "pluralLabel": "Applications", "titleField": "title",
+     "fields": [
+      { "key": "title", "label": "Title", "type": "text", "watchable": true },
+      { "key": "status", "label": "Status", "type": "enum", "watchable": true, "lifecycle": true,
+        "options": [ { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" } ] },
+      { "key": "stage", "label": "Stage", "type": "enum", "watchable": true, "settable": true,
+        "options": [ { "value": "new", "label": "New" }, { "value": "checked", "label": "Checked" }, { "value": "done", "label": "Done" } ] },
+      { "key": "applicant", "label": "Applicant", "type": "user" }
+     ] }
+  ],
+  "channels": [ { "key": "email", "label": "Email" }, { "key": "inApp", "label": "In-app" } ],
+  "roles": [ { "key": "reviewer", "label": "Reviewer" }, { "key": "approver", "label": "Senior approver" } ]
+ },
+ "users": [
+  { "id": "ali", "name": "Ali Applicant" },
+  { "id": "maya", "name": "Maya Reviewer", "roles": ["reviewer"] },
+  { "id": "rev1", "name": "Rana Reviewer", "roles": ["reviewer"] },
+  { "id": "rev2", "name": "Rafiq Reviewer", "roles": ["reviewer"] }
+ ],
+ "definitions": [
+  {
+   "specVersion": 1, "id": "wf_chain", "key": "chain", "kind": "automation", "title": "Two approvals", "entity": "application",
+   "trigger": { "type": "manual", "label": "Chain" },
+   "steps": [
+    { "id": "first", "type": "approval", "title": "First look", "rule": { "type": "all" }, "due": "P2D",
+      "assignees": [ { "role": "reviewer" } ], "makerChecker": { "excludePreviousApprover": true },
+      "outcomes": { "approved": [], "rejected": [], "timedOut": [] } },
+    { "id": "second", "type": "approval", "title": "Second look", "rule": { "type": "any" }, "due": "P2D", "allowDelegation": true,
+      "assignees": [ { "role": "reviewer" } ], "makerChecker": { "excludePreviousApprover": true },
+      "outcomes": { "approved": [], "rejected": [], "timedOut": [] } }
+   ]
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Licence", "applicant": "ali" } } },
+  { "manual": { "workflow": "chain", "entity": "application", "id": "a1", "actor": "ali" },
+    "expect": {
+     "tasks": [ { "step": "first", "status": "open", "assignees": ["maya", "rev1", "rev2"] } ],
+     "auditCount": { "task.created": 1 }
+    } },
+  { "decide": { "step": "first", "user": "rev1", "outcome": "rejected" },
+    "expect": {
+     "tasks": [ { "step": "first", "status": "completed", "outcome": "rejected" }, { "step": "second", "status": "open", "assignees": ["maya", "rev2"] } ],
+     "audit": [ "task.created", { "is": "task.created", "data": { "assignees": ["maya", "rev2"], "excluded": ["rev1"], "step": "second" } } ]
+    } },
+  { "decide": { "step": "second", "user": "rev1", "outcome": "approved" }, "expectError": "segregationOfDuties" },
+  { "delegate": { "step": "second", "user": "maya", "to": "rev1" }, "expectError": "segregationOfDuties",
+    "expect": { "tasks": [ { "step": "first" }, { "step": "second", "assignees": ["maya", "rev2"] } ] } },
+  { "delegate": { "step": "second", "user": "maya", "to": "ali" },
+    "expect": { "tasks": [ { "step": "first" }, { "step": "second", "assignees": ["ali", "rev2"] } ] } },
+  { "decide": { "step": "second", "user": "ali", "outcome": "approved" },
+    "expect": { "instances": [ { "definition": "chain", "status": "completed" } ] } }
+ ]
+}

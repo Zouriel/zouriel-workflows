@@ -1,0 +1,92 @@
+{
+ "name": "Department, portal and queue assignees resolve people for a task, a transition's who, a manual start and a notification, like groups do",
+ "registry": {
+  "specVersion": 1,
+  "entities": [
+   { "key": "application", "label": "Application", "pluralLabel": "Applications", "titleField": "title",
+     "fields": [
+      { "key": "title", "label": "Title", "type": "text", "watchable": true },
+      { "key": "status", "label": "Status", "type": "enum", "watchable": true, "lifecycle": true,
+        "options": [ { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" }, { "value": "underReview", "label": "Under review" },
+                     { "value": "approved", "label": "Approved" }, { "value": "rejected", "label": "Rejected" } ] },
+      { "key": "stage", "label": "Stage", "type": "enum", "watchable": true, "settable": true,
+        "options": [ { "value": "new", "label": "New" }, { "value": "checked", "label": "Checked" }, { "value": "done", "label": "Done" } ] },
+      { "key": "applicant", "label": "Applicant", "type": "user" }
+     ] }
+  ],
+  "channels": [ { "key": "email", "label": "Email" }, { "key": "inApp", "label": "In-app" } ],
+  "departments": [ { "key": "licensing", "label": "Licensing department" } ],
+  "portals": [ { "key": "staff", "label": "Staff portal" } ],
+  "queues": [ { "key": "frontDesk", "label": "Front desk queue" } ]
+ },
+ "users": [
+  { "id": "ali", "name": "Ali Applicant" },
+  { "id": "dana", "name": "Dana Licensing", "departments": ["licensing"] },
+  { "id": "dual", "name": "Dual Desk", "departments": ["licensing"], "queues": ["frontDesk"] },
+  { "id": "pia", "name": "Pia Portal", "portals": ["staff"] },
+  { "id": "quin", "name": "Quin Queue", "queues": ["frontDesk"] }
+ ],
+ "definitions": [
+  {
+   "specVersion": 1, "id": "lc_dpq", "key": "dpqReview", "kind": "lifecycle", "title": "Review", "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "active" },
+     { "id": "st_rev", "key": "underReview", "label": "Under review", "category": "terminal" },
+     { "id": "st_ok", "key": "approved", "label": "Approved", "category": "terminal" },
+     { "id": "st_no", "key": "rejected", "label": "Rejected", "category": "terminal" }
+    ],
+    "transitions": [
+     { "id": "t_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "field": "entity.applicant" }] },
+     { "id": "t_dept", "key": "byDepartment", "label": "Licensing check", "from": ["st_sub"], "to": "st_rev", "who": [{ "department": "licensing" }] },
+     { "id": "t_portal", "key": "byPortal", "label": "Portal check", "from": ["st_sub"], "to": "st_ok", "who": [{ "portal": "staff" }] },
+     { "id": "t_queue", "key": "byQueue", "label": "Desk check", "from": ["st_sub"], "to": "st_no", "who": [{ "queue": "frontDesk" }] }
+    ]
+   }
+  },
+  {
+   "specVersion": 1, "id": "wf_triage", "key": "triage", "kind": "automation", "title": "Triage", "entity": "application",
+   "trigger": { "type": "fieldChanged", "field": "stage", "to": ["checked"] },
+   "steps": [
+    { "id": "ap", "type": "approval", "title": "Triage sign-off", "rule": { "type": "any" }, "due": "P2D",
+      "assignees": [ { "department": "licensing" }, { "portal": "staff" }, { "queue": "frontDesk" } ],
+      "outcomes": { "approved": [], "rejected": [], "timedOut": [] } },
+    { "id": "tell", "type": "notify", "channel": "email", "to": [ { "portal": "staff" } ], "subject": "Triage done", "body": "Done." }
+   ]
+  },
+  {
+   "specVersion": 1, "id": "wf_claim", "key": "claim", "kind": "automation", "title": "Claim at the desk", "entity": "application",
+   "trigger": { "type": "manual", "label": "Claim", "who": [ { "queue": "frontDesk" } ] },
+   "steps": [ { "id": "mark", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "done" } } ] } ]
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Licence", "applicant": "ali", "stage": "new" } } },
+  { "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "ali" },
+    "expect": {
+     "available": { "entity": "application", "id": "a1", "user": "dana", "transitions": ["byDepartment"] },
+     "auditCount": { "lifecycle.transitioned": 1 }
+    } },
+  { "expect": { "available": { "entity": "application", "id": "a1", "user": "pia", "transitions": ["byPortal"] } } },
+  { "expect": { "available": { "entity": "application", "id": "a1", "user": "quin", "transitions": ["byQueue"] } } },
+  { "expect": { "available": { "entity": "application", "id": "a1", "user": "dual", "transitions": ["byDepartment", "byQueue"] } } },
+  { "expect": { "available": { "entity": "application", "id": "a1", "user": "ali", "transitions": [] } } },
+  { "transition": { "entity": "application", "id": "a1", "transition": "byPortal", "actor": "dana" }, "expectError": "notAllowed" },
+  { "manual": { "workflow": "claim", "entity": "application", "id": "a1", "actor": "pia" }, "expectError": "notAllowed" },
+  { "manual": { "workflow": "claim", "entity": "application", "id": "a1", "actor": "quin" },
+    "expect": { "record": { "entity": "application", "id": "a1", "values": { "stage": "done" } } } },
+  { "change": { "entity": "application", "id": "a1", "values": { "stage": "checked" } },
+    "expect": {
+     "tasks": [ { "step": "ap", "status": "open", "assignees": ["dana", "dual", "pia", "quin"] } ]
+    } },
+  { "decide": { "step": "ap", "user": "pia", "outcome": "approved" },
+    "expect": {
+     "tasks": [ { "step": "ap", "status": "completed", "outcome": "approved" } ],
+     "notifications": [ { "channel": "inApp", "to": ["dana", "dual", "pia", "quin"] }, { "channel": "email", "to": ["pia"], "subject": "Triage done" } ]
+    } },
+  { "transition": { "entity": "application", "id": "a1", "transition": "byPortal", "actor": "pia" },
+    "expect": { "record": { "entity": "application", "id": "a1", "values": { "status": "approved" } } } }
+ ]
+}

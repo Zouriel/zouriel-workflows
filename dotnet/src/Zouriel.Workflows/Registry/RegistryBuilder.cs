@@ -15,6 +15,9 @@ public sealed class RegistryBuilder
     private readonly List<LabelledItem> _channels = [];
     private readonly List<LabelledItem> _roles = [];
     private readonly List<LabelledItem> _groups = [];
+    private readonly List<LabelledItem> _departments = [];
+    private readonly List<LabelledItem> _portals = [];
+    private readonly List<LabelledItem> _queues = [];
     internal readonly Dictionary<Type, string> EntityKeys = [];
 
     /// <summary>Registers an entity type. Only fields added in <paramref name="configure"/> are visible to workflows.</summary>
@@ -87,6 +90,33 @@ public sealed class RegistryBuilder
         return this;
     }
 
+    /// <summary>Registers a department assignee lists may name.</summary>
+    /// <param name="key">The department key (as the identity service knows it).</param>
+    /// <param name="label">The name shown to people.</param>
+    public RegistryBuilder Department(string key, string label)
+    {
+        _departments.Add(new LabelledItem { Key = key, Label = label });
+        return this;
+    }
+
+    /// <summary>Registers a portal assignee lists may name.</summary>
+    /// <param name="key">The portal key (as the identity service knows it).</param>
+    /// <param name="label">The name shown to people.</param>
+    public RegistryBuilder Portal(string key, string label)
+    {
+        _portals.Add(new LabelledItem { Key = key, Label = label });
+        return this;
+    }
+
+    /// <summary>Registers a work queue assignee lists may name.</summary>
+    /// <param name="key">The queue key (as the identity service knows it).</param>
+    /// <param name="label">The name shown to people.</param>
+    public RegistryBuilder Queue(string key, string label)
+    {
+        _queues.Add(new LabelledItem { Key = key, Label = label });
+        return this;
+    }
+
     /// <summary>Builds the registry.</summary>
     /// <exception cref="InvalidOperationException">An entity key is registered twice.</exception>
     public WorkflowRegistry Build()
@@ -102,6 +132,9 @@ public sealed class RegistryBuilder
             Channels = _channels.Count > 0 ? [.. _channels] : [new LabelledItem { Key = "email", Label = "Email" }, new LabelledItem { Key = "inApp", Label = "In-app" }],
             Roles = [.. _roles],
             Groups = [.. _groups],
+            Departments = _departments.Count > 0 ? [.. _departments] : null,
+            Portals = _portals.Count > 0 ? [.. _portals] : null,
+            Queues = _queues.Count > 0 ? [.. _queues] : null,
         };
     }
 

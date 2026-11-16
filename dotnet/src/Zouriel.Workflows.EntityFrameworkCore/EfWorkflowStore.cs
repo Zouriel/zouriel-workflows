@@ -339,6 +339,7 @@ internal sealed class EfWorkflowSession : IWorkflowSession
     {
         var x = Set<TaskRecord>().AsQueryable();
         if (q.InstanceId is not null) x = x.Where(t => t.InstanceId == q.InstanceId);
+        if (q.RootInstanceId is not null) x = x.Where(t => t.RootInstanceId == q.RootInstanceId);
         if (q.Entity is not null) x = x.Where(t => t.Entity == q.Entity);
         if (q.EntityId is not null) x = x.Where(t => t.EntityId == q.EntityId);
         if (q.Statuses is not null) { var s = q.Statuses.ToList(); x = x.Where(t => s.Contains(t.Status)); }

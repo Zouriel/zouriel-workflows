@@ -129,6 +129,18 @@ public sealed class FakeIdentity : IWorkflowIdentity
         Task.FromResult<IReadOnlyList<string>>(_users.Values.Where(u => u.User.Groups?.Contains(group) == true).Select(u => u.User.Id).OrderBy(x => x, StringComparer.Ordinal).ToList());
 
     /// <inheritdoc />
+    public Task<IReadOnlyList<string>> GetUsersInDepartmentAsync(string department, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>(_users.Values.Where(u => u.User.Departments?.Contains(department) == true).Select(u => u.User.Id).OrderBy(x => x, StringComparer.Ordinal).ToList());
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<string>> GetUsersInPortalAsync(string portal, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>(_users.Values.Where(u => u.User.Portals?.Contains(portal) == true).Select(u => u.User.Id).OrderBy(x => x, StringComparer.Ordinal).ToList());
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<string>> GetUsersInQueueAsync(string queue, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>(_users.Values.Where(u => u.User.Queues?.Contains(queue) == true).Select(u => u.User.Id).OrderBy(x => x, StringComparer.Ordinal).ToList());
+
+    /// <inheritdoc />
     public Task<string?> GetManagerAsync(string userId, CancellationToken ct = default) => Task.FromResult(_users.TryGetValue(userId, out var u) ? u.Manager : null);
 
     /// <inheritdoc />

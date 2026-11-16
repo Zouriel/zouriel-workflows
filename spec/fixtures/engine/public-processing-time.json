@@ -1,0 +1,58 @@
+{
+ "name": "Public processing time is stored with the definition and the record view carries it only when display is true",
+ "registry": {
+  "specVersion": 1,
+  "entities": [
+   { "key": "application", "label": "Application", "pluralLabel": "Applications", "titleField": "title",
+     "fields": [
+      { "key": "title", "label": "Title", "type": "text" },
+      { "key": "status", "label": "Status", "type": "enum", "lifecycle": true, "options": [ { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" } ] }
+     ] },
+   { "key": "permit", "label": "Permit", "pluralLabel": "Permits", "titleField": "title",
+     "fields": [
+      { "key": "title", "label": "Title", "type": "text" },
+      { "key": "status", "label": "Status", "type": "enum", "lifecycle": true, "options": [ { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" } ] }
+     ] },
+   { "key": "notice", "label": "Notice", "pluralLabel": "Notices", "titleField": "title",
+     "fields": [
+      { "key": "title", "label": "Title", "type": "text" },
+      { "key": "status", "label": "Status", "type": "enum", "lifecycle": true, "options": [ { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" } ] }
+     ] }
+  ],
+  "channels": [ { "key": "email", "label": "Email" } ]
+ },
+ "definitions": [
+  {
+   "specVersion": 1, "id": "lc_app", "key": "appFlow", "kind": "lifecycle", "title": "Application flow", "entity": "application",
+   "publicProcessingTime": { "estimate": "5 working days", "display": true },
+   "lifecycle": { "field": "status",
+    "states": [ { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" }, { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "terminal" } ],
+    "transitions": [ { "id": "t_sub", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "user": "clerk" }] } ] }
+  },
+  {
+   "specVersion": 1, "id": "lc_permit", "key": "permitFlow", "kind": "lifecycle", "title": "Permit flow", "entity": "permit",
+   "publicProcessingTime": { "estimate": "Internal: about 2 weeks", "display": false },
+   "lifecycle": { "field": "status",
+    "states": [ { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" }, { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "terminal" } ],
+    "transitions": [ { "id": "t_sub", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "user": "clerk" }] } ] }
+  },
+  {
+   "specVersion": 1, "id": "lc_notice", "key": "noticeFlow", "kind": "lifecycle", "title": "Notice flow", "entity": "notice",
+   "lifecycle": { "field": "status",
+    "states": [ { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" }, { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "terminal" } ],
+    "transitions": [ { "id": "t_sub", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "user": "clerk" }] } ] }
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Licence" } } },
+  { "create": { "entity": "permit", "id": "p1", "values": { "title": "Stall" } } },
+  { "create": { "entity": "notice", "id": "n1", "values": { "title": "Notice" } },
+    "expect": {
+     "available": { "entity": "application", "id": "a1", "user": "anyone", "transitions": [], "publicProcessingTime": "5 working days" }
+    } },
+  { "expect": { "available": { "entity": "permit", "id": "p1", "user": "anyone", "transitions": [], "publicProcessingTime": null } } },
+  { "expect": { "available": { "entity": "notice", "id": "n1", "user": "anyone", "transitions": [], "publicProcessingTime": null } } },
+  { "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "clerk" },
+    "expect": { "available": { "entity": "application", "id": "a1", "user": "clerk", "transitions": [], "state": "submitted", "publicProcessingTime": "5 working days" } } }
+ ]
+}

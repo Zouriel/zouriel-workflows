@@ -11,7 +11,10 @@
     "signals": { "type": "array", "items": { "$ref": "#/$defs/signal" } },
     "channels": { "type": "array", "items": { "$ref": "#/$defs/labelled" } },
     "roles": { "type": "array", "items": { "$ref": "#/$defs/labelled" } },
-    "groups": { "type": "array", "items": { "$ref": "#/$defs/labelled" } }
+    "groups": { "type": "array", "items": { "$ref": "#/$defs/labelled" } },
+    "departments": { "type": "array", "items": { "$ref": "#/$defs/labelled" } },
+    "portals": { "type": "array", "items": { "$ref": "#/$defs/labelled" } },
+    "queues": { "type": "array", "items": { "$ref": "#/$defs/labelled" } }
   },
   "additionalProperties": false,
   "$defs": {

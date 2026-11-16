@@ -17,6 +17,14 @@ fixture wins and this text is fixed.
   triggers, `applyTransition` steps).
 - Every reference inside a definition points at an `id`, except **token paths** (below), which point
   at registry keys and step ids.
+- A definition (either kind) may carry `publicProcessingTime: { estimate, display }`: `estimate` is
+  text people outside the office read (at most 200 characters, for example "5 working days") and
+  `display` says whether the app may show it to the public. Both are required when the object is
+  present. It is stored and published with the definition and changes no behaviour or time limit. The
+  record view (`GET /records/{entity}/{id}`) carries `publicProcessingTime: "<estimate>"` only when the
+  record's lifecycle has it with `display: true`; otherwise the key is left out. Lint:
+  `display: true` with a blank estimate is `publicTimeMissing` ("Write the processing time people will
+  see, or turn it off."); an estimate over 200 characters is `publicTimeTooLong`.
 
 ## 2. The registry
 
@@ -47,9 +55,17 @@ The host app registers, in code, what workflows may touch. Engines serve it at `
                 "fields": [{ "key": "amount", "label": "Amount", "type": "currency" }] }],
   "channels": [{ "key": "email", "label": "Email" }, { "key": "inApp", "label": "In-app" }],
   "roles": [{ "key": "reviewer", "label": "Reviewer" }],
-  "groups": [{ "key": "finance", "label": "Finance office" }]
+  "groups": [{ "key": "finance", "label": "Finance office" }],
+  "departments": [{ "key": "licensing", "label": "Licensing department" }],
+  "portals": [{ "key": "citizen", "label": "Citizen portal" }],
+  "queues": [{ "key": "frontDesk", "label": "Front desk queue" }]
 }
 ```
+
+`roles`, `groups`, `departments`, `portals` and `queues` are lists of `{ key, label, description? }`. The
+app decides who belongs to each (the identity service): everyone in a department, everyone who works
+a portal (for example the staff side of a citizen portal), everyone serving a work queue. The last
+three are optional and left out when the app has none.
 
 Field types: `text`, `longText`, `email`, `phone`, `url`, `number`, `currency`, `boolean`, `date`
 (`YYYY-MM-DD`), `dateTime` (ISO 8601 UTC), `enum` (with `options`), `user` (a user id), `relation`
@@ -369,7 +385,7 @@ IPv4-compatible, NAT64, 6to4) and Teredo included.
 | `switch` | `on: <token path>`, `cases: [{ id, label, values: [...], steps }]`, `otherwise?`. Matches like `anyOf`. | `case` |
 | `parallel` | `paths: [{ id, label, steps }]` (2–10), `join: { type: "all"|"any"|"count", count? }`. All paths start together; the step finishes when the join is met. With `any`/`count`, paths still running are cancelled. | `completed` (path ids) |
 | `forEach` | `collection: <token path to a collection>`, `when?: condition on item.*`, `mode: "sequential"|"parallel"`, `concurrency?` (parallel, default 5), `max` (≤ 500), `steps`. Items are read when the step starts. | `count` |
-| `approval` | `assignees`, `rule: { type: "any"|"all"|"count"|"percent", value? }`, `due` (required), `calendar?`, `reminders?: [duration…]`, `escalation?: { after, assignees, notify? }`, `form?`, `instructions?: template`, `allowDelegation?`, `requireComment?: "never"|"reject"|"always"`, `outcomes: { approved: [...], rejected: [...], timedOut: [...] }` | `outcome` (`approved`/`rejected`/`timedOut`), `decidedBy` (user ids), `comments`, `data` (form answers of the last decision) |
+| `approval` | `assignees`, `rule: { type: "any"|"all"|"count"|"percent", value? }`, `due` (required), `calendar?`, `reminders?: [duration…]`, `escalation?: { after, assignees, notify? }`, `form?`, `instructions?: template`, `allowDelegation?`, `requireComment?: "never"|"reject"|"always"`, `makerChecker?: { excludeInitiator?, excludePreviousApprover?, requiredRole? }`, `outcomes: { approved: [...], rejected: [...], timedOut: [...] }` | `outcome` (`approved`/`rejected`/`timedOut`), `decidedBy` (user ids), `comments`, `data` (form answers of the last decision) |
 | `task` | Like `approval` but `outcomes: [{ id, key, label, tone?, steps }]` (1–8), `onTimeout: { steps }`, rule is always first decision wins. | `outcome` (key), `decidedBy`, `comment`, `data` |
 | `wait` | `until`: `{ type: "duration", duration, calendar? }` · `{ type: "date", date: <operand>, offset?, at? }` · `{ type: "condition", when, timeout, onTimeout: { steps } }` · `{ type: "signal", signal, timeout?, onTimeout? }` | `timedOut` (bool), `data` (signal data) |
 | `setFields` | `target?: "self"|"item"|<relation token path>` (`item`: the current item inside `forEach`), `values: [{ field, value: operand }]` (fields must be `settable`; a value for an `enum` field must be one of its options, checked again at run time for values read from tokens: `unknownValue`, never retried; `createRecord` alike). One write; it is a committed change like any other (it can trigger other workflows, §5 loop rules). | — |
@@ -398,6 +414,30 @@ once the approvals reach `value` (percent of assignees, rounded up); rejected on
 be reached. When `due` passes first → `timedOut` (open tasks are cancelled). Escalation adds its
 assignees at `after` (counted from the step's start) without removing the original ones.
 
+**Separation of duties (`makerChecker`, approvals only).** Stops one person from both asking and
+approving. All three keys are optional; an absent or empty object means no rule.
+
+- `excludeInitiator: true`: the person who started the run may not approve. That is the run's
+  initiator (`instance.initiator`) and, when the run belongs to a lifecycle record, also the record's
+  initiator (§8).
+- `excludePreviousApprover: true`: nobody who decided (with any outcome) the previous approval may
+  decide this one. The previous approval is the most recently completed approval task with the same
+  root instance (the record instance for a lifecycle's runs, otherwise the run itself), other than
+  this task. With none, nobody is excluded.
+- `requiredRole: <role key>`: only people who hold that role may decide.
+
+When the task is created, excluded people are removed from the resolved assignees and, with
+`requiredRole`, only people holding the role are kept. If nobody is left the step fails with
+`noAssignees`. The `task.created` audit data gets `excluded: [user ids]` only when someone was removed.
+The same rule applies whenever a person would join or act on the task: deciding, being handed the task
+(delegation), being assigned it by an admin (reassign), and escalation (people the rule refuses are
+left out silently). A refused person gets the error `segregationOfDuties` (HTTP 403), for example "You
+cannot approve this: the person who started it cannot approve it.", "…you approved the step before
+it." or "…it needs the Senior approver role." The rule is worked out from the step definition and the
+stored tasks when it is checked; nothing extra is stored on the task. Lint: a `requiredRole` that is not
+in the registry's roles (when it lists any) is `unknownRole`. `makerChecker` is not allowed on other
+steps.
+
 Assignees resolve when the step starts; later changes to roles do not change an open task, except
 delegation and reassignment (audited). A task cannot be delegated to someone already on it or who
 already decided; after delegation or reassignment the rule is checked again, so a task the remaining
@@ -406,9 +446,13 @@ decisions already settle completes at once.
 ## 8. Assignees and recipients
 
 `assignees` / `who` / `to` are arrays of:
-`{ "role": key }` · `{ "group": key }` · `{ "user": id }` · `{ "field": <token path of a user field> }`
+`{ "role": key }` · `{ "group": key }` · `{ "department": key }` · `{ "portal": key }` ·
+`{ "queue": key }` · `{ "user": id }` · `{ "field": <token path of a user field> }`
 · `{ "managerOf": "initiator"|"assignees"|<token path> }` · `{ "initiator": true }`.
-`to` also accepts `{ "email": template }`. Duplicates are merged. An approval whose assignees
+`department`, `portal` and `queue` work like `group`: everyone the app's identity service says is in
+that department, works that portal or serves that queue. They work everywhere an assignee does
+(`assignees`, `who`, `to`, `owners`, escalation, reset `who`, trigger `who`). Exactly one key is set per
+entry. `to` also accepts `{ "email": template }`. Duplicates are merged. An approval whose assignees
 resolve to nobody fails the step (`noAssignees`). Who "the initiator" is (for `{ initiator: true }`
 and `managerOf: "initiator"`):
 
@@ -495,7 +539,7 @@ Categories and actions:
   record had left the state), `slaBreached` (data: state, within), `forced` (data: reason),
   `reset` (before/after state, data: label, input masked, `comment` when given, `undone`), `writeRefused`,
   `writeObserved`, `outOfSync`.
-- `task`: `created`, `assigned`, `reminded`, `escalated`, `delegated`, `reassigned`, `decided`
+- `task`: `created` (data: title, assignees, due, step, and `excluded` when separation of duties removed people), `assigned`, `reminded`, `escalated`, `delegated`, `reassigned`, `decided`
   (data: outcome, comment, answers masked), `cancelled`, `timedOut`.
 - `trigger`: `suppressed`, `skipped`, `paused`, `resumed`, `failed` (data: eventId, error).
 - `settings`: `updated` (before/after).
@@ -552,7 +596,10 @@ engine from working or the settings from being fixed.
 - Lint problems (code, severity, path, message) are listed in `fixtures/lint`. Editors and engines
   produce the same codes for the same definition. Among them: a webhook `method` must be one of `GET`,
   `POST`, `PUT`, `PATCH`, `DELETE` in capitals (`badMethod`, also refused at run
-  time); `subWorkflowCycle` (§5); `renamedInUse` (§1) needs the engine's records, so only engines
+  time); an assignee naming a department, portal or queue the registry does not list (only checked
+  when the registry lists any of that kind) is `unknownDepartment`, `unknownPortal` or `unknownQueue`,
+  like `unknownGroup`; an approval's `makerChecker.requiredRole` outside the registry's roles is
+  `unknownRole` (§7); `publicTimeMissing` and `publicTimeTooLong` (§1); `subWorkflowCycle` (§5); `renamedInUse` (§1) needs the engine's records, so only engines
   report it.
 - **Test runs** (`POST /simulate`) report the definition's lint problems with the result. A lifecycle
   tested on a record that would not get it (pinned to another lifecycle for the field, not meeting

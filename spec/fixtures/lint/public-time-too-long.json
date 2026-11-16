@@ -1,0 +1,34 @@
+{
+ "name": "Public processing time: more than 200 characters",
+ "registry": "../engine/_registry-assignee-kinds.json",
+ "definition": {
+  "specVersion": 1,
+  "id": "wf",
+  "key": "wf",
+  "kind": "automation",
+  "title": "W",
+  "entity": "application",
+  "trigger": {
+   "type": "fieldChanged",
+   "field": "stage",
+   "to": [
+    "checked"
+   ]
+  },
+  "steps": [
+   {
+    "id": "e",
+    "type": "end"
+   }
+  ],
+  "publicProcessingTime": {
+   "estimate": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "display": false
+  }
+ },
+ "expected": [
+  {
+   "code": "publicTimeTooLong"
+  }
+ ]
+}

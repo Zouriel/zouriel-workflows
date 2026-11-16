@@ -71,6 +71,11 @@ public static class Linter
                 CheckId(v.Id, v.Id);
                 if (def.Variables!.Count(x => x.Key == v.Key) > 1) Error("duplicateKey", v.Id, $"Two variables are called '{v.Key}'.");
             }
+            if (def.PublicProcessingTime is { } ppt)
+            {
+                if (ppt.Display && string.IsNullOrWhiteSpace(ppt.Estimate)) Error("publicTimeMissing", null, "Write the processing time people will see, or turn it off.");
+                if (ppt.Estimate?.Length > 200) Error("publicTimeTooLong", null, "The processing time people will see can be at most 200 characters.");
+            }
             if (def.IsLifecycle) LintLifecycle(entity);
             else LintAutomation(entity);
             return _p;
@@ -436,6 +441,8 @@ public static class Linter
         private void LintApproval(ApprovalStep ap, Env env)
         {
             LintHuman(ap, env);
+            if (ap.MakerChecker?.RequiredRole is { } mcRole && R.Roles.Count > 0 && R.Roles.All(r => r.Key != mcRole))
+                Error("unknownRole", ap.Id, $"'{mcRole}' is not a role the app has.");
             if (ap.Rule.Type is "count" or "percent" && (ap.Rule.Value is null || ap.Rule.Value < 1))
                 Error("badRule", ap.Id, $"'{Name(ap)}' needs a number of approvals.");
             if (ap.Rule.Type == "percent" && ap.Rule.Value > 100) Error("badRule", ap.Id, "A percentage cannot be over 100.");
@@ -724,6 +731,9 @@ public static class Linter
             {
                 if (a.Role is not null && R.Roles.Count > 0 && R.Roles.All(r => r.Key != a.Role)) Error("unknownRole", node, $"'{a.Role}' is not a role the app has.");
                 if (a.Group is not null && R.Groups.Count > 0 && R.Groups.All(g => g.Key != a.Group)) Error("unknownGroup", node, $"'{a.Group}' is not a group the app has.");
+                if (a.Department is not null && R.Departments is { Count: > 0 } deps && deps.All(d => d.Key != a.Department)) Error("unknownDepartment", node, $"'{a.Department}' is not a department the app has.");
+                if (a.Portal is not null && R.Portals is { Count: > 0 } portals && portals.All(p => p.Key != a.Portal)) Error("unknownPortal", node, $"'{a.Portal}' is not a portal the app has.");
+                if (a.Queue is not null && R.Queues is { Count: > 0 } queues && queues.All(q => q.Key != a.Queue)) Error("unknownQueue", node, $"'{a.Queue}' is not a queue the app has.");
                 if (a.Field is not null)
                 {
                     if (env is not null) CheckToken(a.Field, node, env, expectUser: true);

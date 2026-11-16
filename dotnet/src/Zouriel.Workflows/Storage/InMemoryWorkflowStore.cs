@@ -282,6 +282,7 @@ public sealed class InMemoryWorkflowStore : IWorkflowStore
         private IEnumerable<TaskRecord> Filter(TaskQuery q) => All<TaskRecord>("tasks").Where(t =>
         {
             if (q.InstanceId is not null && t.InstanceId != q.InstanceId) return false;
+            if (q.RootInstanceId is not null && t.RootInstanceId != q.RootInstanceId) return false;
             if (q.Entity is not null && t.Entity != q.Entity) return false;
             if (q.EntityId is not null && t.EntityId != q.EntityId) return false;
             if (q.Statuses is not null && !q.Statuses.Contains(t.Status)) return false;

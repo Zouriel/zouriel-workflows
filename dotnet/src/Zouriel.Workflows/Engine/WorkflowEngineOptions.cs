@@ -57,6 +57,9 @@ internal sealed class NoIdentity : IWorkflowIdentity
     public Task<WorkflowUser?> GetUserAsync(string id, CancellationToken ct = default) => Task.FromResult<WorkflowUser?>(new WorkflowUser(id, id));
     public Task<IReadOnlyList<string>> GetUsersInRoleAsync(string role, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
     public Task<IReadOnlyList<string>> GetUsersInGroupAsync(string group, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
+    public Task<IReadOnlyList<string>> GetUsersInDepartmentAsync(string department, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
+    public Task<IReadOnlyList<string>> GetUsersInPortalAsync(string portal, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
+    public Task<IReadOnlyList<string>> GetUsersInQueueAsync(string queue, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<string>>([]);
     public Task<string?> GetManagerAsync(string userId, CancellationToken ct = default) => Task.FromResult<string?>(null);
     public Task<IReadOnlyList<WorkflowUser>> SearchUsersAsync(string? query, int limit, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<WorkflowUser>>([]);
 }

@@ -17,7 +17,8 @@
     "steps": { "$ref": "#/$defs/steps" },
     "lifecycle": { "$ref": "#/$defs/lifecycle" },
     "variables": { "type": "array", "items": { "$ref": "#/$defs/variable" }, "maxItems": 100 },
-    "settings": { "$ref": "#/$defs/workflowSettings" }
+    "settings": { "$ref": "#/$defs/workflowSettings" },
+    "publicProcessingTime": { "$ref": "#/$defs/publicProcessingTime" }
   },
   "allOf": [
     {
@@ -131,6 +132,9 @@
       "oneOf": [
         { "type": "object", "required": ["role"], "properties": { "role": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
         { "type": "object", "required": ["group"], "properties": { "group": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
+        { "type": "object", "required": ["department"], "properties": { "department": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
+        { "type": "object", "required": ["portal"], "properties": { "portal": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
+        { "type": "object", "required": ["queue"], "properties": { "queue": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
         { "type": "object", "required": ["user"], "properties": { "user": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
         { "type": "object", "required": ["field"], "properties": { "field": { "$ref": "#/$defs/tokenPath" } }, "additionalProperties": false },
         {
@@ -141,6 +145,21 @@
         },
         { "type": "object", "required": ["initiator"], "properties": { "initiator": { "const": true } }, "additionalProperties": false }
       ]
+    },
+    "publicProcessingTime": {
+      "type": "object",
+      "required": ["estimate", "display"],
+      "properties": { "estimate": { "type": "string", "maxLength": 200 }, "display": { "type": "boolean" } },
+      "additionalProperties": false
+    },
+    "makerChecker": {
+      "type": "object",
+      "properties": {
+        "excludeInitiator": { "type": "boolean" },
+        "excludePreviousApprover": { "type": "boolean" },
+        "requiredRole": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
     },
     "assignees": { "type": "array", "items": { "$ref": "#/$defs/assignee" }, "maxItems": 50 },
     "recipient": {
@@ -493,6 +512,7 @@
         "instructions": { "$ref": "#/$defs/template" },
         "allowDelegation": { "type": "boolean" },
         "requireComment": { "enum": ["never", "reject", "always"] },
+        "makerChecker": { "$ref": "#/$defs/makerChecker" },
         "outcomes": {
           "type": "object",
           "required": ["approved", "rejected", "timedOut"],

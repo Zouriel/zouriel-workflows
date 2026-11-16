@@ -39,7 +39,7 @@ public static class ConformanceRunner
         foreach (var u in usersNode as JsonArray ?? [])
         {
             host.Identity.Add(new WorkflowUser(u!["id"]!.GetValue<string>(), u["name"]?.GetValue<string>() ?? u["id"]!.GetValue<string>(), u["email"]?.GetValue<string>(),
-                Strings(u["roles"]), Strings(u["groups"])), u["manager"]?.GetValue<string>());
+                Strings(u["roles"]), Strings(u["groups"]), Strings(u["departments"]), Strings(u["portals"]), Strings(u["queues"])), u["manager"]?.GetValue<string>());
         }
         if (fx["settings"] is JsonObject settings)
         {
@@ -360,6 +360,8 @@ public static class ConformanceRunner
             // "status" and "error": the record instance's status as the record page shows it, and why it is in incident.
             if (av["status"] is JsonValue sv && view.Status != sv.GetValue<string>()) throw new ConformanceException($"available.status: expected {sv}, got {view.Status}");
             if (av.ContainsKey("error")) CompareValue("available.error", Values.FromJson(av["error"]), view.Error);
+            // "publicProcessingTime": the estimate the record view carries (null = the view has none).
+            if (av.ContainsKey("publicProcessingTime")) CompareValue("available.publicProcessingTime", Values.FromJson(av["publicProcessingTime"]), view.PublicProcessingTime);
             if (av["resetComment"] is JsonValue rc && view.Reset?.Comment != rc.GetValue<string>())
                 throw new ConformanceException($"available.resetComment: expected {rc}, got {view.Reset?.Comment ?? "no reset"}");
         }

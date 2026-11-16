@@ -99,6 +99,7 @@ public static class SampleSetup
             })
             .Role("reviewer", "Reviewer").Role("finance", "Finance officer").Role("head", "Head of office").Role("admin", "Administrator")
             .Group("panel", "Review panel")
+            .Department("licensing", "Licensing department").Portal("staff", "Staff portal").Queue("frontDesk", "Front desk queue")
             .Channel("email", "Email").Channel("inApp", "In-app")
             .Entity<Programme>("programme", e => e
                 .Label("Programme", "Programmes").Title(p => p.Name)

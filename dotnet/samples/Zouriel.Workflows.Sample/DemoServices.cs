@@ -14,8 +14,8 @@ public static class DemoUsers
     [
         (new WorkflowUser("ali", "Ali Hassan", "ali@example.com", []), null, "Applicant"),
         (new WorkflowUser("sara", "Sara Ahmed", "sara@example.com", []), null, "Applicant"),
-        (new WorkflowUser("rana", "Rana Ibrahim", "rana@example.com", ["reviewer"], ["panel"]), "hana", "Reviewer"),
-        (new WorkflowUser("omar", "Omar Saleem", "omar@example.com", ["reviewer"], ["panel"]), "hana", "Reviewer"),
+        (new WorkflowUser("rana", "Rana Ibrahim", "rana@example.com", ["reviewer"], ["panel"], ["licensing"], ["staff"], ["frontDesk"]), "hana", "Reviewer"),
+        (new WorkflowUser("omar", "Omar Saleem", "omar@example.com", ["reviewer"], ["panel"], ["licensing"], ["staff"]), "hana", "Reviewer"),
         (new WorkflowUser("farah", "Farah Nasser", "farah@example.com", ["finance"]), "hana", "Finance officer"),
         (new WorkflowUser("hana", "Hana Yusuf", "hana@example.com", ["head", "admin"]), null, "Head of office"),
     ];
@@ -34,6 +34,15 @@ public sealed class DemoIdentity : IWorkflowIdentity
 
     public Task<IReadOnlyList<string>> GetUsersInGroupAsync(string group, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<string>>(DemoUsers.All.Where(u => u.User.Groups?.Contains(group) == true).Select(u => u.User.Id).ToList());
+
+    public Task<IReadOnlyList<string>> GetUsersInDepartmentAsync(string department, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>(DemoUsers.All.Where(u => u.User.Departments?.Contains(department) == true).Select(u => u.User.Id).ToList());
+
+    public Task<IReadOnlyList<string>> GetUsersInPortalAsync(string portal, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>(DemoUsers.All.Where(u => u.User.Portals?.Contains(portal) == true).Select(u => u.User.Id).ToList());
+
+    public Task<IReadOnlyList<string>> GetUsersInQueueAsync(string queue, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>(DemoUsers.All.Where(u => u.User.Queues?.Contains(queue) == true).Select(u => u.User.Id).ToList());
 
     public Task<string?> GetManagerAsync(string userId, CancellationToken ct = default) =>
         Task.FromResult(DemoUsers.All.FirstOrDefault(u => u.User.Id == userId).Manager);

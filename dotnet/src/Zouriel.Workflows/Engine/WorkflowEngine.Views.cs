@@ -140,10 +140,11 @@ public sealed record ResetOption(string Label, string To, string ToLabel, string
 /// <param name="States">All states of the lifecycle: <c>{ key, label, category, tone }</c>.</param>
 /// <param name="Reset">Starting the workflow over, when the viewer may (null otherwise).</param>
 /// <param name="Error">Why the record instance is in <c>incident</c> (masked); null otherwise.</param>
+/// <param name="PublicProcessingTime">The lifecycle's public processing time estimate, only when it is set to be displayed; null otherwise.</param>
 public sealed record RecordView(
     string Entity, string Id, string? Title, string? Lifecycle, string? LifecycleTitle, string? State, string? StateLabel, string? StateTone, string? Status,
     string? StateEnteredAt, IReadOnlyList<TransitionOption> Transitions, IReadOnlyList<TaskView> Tasks, IReadOnlyList<InstanceView> Instances,
-    IReadOnlyList<ManualOption> Manual, IReadOnlyList<object?> States, ResetOption? Reset, string? Error = null);
+    IReadOnlyList<ManualOption> Manual, IReadOnlyList<object?> States, ResetOption? Reset, string? Error = null, string? PublicProcessingTime = null);
 
 /// <summary>A manual-trigger workflow the viewer may start from a record (spec §5 <c>manual</c>).</summary>
 /// <param name="Key">The workflow key to start.</param>
@@ -518,7 +519,8 @@ public sealed partial class WorkflowEngine
         var state = rc?.StateById(record?.State);
         return new RecordView(entity, id, title, c?.Definition.Key, c?.Definition.Title, state?.Key, state?.Label, state?.Tone, record?.Status,
             record?.StateEnteredAt is null ? null : Values.FormatInstant(record.StateEnteredAt.Value), options, tasks, instances, manual, states, reset,
-            record is { Status: InstanceStatus.Incident, Error: { } error } ? (await u.MaskerAsync(entity, id, ct)).MaskText(error) : null);
+            record is { Status: InstanceStatus.Incident, Error: { } error } ? (await u.MaskerAsync(entity, id, ct)).MaskText(error) : null,
+            (rc ?? c)?.Definition.PublicProcessingTime is { Display: true } ppt && !string.IsNullOrWhiteSpace(ppt.Estimate) ? ppt.Estimate : null);
     }
 
     // ── Audit ─────────────────────────────────────────────────────────────

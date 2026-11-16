@@ -71,6 +71,8 @@ public sealed class TaskQuery
     public string? AssigneeId { get; init; }
     /// <summary>Only tasks of this instance.</summary>
     public string? InstanceId { get; init; }
+    /// <summary>Only tasks whose root instance (the record or automation instance, never a child run) is this.</summary>
+    public string? RootInstanceId { get; init; }
     /// <summary>Only tasks about records of this entity.</summary>
     public string? Entity { get; init; }
     /// <summary>Only tasks about this record id.</summary>

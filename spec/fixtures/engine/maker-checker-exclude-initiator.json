@@ -1,0 +1,96 @@
+{
+ "name": "Maker-checker excludeInitiator: whoever started the run (and the record's initiator) is removed from an approval's assignees, refused when deciding, and nobody left means noAssignees",
+  "registry": {
+  "specVersion": 1,
+  "entities": [
+   { "key": "application", "label": "Application", "pluralLabel": "Applications", "titleField": "title",
+     "fields": [
+      { "key": "title", "label": "Title", "type": "text", "watchable": true },
+      { "key": "status", "label": "Status", "type": "enum", "watchable": true, "lifecycle": true,
+        "options": [ { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" } ] },
+      { "key": "stage", "label": "Stage", "type": "enum", "watchable": true, "settable": true,
+        "options": [ { "value": "new", "label": "New" }, { "value": "checked", "label": "Checked" }, { "value": "done", "label": "Done" } ] },
+      { "key": "applicant", "label": "Applicant", "type": "user" }
+     ] }
+  ],
+  "channels": [ { "key": "email", "label": "Email" }, { "key": "inApp", "label": "In-app" } ],
+  "roles": [ { "key": "reviewer", "label": "Reviewer" }, { "key": "approver", "label": "Senior approver" } ]
+ },
+ "users": [
+  { "id": "ali", "name": "Ali Applicant" },
+  { "id": "maya", "name": "Maya Reviewer", "roles": ["reviewer"] },
+  { "id": "rev1", "name": "Rana Reviewer", "roles": ["reviewer"] },
+  { "id": "rev2", "name": "Rafiq Reviewer", "roles": ["reviewer"] }
+ ],
+ "definitions": [
+  {
+   "specVersion": 1, "id": "wf_sign", "key": "sign", "kind": "automation", "title": "Sign", "entity": "application",
+   "trigger": { "type": "manual", "label": "Sign" },
+   "steps": [
+    { "id": "ap", "type": "approval", "title": "Sign-off", "rule": { "type": "any" }, "due": "P2D",
+      "assignees": [ { "role": "reviewer" } ], "makerChecker": { "excludeInitiator": true },
+      "outcomes": { "approved": [ { "id": "ok", "type": "setFields", "values": [ { "field": "stage", "value": { "const": "done" } } ] } ], "rejected": [], "timedOut": [] } }
+   ]
+  },
+  {
+   "specVersion": 1, "id": "wf_solo", "key": "solo", "kind": "automation", "title": "Solo", "entity": "application",
+   "trigger": { "type": "manual", "label": "Solo" },
+   "steps": [
+    { "id": "ap", "type": "approval", "title": "Only me", "rule": { "type": "any" }, "due": "P2D",
+      "assignees": [ { "user": "rev1" } ], "makerChecker": { "excludeInitiator": true },
+      "outcomes": { "approved": [], "rejected": [], "timedOut": [] } }
+   ]
+  },
+  {
+   "specVersion": 1, "id": "wf_rec", "key": "recordSign", "kind": "automation", "title": "Record sign-off", "entity": "application",
+   "trigger": { "type": "manual", "label": "Record sign-off" },
+   "steps": [
+    { "id": "ap", "type": "approval", "title": "Record sign-off", "rule": { "type": "any" }, "due": "P2D",
+      "assignees": [ { "user": "ali" }, { "user": "rev1" }, { "user": "rev2" } ], "makerChecker": { "excludeInitiator": true },
+      "outcomes": { "approved": [], "rejected": [], "timedOut": [] } }
+   ]
+  },
+  {
+   "specVersion": 1, "id": "lc_rec", "key": "recordFlow", "kind": "lifecycle", "title": "Flow", "entity": "application",
+   "lifecycle": {
+    "field": "status",
+    "states": [
+     { "id": "st_draft", "key": "draft", "label": "Draft", "category": "initial" },
+     { "id": "st_sub", "key": "submitted", "label": "Submitted", "category": "terminal" }
+    ],
+    "transitions": [
+     { "id": "t_submit", "key": "submit", "label": "Submit", "from": ["st_draft"], "to": "st_sub", "who": [{ "field": "entity.applicant" }] }
+    ]
+   }
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Licence", "applicant": "ali" } } },
+  { "manual": { "workflow": "sign", "entity": "application", "id": "a1", "actor": "rev1" },
+    "expect": {
+     "tasks": [ { "step": "ap", "status": "open", "assignees": ["maya", "rev2"] } ],
+     "audit": [ { "is": "task.created", "data": { "assignees": ["maya", "rev2"], "excluded": ["rev1"] } } ]
+    } },
+  { "decide": { "step": "ap", "user": "rev1", "outcome": "approved" }, "expectError": "segregationOfDuties" },
+  { "decide": { "step": "ap", "user": "ali", "outcome": "approved" }, "expectError": "notAllowed" },
+  { "decide": { "step": "ap", "user": "maya", "outcome": "approved" },
+    "expect": {
+     "tasks": [ { "step": "ap", "status": "completed", "outcome": "approved" } ],
+     "record": { "entity": "application", "id": "a1", "values": { "stage": "done" } }
+    } },
+  { "manual": { "workflow": "solo", "entity": "application", "id": "a1", "actor": "rev1" },
+    "expect": {
+     "instances": [ { "definition": "recordFlow", "status": "active" }, { "definition": "sign", "status": "completed" },
+                    { "definition": "solo", "status": "incident", "error": "Nobody matches the people chosen for \u201cOnly me\u201d." } ],
+     "tasks": [ { "step": "ap", "status": "completed" } ]
+    } },
+  { "transition": { "entity": "application", "id": "a1", "transition": "submit", "actor": "ali" } },
+  { "manual": { "workflow": "recordSign", "entity": "application", "id": "a1", "actor": "rev1" },
+    "expect": {
+     "tasks": [ { "step": "ap", "status": "completed" }, { "step": "ap", "status": "open", "assignees": ["rev2"] } ],
+     "audit": [ { "is": "task.created", "data": { "assignees": ["rev2"], "excluded": ["ali", "rev1"] } } ]
+    } },
+  { "decide": { "step": "ap", "user": "ali", "outcome": "approved" }, "expectError": "segregationOfDuties" },
+  { "decide": { "step": "ap", "user": "rev1", "outcome": "approved" }, "expectError": "segregationOfDuties" }
+ ]
+}

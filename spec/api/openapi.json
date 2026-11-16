@@ -2905,7 +2905,7 @@
             "description": "Optional explanation."
           }
         },
-        "description": "A key with a label, for channels, roles and groups."
+        "description": "A key with a label, for channels, roles, groups, departments, portals and queues."
       },
       "LintProblem": {
         "required": [
@@ -3185,7 +3185,7 @@
             "description": "A transition id, `reset`, `trigger` (a manual start) or an approval/task step id."
           },
           "who": {
-            "description": "The assignees (roles, groups, users, person fields of the record) who may do it. What empty means depends on\nthe node: a transition or the reset, nobody by hand; a manual start (`trigger`), anyone who can see the\nrecord; an approval or task, refused (it needs someone, `lintErrors`).",
+            "description": "The assignees (roles, groups, departments, portals, queues, users, person fields of the record) who may do it. What empty means depends on\nthe node: a transition or the reset, nobody by hand; a manual start (`trigger`), anyone who can see the\nrecord; an approval or task, refused (it needs someone, `lintErrors`).",
             "$ref": "#/components/schemas/JsonArray"
           }
         },
@@ -3535,6 +3535,13 @@
               "string"
             ],
             "description": "Why the record instance is in `incident` (masked); null otherwise."
+          },
+          "publicProcessingTime": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "description": "The lifecycle's public processing time estimate (spec \u00a71), only when it is set to be displayed; left out otherwise."
           }
         },
         "description": "Everything a record page shows (the record panel): its lifecycle state, the transitions the viewer may\napply, open tasks, recent runs and manual starts. Reading never creates the lifecycle instance; a\nrecord without one is shown in the state it would get."
@@ -4748,7 +4755,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "The error code, e.g. `notAllowed`, `lintErrors`, `wrongLifecycle`."
+            "description": "The error code, e.g. `notAllowed`, `segregationOfDuties` (403: separation of duties on an approval refuses the person), `lintErrors`, `wrongLifecycle`."
           },
           "message": {
             "type": "string",
@@ -4821,6 +4828,27 @@
               "$ref": "#/components/schemas/LabelledItem"
             },
             "description": "Groups assignee lists may name."
+          },
+          "departments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledItem"
+            },
+            "description": "Departments assignee lists may name (left out when the app has none)."
+          },
+          "portals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledItem"
+            },
+            "description": "Portals assignee lists may name (left out when the app has none)."
+          },
+          "queues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LabelledItem"
+            },
+            "description": "Work queues assignee lists may name (left out when the app has none)."
           }
         },
         "description": "Everything the host app lets workflows read, watch, write and call (spec \u00a72). Served to the\nbuilder at `GET /schema`; definitions may only reference what is listed here."
@@ -4866,6 +4894,36 @@
               "type": "string"
             },
             "description": "Group keys the person belongs to (registry groups)."
+          },
+          "departments": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Department keys the person belongs to (registry departments)."
+          },
+          "portals": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Portal keys the person works (registry portals)."
+          },
+          "queues": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Work queue keys the person serves (registry queues)."
           }
         },
         "description": "A person the app's directory knows."

@@ -1,0 +1,52 @@
+{
+ "name": "Maker-checker requiredRole: only people holding the role stay among an approval's assignees and may decide; handing the task to someone without the role is refused",
+  "registry": {
+  "specVersion": 1,
+  "entities": [
+   { "key": "application", "label": "Application", "pluralLabel": "Applications", "titleField": "title",
+     "fields": [
+      { "key": "title", "label": "Title", "type": "text", "watchable": true },
+      { "key": "status", "label": "Status", "type": "enum", "watchable": true, "lifecycle": true,
+        "options": [ { "value": "draft", "label": "Draft" }, { "value": "submitted", "label": "Submitted" } ] },
+      { "key": "stage", "label": "Stage", "type": "enum", "watchable": true, "settable": true,
+        "options": [ { "value": "new", "label": "New" }, { "value": "checked", "label": "Checked" }, { "value": "done", "label": "Done" } ] },
+      { "key": "applicant", "label": "Applicant", "type": "user" }
+     ] }
+  ],
+  "channels": [ { "key": "email", "label": "Email" }, { "key": "inApp", "label": "In-app" } ],
+  "roles": [ { "key": "reviewer", "label": "Reviewer" }, { "key": "approver", "label": "Senior approver" } ]
+ },
+ "users": [
+  { "id": "ali", "name": "Ali Applicant" },
+  { "id": "maya", "name": "Maya Reviewer", "roles": ["reviewer", "approver"] },
+  { "id": "rev1", "name": "Rana Reviewer", "roles": ["reviewer"] },
+  { "id": "boss", "name": "Bea Boss", "roles": ["approver"] },
+  { "id": "ben", "name": "Ben Backup", "roles": ["approver"] }
+ ],
+ "definitions": [
+  {
+   "specVersion": 1, "id": "wf_role", "key": "needsApprover", "kind": "automation", "title": "Needs a senior approver", "entity": "application",
+   "trigger": { "type": "manual", "label": "Go" },
+   "steps": [
+    { "id": "ap", "type": "approval", "title": "Senior sign-off", "rule": { "type": "any" }, "due": "P2D", "allowDelegation": true,
+      "assignees": [ { "role": "reviewer" }, { "user": "boss" } ], "makerChecker": { "requiredRole": "approver" },
+      "outcomes": { "approved": [], "rejected": [], "timedOut": [] } }
+   ]
+  }
+ ],
+ "steps": [
+  { "create": { "entity": "application", "id": "a1", "values": { "title": "Licence", "applicant": "ali" } } },
+  { "manual": { "workflow": "needsApprover", "entity": "application", "id": "a1", "actor": "ali" },
+    "expect": {
+     "tasks": [ { "step": "ap", "status": "open", "assignees": ["maya", "boss"] } ],
+     "audit": [ { "is": "task.created", "data": { "assignees": ["maya", "boss"], "excluded": ["rev1"] } } ]
+    } },
+  { "decide": { "step": "ap", "user": "rev1", "outcome": "approved" }, "expectError": "segregationOfDuties" },
+  { "delegate": { "step": "ap", "user": "maya", "to": "rev1" }, "expectError": "segregationOfDuties" },
+  { "delegate": { "step": "ap", "user": "maya", "to": "ali" }, "expectError": "segregationOfDuties" },
+  { "delegate": { "step": "ap", "user": "maya", "to": "ben" },
+    "expect": { "tasks": [ { "step": "ap", "assignees": ["ben", "boss"] } ] } },
+  { "decide": { "step": "ap", "user": "ben", "outcome": "approved" },
+    "expect": { "tasks": [ { "step": "ap", "status": "completed", "outcome": "approved" } ] } }
+ ]
+}

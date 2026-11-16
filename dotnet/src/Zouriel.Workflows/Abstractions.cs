@@ -47,7 +47,11 @@ public sealed record WorkflowActor(string Type, string? Id = null, string? Name 
 /// <param name="Email">Where email notifications go, if any.</param>
 /// <param name="Roles">Role keys the person has (registry roles).</param>
 /// <param name="Groups">Group keys the person belongs to (registry groups).</param>
-public sealed record WorkflowUser(string Id, string Name, string? Email = null, IReadOnlyList<string>? Roles = null, IReadOnlyList<string>? Groups = null);
+/// <param name="Departments">Department keys the person belongs to (registry departments).</param>
+/// <param name="Portals">Portal keys the person works (registry portals).</param>
+/// <param name="Queues">Work queue keys the person serves (registry queues).</param>
+public sealed record WorkflowUser(string Id, string Name, string? Email = null, IReadOnlyList<string>? Roles = null, IReadOnlyList<string>? Groups = null,
+    IReadOnlyList<string>? Departments = null, IReadOnlyList<string>? Portals = null, IReadOnlyList<string>? Queues = null);
 
 /// <summary>Where users, roles, groups and managers come from. Implemented by the host app.</summary>
 public interface IWorkflowIdentity
@@ -58,6 +62,12 @@ public interface IWorkflowIdentity
     Task<IReadOnlyList<string>> GetUsersInRoleAsync(string role, CancellationToken ct = default);
     /// <summary>The ids of everyone in a group.</summary>
     Task<IReadOnlyList<string>> GetUsersInGroupAsync(string group, CancellationToken ct = default);
+    /// <summary>The ids of everyone in a department (spec §8).</summary>
+    Task<IReadOnlyList<string>> GetUsersInDepartmentAsync(string department, CancellationToken ct = default);
+    /// <summary>The ids of everyone who works a portal (spec §8).</summary>
+    Task<IReadOnlyList<string>> GetUsersInPortalAsync(string portal, CancellationToken ct = default);
+    /// <summary>The ids of everyone serving a work queue (spec §8).</summary>
+    Task<IReadOnlyList<string>> GetUsersInQueueAsync(string queue, CancellationToken ct = default);
     /// <summary>A person's manager's id, or null (spec §8 <c>managerOf</c>).</summary>
     Task<string?> GetManagerAsync(string userId, CancellationToken ct = default);
     /// <summary>People whose name or id contains <paramref name="query"/> (for pickers), at most <paramref name="limit"/>.</summary>

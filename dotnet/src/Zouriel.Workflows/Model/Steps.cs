@@ -219,11 +219,27 @@ public abstract class HumanStep : Step
     public string? RequireComment { get; set; }
 }
 
+/// <summary>Separation of duties on an approval (spec §7 <c>makerChecker</c>). An empty object means no rule.</summary>
+public sealed class MakerChecker
+{
+    /// <summary>The person who started the run (and the record's initiator) may not approve.</summary>
+    public bool? ExcludeInitiator { get; set; }
+    /// <summary>Nobody who decided the previous approval of the same record or run may decide this one.</summary>
+    public bool? ExcludePreviousApprover { get; set; }
+    /// <summary>Only people who hold this role may decide.</summary>
+    public string? RequiredRole { get; set; }
+
+    /// <summary>True when any of the three rules is set.</summary>
+    [JsonIgnore] public bool Any => ExcludeInitiator == true || ExcludePreviousApprover == true || !string.IsNullOrEmpty(RequiredRole);
+}
+
 /// <summary>Asks people to approve or reject (outputs <c>outcome</c>, <c>decidedBy</c>, <c>comments</c>, <c>data</c>).</summary>
 public sealed class ApprovalStep : HumanStep
 {
     /// <summary>How decisions settle the approval.</summary>
     public ApprovalRule Rule { get; set; } = new();
+    /// <summary>Separation of duties: who may not (or only may) decide (null = no rule).</summary>
+    public MakerChecker? MakerChecker { get; set; }
     /// <summary>The steps per outcome.</summary>
     public ApprovalOutcomes Outcomes { get; set; } = new();
 

@@ -20,7 +20,7 @@ enums their names, ids text. Text is compared exactly (case and spaces count).
 ## Engine fixtures (`engine/*.json`)
 
 Files whose name starts with `_` are not fixtures: they are shared files other fixtures point to
-(`_registry.json`, `_registry-required.json`, `_users.json`) or a definition kept for reference
+(`_registry.json`, `_registry-required.json`, `_registry-assignee-kinds.json` (the same registry plus `departments`, `portals` and `queues`, used by lint fixtures), `_users.json`) or a definition kept for reference
 (`_lifecycle-application.json`, not loaded by the runner). Every other `*.json` file is one fixture.
 
 ### Top-level keys
@@ -29,7 +29,7 @@ Files whose name starts with `_` are not fixtures: they are shared files other f
 | --- | --- | --- |
 | `name` | yes | What the fixture shows, for people. Not read by the runner. |
 | `registry` | yes | The registry (spec/schema/registry.schema.json), inline as an object, or a path relative to the fixture's folder (e.g. `"_registry.json"`). |
-| `users` | no | The people workflows see: an array, inline or as a relative path. Each user: `id` (required), `name` (default: the id), `email`, `roles` (array), `groups` (array), `manager` (a user id). |
+| `users` | no | The people workflows see: an array, inline or as a relative path. Each user: `id` (required), `name` (default: the id), `email`, `roles` (array), `groups` (array), `departments` (array), `portals` (array), `queues` (array), `manager` (a user id). The arrays are what `GetUsersInRole/Group/Department/Portal/Queue` answer from; each defaults to empty. |
 | `now` | no | The clock's start, an ISO 8601 instant. Default `2026-10-19T09:00:00Z`. |
 | `settings` | no | Global settings (spec/schema/settings.schema.json), saved before anything else by `admin` at revision 0. |
 | `records` | no | Records that exist before any workflow: `{ "<entity>": [ { "id": "a1", "<field>": value, … } ] }`. `id` is the record id, the other keys are field values. |
@@ -124,7 +124,7 @@ Each key is checked independently, after the step's settle.
 | `webhooks` | `[ { "method", "url", "body", "headers" } ]` | Every webhook call so far, in order; `body` is the parsed JSON body. |
 | `outputs` | `{ "<definitionKey>": { "<stepId>": {…} } }` | The step outputs of the most recently created instance of each key (subset). |
 | `vars` | `{ "<definitionKey>": {…} }` | The variables of that instance (subset). |
-| `available` | `{ "entity", "id", "user"?, "transitions": [keys], "state"?, "status"?, "error"?, "reset"?, "comments"?, "resetComment"? }` | What the record page offers that user: the exact ordered list of transition keys, the current state key, the record instance's status and error (as the record view shows them; `"error": null` expects none), whether a reset is offered, each offered transition's remarks setting (`none`, `optional`, `required`; subset) and the reset's. |
+| `available` | `{ "entity", "id", "user"?, "transitions": [keys], "state"?, "status"?, "error"?, "reset"?, "comments"?, "resetComment"?, "publicProcessingTime"? }` | What the record page offers that user: the exact ordered list of transition keys, the current state key, the record instance's status and error (as the record view shows them; `"error": null` expects none), whether a reset is offered, each offered transition's remarks setting (`none`, `optional`, `required`; subset) and the reset's, and `publicProcessingTime` (the record view's public processing time text; `null` expects the view to carry none). |
 | `resetPreview` | `{ "entity", "id", "user"?, "items": [ { "id", "kind", "selected", "undoable", "title", "detail" } ] }` or `{ …, "error": "<code>" }` | The reset list for that user: exact item count, in order, each a subset match; or that listing it fails with that code. |
 | `audit` | `[ "category.action" or { "is": "category.action", "data"?: {…}, "actor"?: "…" } ]` | An ordered subsequence: these entries appear in this order, with any others in between. `data` is a subset match of the entry's data; `actor` matches the actor id, or the actor type (`system`). |
 | `auditCount` | `{ "category.action": n }` | Exactly `n` entries of each listed kind. |

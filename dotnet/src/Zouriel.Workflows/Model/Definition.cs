@@ -32,6 +32,8 @@ public sealed class WorkflowDefinition
     public List<Variable>? Variables { get; set; }
     /// <summary>Per-workflow settings that override the global defaults.</summary>
     public WorkflowSettings? Settings { get; set; }
+    /// <summary>What people outside the office are told about how long this takes (spec §1 <c>publicProcessingTime</c>); no behaviour.</summary>
+    public PublicProcessingTime? PublicProcessingTime { get; set; }
 
     /// <summary>True when <see cref="Kind"/> is <c>lifecycle</c>.</summary>
     [JsonIgnore] public bool IsLifecycle => Kind == WorkflowKinds.Lifecycle;
@@ -44,6 +46,15 @@ public static class WorkflowKinds
     public const string Automation = "automation";
     /// <summary>States and transitions owning one enum field of a record.</summary>
     public const string Lifecycle = "lifecycle";
+}
+
+/// <summary>The processing time shown to the public (spec §1): stored with the definition, no behaviour.</summary>
+public sealed class PublicProcessingTime
+{
+    /// <summary>Text people outside the office read (at most 200 characters).</summary>
+    public string Estimate { get; set; } = "";
+    /// <summary>Whether the app may show it to the public.</summary>
+    public bool Display { get; set; }
 }
 
 /// <summary>A workflow variable, read as <c>vars.&lt;key&gt;</c> and written by <c>setVariables</c>.</summary>
@@ -342,6 +353,12 @@ public sealed class Assignee
     public string? Role { get; set; }
     /// <summary>Everyone in this registry group.</summary>
     public string? Group { get; set; }
+    /// <summary>Everyone in this registry department.</summary>
+    public string? Department { get; set; }
+    /// <summary>Everyone who works this registry portal.</summary>
+    public string? Portal { get; set; }
+    /// <summary>Everyone serving this registry work queue.</summary>
+    public string? Queue { get; set; }
     /// <summary>One user by id.</summary>
     public string? User { get; set; }
     /// <summary>The user in a user field (a token path such as <c>entity.reviewer</c>).</summary>

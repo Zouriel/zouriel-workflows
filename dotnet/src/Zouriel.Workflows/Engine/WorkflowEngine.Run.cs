@@ -566,6 +566,9 @@ public sealed partial class WorkflowEngine
         {
             if (a.Role is not null) ids.AddRange(await Options.Identity.GetUsersInRoleAsync(a.Role, ct));
             else if (a.Group is not null) ids.AddRange(await Options.Identity.GetUsersInGroupAsync(a.Group, ct));
+            else if (a.Department is not null) ids.AddRange(await Options.Identity.GetUsersInDepartmentAsync(a.Department, ct));
+            else if (a.Portal is not null) ids.AddRange(await Options.Identity.GetUsersInPortalAsync(a.Portal, ct));
+            else if (a.Queue is not null) ids.AddRange(await Options.Identity.GetUsersInQueueAsync(a.Queue, ct));
             else if (a.User is not null) ids.Add(a.User);
             else if (a.Field is not null) AddValue(await scope.ResolveAsync(a.Field, ct));
             else if (a.Initiator == true && initiatorId is not null) ids.Add(initiatorId);
