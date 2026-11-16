@@ -6,10 +6,14 @@ if (! specAvailable()) {
     return;
 }
 
-// The rest of the shared fixtures, one entry each, so the test output shows what the Laravel engine
-// does not pass yet. Each `todo` becomes a real test as its part of the engine is ported
-// (docs/plans/go-and-laravel.md, Phase 1: engine; Phase 2: storage). Lint runs in LintTest.php.
+// Every shared fixture folder with fixtures in it must have a runner here, so a new folder cannot go unnoticed:
+// engine runs in EngineTest.php, lint in LintTest.php, conditions in ConditionsTest.php, audit in AuditTest.php
+// (docs/plans/go-and-laravel.md §4.1). Each runner takes its file list from disk, so a new fixture in a folder runs too.
 
-foreach (specFixtureFiles('engine') as $file) {
-    it("engine: {$file}")->todo();
-}
+it('has a runner for every fixture folder that holds fixtures', function () {
+    $folders = array_values(array_filter(array_map('basename', glob(__DIR__.'/../../../spec/fixtures/*', GLOB_ONLYDIR)),
+        fn (string $folder) => glob(__DIR__."/../../../spec/fixtures/{$folder}/*.json") !== []));
+    sort($folders);
+
+    expect($folders)->toBe(['audit', 'conditions', 'engine', 'lint']);
+});
