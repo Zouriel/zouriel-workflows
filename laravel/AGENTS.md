@@ -21,6 +21,22 @@ The Laravel engine for Zouriel Workflows. Read, in this order: `../spec/SPEC.md`
 7. **Every change ships with tests that pass; prove each new test can fail** by planting the fault once.
    A fixture gap you find goes into the plan's Phase 0 list and gets a unit test here meanwhile.
 
+## Layout
+
+| Folder | What | .NET source it ports |
+|---|---|---|
+| `src/Core/Json` | `Canonical` (JCS), `Values::text`, `Read`/`Write` (typed JSON reads with System.Text.Json's strictness, null-omitting writes), `JsonShapeException` | `Json/Values.cs`, `Model/Converters.cs` options |
+| `src/Core/Model` | Definitions: `WorkflowDefinition`, triggers, lifecycles (states, transitions, SLA with pause fields, reset, remarks), every step type, assignees, operands, templates, conditions; `Definitions::parse()`/`serialize()` | `Model/*.cs` |
+| `src/Core/Registry` | `WorkflowRegistry` + descriptors, `RegistryBuilder` (fluent), `Schema::response()` (`GET /schema` body) | `Registry/*.cs`, `WorkflowApi.PublicRegistry` |
+| `src/Core/Settings` | `GlobalSettings` (`parse`, `toJson`, `problems`) | `Settings/GlobalSettings.cs` |
+| `src/Core/Lint` | `Linter` (+ `LintRun`, `LintEnv`), `LintProblem`, `LintContext`, `DefinitionDiff` | `Lint/*.cs` |
+| `src/Core/Time` | `IsoDuration`, `Cron` (parsing; the work calendar and `next()` come with the engine) | `Time/Durations.cs`, `Time/Cron.cs` |
+| `src/Core/Engine` | `CompiledDefinition` (step lists by id) | `Engine/CompiledDefinition.cs` |
+| `src/Core/Expressions`, `Audit`, `Support` | conditions through `zouriel/forms`; audit chain; `AbsoluteUrl` (.NET `Uri` rules for origins) | `Expressions/`, `Audit/` |
+
+Model classes read with `X::fromJson(stdClass, path)` and write with `toJson()`. Where .NET would leave a
+non-nullable member null (and crash later), an absent or null value gives the member's default instead.
+
 ## Commands
 
 ```
