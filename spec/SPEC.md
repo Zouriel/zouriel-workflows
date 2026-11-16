@@ -418,12 +418,12 @@ assignees at `after` (counted from the step's start) without removing the origin
 approving. All three keys are optional; an absent or empty object means no rule.
 
 - `excludeInitiator: true`: the person who started the run may not approve. That is the run's
-  initiator (`instance.initiator`) and, when the run belongs to a lifecycle record, also the record's
+  initiator (`instance.initiator`) and, when the run is about a record, also the record's
   initiator (§8).
 - `excludePreviousApprover: true`: nobody who decided (with any outcome) the previous approval may
   decide this one. The previous approval is the most recently completed approval task with the same
-  root instance (the record instance for a lifecycle's runs, otherwise the run itself), other than
-  this task. With none, nobody is excluded.
+  root instance (the record instance for a lifecycle's runs, otherwise the run itself) that was
+  completed before this task was created. With none, nobody is excluded.
 - `requiredRole: <role key>`: only people who hold that role may decide.
 
 When the task is created, excluded people are removed from the resolved assignees and, with

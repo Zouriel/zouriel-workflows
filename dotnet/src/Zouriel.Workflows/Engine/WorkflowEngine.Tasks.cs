@@ -26,7 +26,7 @@ public sealed partial class WorkflowEngine
         List<string>? excluded = null;
         if (h is ApprovalStep { MakerChecker: { Any: true } mc })
         {
-            var sod = await BuildSodAsync(x.U, mc, x.I, x.I.Kind == InstanceKinds.Run ? x.I.ParentId : x.I.Id, null, ct);
+            var sod = await BuildSodAsync(x.U, mc, x.I, x.I.Kind == InstanceKinds.Run ? x.I.ParentId : x.I.Id, null, true, ct);
             excluded = [];
             foreach (var id in assignees.ToList())
                 if (sod.Refused(id) is not null) { assignees.Remove(id); excluded.Add(id); }
@@ -262,7 +262,7 @@ public sealed partial class WorkflowEngine
         if (step is ApprovalStep { MakerChecker: { Any: true } mc })
         {
             // Escalation never adds someone separation of duties refuses, and says nothing about it.
-            var sod = await BuildSodAsync(u, mc, x.I, task.RootInstanceId, task.Id, ct);
+            var sod = await BuildSodAsync(u, mc, x.I, task.RootInstanceId, task, true, ct);
             fresh = fresh.Where(id => sod.Refused(id) is null).ToList();
         }
         task.Assignees = Values.Serialize(current.Concat(fresh).ToList());
@@ -333,7 +333,7 @@ public sealed partial class WorkflowEngine
         if (inst is null) return;
         var c = await CompiledAsync(u, inst.DefinitionId, inst.Version, ct);
         if (c.Step(task.NodeId) is not ApprovalStep { MakerChecker: { Any: true } mc }) return;
-        var sod = await BuildSodAsync(u, mc, inst, task.RootInstanceId, task.Id, ct);
+        var sod = await BuildSodAsync(u, mc, inst, task.RootInstanceId, task, self, ct);
         var reason = sod.Refused(userId, actorRoles);
         if (reason is null) return;
         var who = self ? "You cannot" : $"{(await Options.Identity.GetUserAsync(userId, ct))?.Name ?? userId} cannot";
@@ -341,22 +341,23 @@ public sealed partial class WorkflowEngine
     }
 
     /// <summary>The people an approval's <c>makerChecker</c> rule refuses, worked out from the step and the store.</summary>
-    private async Task<Sod> BuildSodAsync(Uow u, MakerChecker mc, InstanceRecord inst, string? rootInstanceId, string? thisTaskId, CancellationToken ct)
+    private async Task<Sod> BuildSodAsync(Uow u, MakerChecker mc, InstanceRecord inst, string? rootInstanceId, TaskRecord? thisTask, bool self, CancellationToken ct)
     {
         var sod = new Sod();
         if (mc.ExcludeInitiator == true)
         {
-            var reason = "the person who started it cannot approve it";
+            var reason = self ? "the person who started it cannot approve it" : "they started it";
             if (inst.InitiatorId is not null) sod.Excluded.TryAdd(inst.InitiatorId, reason);
             if (inst.Entity is not null && inst.EntityId is not null && await RecordInitiatorAsync(u, inst.Entity, inst.EntityId, ct) is { } ri) sod.Excluded.TryAdd(ri, reason);
         }
         if (mc.ExcludePreviousApprover == true && rootInstanceId is not null)
         {
             var previous = (await u.S.QueryTasksAsync(new TaskQuery { RootInstanceId = rootInstanceId, Statuses = [TaskStatus.Completed], Take = 1000 }, ct))
-                .Where(t => t.Kind == "approval" && t.Id != thisTaskId)
+                // Only approvals settled before this one was created: one settled later (a parallel path) is not "the step before".
+                .Where(t => t.Kind == "approval" && t.Id != thisTask?.Id && (thisTask is null || t.CompletedAt <= thisTask.CreatedAt))
                 .OrderByDescending(t => t.CompletedAt).ThenByDescending(t => t.CreatedAt).FirstOrDefault();
             if (previous is not null)
-                foreach (var d in ParseDecisions(previous)) sod.Excluded.TryAdd(d.UserId, "you approved the step before it");
+                foreach (var d in ParseDecisions(previous)) sod.Excluded.TryAdd(d.UserId, self ? "you approved the step before it" : "they approved the step before it");
         }
         if (!string.IsNullOrEmpty(mc.RequiredRole))
         {
