@@ -35,6 +35,7 @@ use Zouriel\Workflows\Core\Storage\InstanceStatus;
 use Zouriel\Workflows\Core\Storage\OutboxKinds;
 use Zouriel\Workflows\Core\Storage\OutboxRecord;
 use Zouriel\Workflows\Core\Storage\WorkflowConcurrencyException;
+use Zouriel\Workflows\Core\Storage\WorkflowSession;
 use Zouriel\Workflows\Core\Time\Cron;
 use Zouriel\Workflows\Core\Time\Instant;
 use Zouriel\Workflows\Core\WorkflowException;
@@ -49,9 +50,12 @@ trait Triggers
      */
     public function processOutbox(int $batch = 50): int
     {
-        $s = $this->options->store->begin();
-        $rows = $s->claimOutbox($this->now(), $this->now() + $this->claimLockMs, $batch);
-        $s->commit();
+        $rows = $this->withSession(function (WorkflowSession $s) use ($batch) {
+            $rows = $s->claimOutbox($this->now(), $this->now() + $this->claimLockMs, $batch);
+            $s->commit();
+
+            return $rows;
+        });
         usort($rows, fn (OutboxRecord $a, OutboxRecord $b) => $a->createdAt <=> $b->createdAt ?: strcmp($a->id, $b->id));
         foreach ($rows as $row) {
             // The claim covers the whole batch; once it lapses another worker may take the rest, so stop.
@@ -59,7 +63,7 @@ trait Triggers
                 break;
             }
             // One record's events in the order they were written: a newer one waits while an older one is pending.
-            if ($row->recordKey !== null && $this->options->store->begin()->hasEarlierPendingOutbox($row)) {
+            if ($row->recordKey !== null && $this->withSession(fn (WorkflowSession $s) => $s->hasEarlierPendingOutbox($row))) {
                 $this->deferOutbox($row);
 
                 continue;
@@ -109,15 +113,15 @@ trait Triggers
     /** Leaves a row for a later round (an older row of its record is pending); not counted as an attempt. */
     private function deferOutbox(OutboxRecord $row): void
     {
-        $s = $this->options->store->begin();
         $row->lockedUntil = $this->now() + 30000;
-        $s->updateOutbox($row);
-        $s->commit();
+        $this->withSession(function (WorkflowSession $s) use ($row) {
+            $s->updateOutbox($row);
+            $s->commit();
+        });
     }
 
     private function markOutbox(OutboxRecord $row, ?string $error): void
     {
-        $s = $this->options->store->begin();
         $row->attempts++;
         if ($error === null) {
             $row->processedAt = $this->now();
@@ -128,18 +132,21 @@ trait Triggers
             // Back off 1, 2, 4… minutes, up to an hour; after 10 attempts the row stays parked for an admin.
             $row->lockedUntil = $row->attempts >= 10 ? Instant::MAX : $this->now() + (int) min(60, 2 ** ($row->attempts - 1)) * 60000;
         }
-        $s->updateOutbox($row);
-        $s->commit();
+        $this->withSession(function (WorkflowSession $s) use ($row) {
+            $s->updateOutbox($row);
+            $s->commit();
+        });
     }
 
     /** Deletes processed outbox rows and trigger claims older than the given ages (milliseconds). */
     public function cleanup(int $keepOutboxMs, int $keepClaimsMs): int
     {
-        $s = $this->options->store->begin();
-        $n = $s->cleanup($this->now() - $keepOutboxMs, $this->now() - $keepClaimsMs);
-        $s->commit();
+        return $this->withSession(function (WorkflowSession $s) use ($keepOutboxMs, $keepClaimsMs) {
+            $n = $s->cleanup($this->now() - $keepOutboxMs, $this->now() - $keepClaimsMs);
+            $s->commit();
 
-        return $n;
+            return $n;
+        });
     }
 
     // ── Change events ─────────────────────────────────────────────────────
@@ -403,9 +410,12 @@ trait Triggers
     /** Fires due timers: waits, task deadlines, reminders, escalations, retries, automatic transitions, SLAs, schedules and date triggers. */
     public function processTimers(int $batch = 50): int
     {
-        $s = $this->options->store->begin();
-        $due = $s->claimDueBookmarks($this->now(), $this->now() + $this->claimLockMs, $batch);
-        $s->commit();
+        $due = $this->withSession(function (WorkflowSession $s) use ($batch) {
+            $due = $s->claimDueBookmarks($this->now(), $this->now() + $this->claimLockMs, $batch);
+            $s->commit();
+
+            return $due;
+        });
         usort($due, fn (BookmarkRecord $a, BookmarkRecord $b) => $a->dueAt <=> $b->dueAt);
         foreach ($due as $b) {
             if ($b->lockedUntil !== null && $this->now() >= $b->lockedUntil) {

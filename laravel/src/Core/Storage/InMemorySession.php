@@ -554,4 +554,12 @@ final class InMemorySession implements WorkflowSession
         }
         $this->done = true;
     }
+
+    public function close(): void
+    {
+        // Nothing reached the shared data before commit; dropping the overlay is the rollback.
+        $this->overlay = [];
+        $this->savepoints = [];
+        $this->newHeads = [];
+    }
 }

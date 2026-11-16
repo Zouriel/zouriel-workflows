@@ -102,12 +102,16 @@ final class WorkflowEngine
         for ($attempt = 1; ; $attempt++) {
             try {
                 $session = $this->options->store->begin();
-                $u = $this->open($session);
-                $result = $work($u);
-                $this->runDeferred($u);
-                $this->startQueuedAfter($u);
-                $u->auditWriter->flush();
-                $session->commit();
+                try {
+                    $u = $this->open($session);
+                    $result = $work($u);
+                    $this->runDeferred($u);
+                    $this->startQueuedAfter($u);
+                    $u->auditWriter->flush();
+                    $session->commit();
+                } finally {
+                    $session->close();
+                }
                 $this->applyPins($u);
 
                 return $result;
@@ -117,6 +121,25 @@ final class WorkflowEngine
                 }
                 usleep(20000 * $attempt);
             }
+        }
+    }
+
+    /**
+     * Runs `$work` with a session of its own and closes it however `$work` ends; committing is up to `$work`
+     * (.NET `await using var s = ...`).
+     *
+     * @template T
+     *
+     * @param  callable(WorkflowSession): T  $work
+     * @return T
+     */
+    public function withSession(callable $work): mixed
+    {
+        $session = $this->options->store->begin();
+        try {
+            return $work($session);
+        } finally {
+            $session->close();
         }
     }
 

@@ -2,6 +2,7 @@
 
 namespace Zouriel\Workflows\Core\Testing;
 
+use Closure;
 use stdClass;
 use Zouriel\Forms\Json;
 use Zouriel\Workflows\Core\Audit\AuditRecord;
@@ -24,6 +25,7 @@ use Zouriel\Workflows\Core\Storage\TaskRecord;
 use Zouriel\Workflows\Core\Storage\TaskStatus;
 use Zouriel\Workflows\Core\Time\Instant;
 use Zouriel\Workflows\Core\Time\IsoDuration;
+use Zouriel\Workflows\Core\Time\ManualClock;
 use Zouriel\Workflows\Core\WorkflowException;
 
 /**
@@ -33,12 +35,15 @@ use Zouriel\Workflows\Core\WorkflowException;
  */
 final class ConformanceRunner
 {
-    public static function run(string $fixturePath): void
+    /**
+     * @param  (Closure(WorkflowRegistry, ManualClock): HostStore)|null  $store  the store to run against (default: a fresh `InMemoryStore`)
+     */
+    public static function run(string $fixturePath, ?Closure $store = null): void
     {
         $dir = dirname($fixturePath);
         $fx = Json::decode(file_get_contents($fixturePath));
         $file = fn (mixed $value) => is_string($value) ? Json::decode(file_get_contents("{$dir}/{$value}")) : $value;
-        $host = new WorkflowTestHost(WorkflowRegistry::fromJson($file($fx->registry)), Instant::parse($fx->now ?? '2026-10-19T09:00:00Z'));
+        $host = new WorkflowTestHost(WorkflowRegistry::fromJson($file($fx->registry)), Instant::parse($fx->now ?? '2026-10-19T09:00:00Z'), $store);
         // Fixtures about failing timers set how many attempts park one; their failures are then expected, not a fault.
         if (isset($fx->maxTimerAttempts)) {
             $host->engine->maxTimerAttempts = (int) $fx->maxTimerAttempts;
@@ -203,11 +208,7 @@ final class ConformanceRunner
     private static function breakdown(WorkflowTestHost $host, stdClass $spec, bool $on): void
     {
         foreach ($spec->writes ?? [] as $w) {
-            if ($on) {
-                $host->store->refusedWrites[$w] = true;
-            } else {
-                unset($host->store->refusedWrites[$w]);
-            }
+            $host->store->refuseWrites($w, $on);
         }
         foreach ($spec->userLookups ?? [] as $id) {
             if ($on) {

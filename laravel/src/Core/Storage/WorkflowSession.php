@@ -140,4 +140,10 @@ interface WorkflowSession
 
     /** Commits everything written in this unit, or throws `WorkflowConcurrencyException`. */
     public function commit(): void;
+
+    /**
+     * Ends the unit: whatever it wrote and did not commit is rolled back; a no-op after `commit()`. The engine
+     * closes every session it opens (.NET `DisposeAsync`), so a database store never leaves a transaction open.
+     */
+    public function close(): void;
 }

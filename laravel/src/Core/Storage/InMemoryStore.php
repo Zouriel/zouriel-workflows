@@ -3,7 +3,9 @@
 namespace Zouriel\Workflows\Core\Storage;
 
 use Zouriel\Workflows\Core\Changes\ChangeInspector;
+use Zouriel\Workflows\Core\Engine\WorkflowEngine;
 use Zouriel\Workflows\Core\Registry\WorkflowRegistry;
+use Zouriel\Workflows\Core\Testing\HostStore;
 use Zouriel\Workflows\Core\Time\Clock;
 use Zouriel\Workflows\Core\Time\SystemClock;
 
@@ -13,7 +15,7 @@ use Zouriel\Workflows\Core\Time\SystemClock;
  * audit chain head like a database would. Used by conformance tests, test runs (`/simulate`) and demos.
  * It also holds records, so it doubles as the entity gateway. Port of .NET `Storage/InMemoryWorkflowStore.cs`.
  */
-final class InMemoryStore implements WorkflowStore
+final class InMemoryStore implements HostStore
 {
     /** @var array<string, array<string, object>> committed rows by table and key, in insertion order */
     public array $tables = [];
@@ -52,6 +54,20 @@ final class InMemoryStore implements WorkflowStore
     public function begin(): InMemorySession
     {
         return new InMemorySession($this);
+    }
+
+    public function attach(WorkflowEngine $engine): void
+    {
+        $this->changes = $engine->changes;
+    }
+
+    public function refuseWrites(string $field, bool $refuse): void
+    {
+        if ($refuse) {
+            $this->refusedWrites[$field] = true;
+        } else {
+            unset($this->refusedWrites[$field]);
+        }
     }
 
     /** Creates a record the way the app would (change hook and created event included). */

@@ -39,6 +39,7 @@ use Zouriel\Workflows\Core\Storage\TaskQuery;
 use Zouriel\Workflows\Core\Storage\TaskRecord;
 use Zouriel\Workflows\Core\Storage\TaskStatus;
 use Zouriel\Workflows\Core\Storage\TriggerRecord;
+use Zouriel\Workflows\Core\Storage\WorkflowSession;
 use Zouriel\Workflows\Core\Time\Instant;
 use Zouriel\Workflows\Core\Time\IsoDuration;
 use Zouriel\Workflows\Core\WorkflowException;
@@ -491,7 +492,7 @@ trait Views
             }
             $next = $page[count($page) - 1]->seq + 1;
         }
-        $head = $this->options->store->begin()->auditHead($tenant);
+        $head = $this->withSession(fn (WorkflowSession $s) => $s->auditHead($tenant));
 
         return $verifier->result($head === null ? null : [$head->seq, $head->hash]);
     }

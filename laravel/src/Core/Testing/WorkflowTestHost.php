@@ -2,6 +2,7 @@
 
 namespace Zouriel\Workflows\Core\Testing;
 
+use Closure;
 use LogicException;
 use Zouriel\Workflows\Core\Audit\AuditRecord;
 use Zouriel\Workflows\Core\Engine\EngineOptions;
@@ -24,7 +25,8 @@ use Zouriel\Workflows\Core\WorkflowException;
  */
 final class WorkflowTestHost
 {
-    public readonly InMemoryStore $store;
+    /** The store (an `InMemoryStore` unless the host was given another). */
+    public readonly HostStore $store;
 
     public readonly ManualClock $clock;
 
@@ -41,18 +43,21 @@ final class WorkflowTestHost
     /** When true, settling tolerates timers that fail (tests of backoff and parking); otherwise a failed timer fails the test. */
     public bool $allowTimerFailures = false;
 
-    /** @param  int|null  $now  the clock's start (default 2026-10-19 09:00 UTC) */
-    public function __construct(WorkflowRegistry $registry, ?int $now = null)
+    /**
+     * @param  int|null  $now  the clock's start (default 2026-10-19 09:00 UTC)
+     * @param  (Closure(WorkflowRegistry, ManualClock): HostStore)|null  $store  makes the store (default: an `InMemoryStore`)
+     */
+    public function __construct(WorkflowRegistry $registry, ?int $now = null, ?Closure $store = null)
     {
         $this->clock = new ManualClock($now ?? Instant::parse('2026-10-19T09:00:00Z'));
-        $this->store = new InMemoryStore($registry, $this->clock);
+        $this->store = $store === null ? new InMemoryStore($registry, $this->clock) : $store($registry, $this->clock);
         $this->identity = new FakeIdentity;
         $this->notifications = new RecordingNotifications;
         $this->webhooks = new FakeWebhooks;
         $this->actions = new FakeActions;
         $this->engine = new WorkflowEngine(new EngineOptions($registry, $this->store, $this->identity, $this->notifications, $this->webhooks, actions: $this->actions,
             clock: $this->clock, recordLinkTemplate: 'https://app.test/{entity}/{id}'));
-        $this->store->changes = $this->engine->changes;
+        $this->store->attach($this->engine);
     }
 
     /** Runs the background work (refused-write audits, outbox, notifications, due timers) until nothing is left, like the worker does. */
