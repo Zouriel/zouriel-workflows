@@ -38,6 +38,11 @@ The Laravel engine for Zouriel Workflows. Read, in this order: `../spec/SPEC.md`
 | `src/Core/Engine` | `WorkflowEngine` (core: units of work with retries, ownership cache, settings) and its partials as traits in `Concerns/` (`Definitions`, `Triggers`, `Runs`, `Steps`, `Tasks`, `Lifecycles`, `SlaPause`, `Resets`, `Simulation`, `Views`); `RunState`/`Token`/`Frame`, `ValueScope`, `Uow`, `Exec`, `SlaClocks`, `CompiledDefinition`; read models in `Views/` | `Engine/*.cs` |
 | `src/Core/Testing` | `WorkflowTestHost` (engine + in-memory store + manual clock + fakes), `ConformanceRunner` (`spec/fixtures/engine`) | `Zouriel.Workflows.Testing/*.cs` |
 | `src/Core/Expressions`, `Audit`, `Support` | conditions through `zouriel/forms`; audit chain, `AuditWriter`, `Masker`; `AbsoluteUrl` (.NET `Uri` rules for origins) | `Expressions/`, `Audit/` |
+| `src/Laravel/Storage` | `DatabaseStore`/`DatabaseSession` (the `wf_*` tables; one transaction per unit, begun at the first write; row versions, unique live keys and claims, audit head row lock, `FOR UPDATE SKIP LOCKED` claims), `Rows` (record ⇄ row), `DbErrors` (races → `WorkflowConcurrencyException`) | `EntityFrameworkCore/EfWorkflowStore.cs`, `DbErrors.cs`, `WorkflowModel.cs` |
+| `src/Laravel/Registry`, `Eloquent` | `ModelRegistry` (`->entity(key, Model::class, fn)`), `ModelBindings`; `EloquentGateway` (records through models, writes in savepoints), `ModelValues` (enums, dates, decimals, JSON, translations, relations) | `RegistryBuilder` CLR bindings, `EfEntityGateway` |
+| `src/Laravel/Changes` | `HasWorkflows` trait (model events + a transaction around `save`/`delete`/`increment`), `ModelChanges` (inspect before the write, outbox row after it, same transaction; `record()` for bulk writes) | `WorkflowSaveChangesInterceptor.cs` |
+| `src/Laravel` (rest) | `WorkflowsServiceProvider` (config, bindings, scoped engine/store, refused-write audit flush), `WorkflowRegistrar`, `Worker`, `Console/` (`workflows:work`, `workflows:tick`, `workflows:seed`), `Adapters/` (HTTP webhooks, Laravel notifications, `Auth` actor, container actions, config secrets) | `AspNetCore/WorkflowHosting.cs`, `DependencyInjection/WorkflowBuilder.cs`, `HttpWebhookClient.cs` |
+| `database/migrations` | the twelve workflow tables (publish tag `workflows-migrations`; prefix and connection from config) | `WorkflowModel.cs` |
 
 Model classes read with `X::fromJson(stdClass, path)` and write with `toJson()`. Where .NET would leave a
 non-nullable member null (and crash later), an absent or null value gives the member's default instead.
@@ -48,10 +53,25 @@ values are `zouriel/forms` values (objects as `stdClass`, numbers as floats); st
 `execs`/`records`), as in .NET. Where an incident text names an exception type, `InvalidOperationException` keeps the
 .NET wording. App action timeouts are not enforced (PHP runs the handler synchronously); webhook timeouts go to the client.
 
+Storage conventions: the engine closes every session it opens (`WorkflowSession::close()`, .NET `DisposeAsync`), so a
+database session never leaves a transaction open. Instants are `bigInteger` milliseconds; JSON is `longText`; tables
+without a natural order have an `ord` column (insertion order). Workflow tables and the registered models must share
+one connection (`workflows.connection`), so record writes and workflow rows commit together.
+
+## Tests
+
+`tests/Conformance` and `tests/Unit` run without Laravel. `tests/Database` boots Testbench on SQLite in memory, or on
+PostgreSQL with `DB_CONNECTION=pgsql` (`DB_HOST`/`DB_PORT`/`DB_USERNAME`/`DB_PASSWORD`, defaults: the local
+`adducity-postgres` container on 127.0.0.1:55440); each process creates and drops its own `wf_test_<random>` database.
+It reruns every engine fixture on the database store (`Support/DatabaseHostStore` keeps fixture records in a table),
+and tests Eloquent capture with the models in `tests/Support/App`. `tests/Laravel` covers the provider and adapters.
+MySQL is supported by the migration and queries but not tested here (no `pdo_mysql`).
+
 ## Commands
 
 ```
 composer install
 composer test
+DB_CONNECTION=pgsql composer test
 composer lint
 ```

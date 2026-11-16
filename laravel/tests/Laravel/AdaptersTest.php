@@ -63,8 +63,8 @@ it('knows which addresses are private', function (string $address, bool $private
 it('refuses headers that could smuggle another header', function () {
     Http::fake();
     $client = new HttpWebhookClient($this->app->make(Factory::class), resolve: fn () => ['93.184.216.34']);
-    expect(fn () => $client->send(webhook(headers: ['X-A' => "ok\r\nX-B: evil"])))->toThrow(InvalidArgumentException::class);
-    expect(fn () => $client->send(webhook(headers: ['Bad Name' => 'x'])))->toThrow(InvalidArgumentException::class);
+    expect(fn () => $client->send(webhook(headers: ['X-A' => "ok\r\nX-B: evil"])))->toThrow(InvalidArgumentException::class, 'cannot hold');
+    expect(fn () => $client->send(webhook(headers: ['Bad Name' => 'x'])))->toThrow(InvalidArgumentException::class, 'cannot hold');
     Http::assertNothingSent();
 });
 
